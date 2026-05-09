@@ -1,0 +1,19 @@
+[project]
+name = "Deepy"
+version = "0.1.0"
+description = "Deepy - Vibe coding for DeepSeek models in your terminal"
+readme = "README.md"
+authors = [
+    { name = "kirineko", email = "kirineko@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "tomli-w>=1",
+]
+
+[project.scripts]
+deepy = "deepy:main"
+
+[build-system]
+requires = ["uv_build>=0.11.10,<0.12.0"]
+build-backend = "uv_build"
