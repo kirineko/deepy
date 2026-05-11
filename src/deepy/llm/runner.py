@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from deepy.config import Settings, load_settings
 from deepy.sessions import DeepyJsonlSession
@@ -23,6 +23,7 @@ class RunSummary:
     output: str
     session_id: str
     complete: bool
+    interrupted: bool = False
 
 
 async def run_prompt_once(
@@ -36,6 +37,8 @@ async def run_prompt_once(
     max_turns: int = 10,
     session_id: str | None = None,
     skill_names: list[str] | None = None,
+    should_interrupt: Callable[[], bool] | None = None,
+    cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
     from agents import RunConfig, Runner
 
@@ -66,6 +69,7 @@ async def run_prompt_once(
     started_at = time.time()
     chunks: list[str] = []
     result: Any | None = None
+    interrupted = False
     try:
         result = Runner.run_streamed(
             agent,
@@ -75,6 +79,10 @@ async def run_prompt_once(
             session=session,
         )
         async for event in result.stream_events():
+            if should_interrupt is not None and should_interrupt():
+                _cancel_stream_result(result, mode=cancel_mode)
+                interrupted = True
+                break
             normalized = normalize_stream_event(event)
             if normalized is None:
                 continue
@@ -85,6 +93,10 @@ async def run_prompt_once(
             chunks.append(normalized.text)
             if emit is not None:
                 emit(normalized.text)
+            if should_interrupt is not None and should_interrupt():
+                _cancel_stream_result(result, mode=cancel_mode)
+                interrupted = True
+                break
     except Exception as exc:
         log_api_error(
             {
@@ -121,7 +133,8 @@ async def run_prompt_once(
     return RunSummary(
         output=output,
         session_id=session.session_id,
-        complete=bool(getattr(result, "is_complete", True)),
+        complete=False if interrupted else bool(getattr(result, "is_complete", True)),
+        interrupted=interrupted,
     )
 
 
@@ -139,3 +152,17 @@ def _resolve_loaded_skills(
             loaded_skills.append(skill)
         return loaded_skills
     return match_skills_for_prompt(discover_skills(root), prompt)
+
+
+def _cancel_stream_result(
+    result: Any,
+    *,
+    mode: Literal["immediate", "after_turn"],
+) -> None:
+    cancel = getattr(result, "cancel", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel(mode=mode)
+    except TypeError:
+        cancel()

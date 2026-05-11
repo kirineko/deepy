@@ -46,6 +46,29 @@ class FailingStream:
         yield
 
 
+class CancellableStream:
+    final_output = None
+    is_complete = False
+
+    def __init__(self):
+        self.cancel_calls: list[str] = []
+
+    async def stream_events(self):
+        yield type(
+            "Event",
+            (),
+            {"type": "raw_response_event", "data": type("Data", (), {"delta": "partial"})()},
+        )()
+        yield type(
+            "Event",
+            (),
+            {"type": "raw_response_event", "data": type("Data", (), {"delta": "late"})()},
+        )()
+
+    def cancel(self, mode="immediate"):
+        self.cancel_calls.append(mode)
+
+
 @dataclass
 class CapturedRun:
     agent_name: str
@@ -244,3 +267,30 @@ async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_
     assert error_entries[0]["location"] == "deepy.llm.runner.run_prompt_once"
     assert error_entries[0]["request"] == {"input": "explode", "max_turns": 10}
     assert isinstance(error_entries[0]["error"], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_cancels_stream_when_interrupted(monkeypatch, tmp_path):
+    stream = CancellableStream()
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    checks = iter([False, True])
+
+    summary = await run_prompt_once(
+        "stop soon",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        should_interrupt=lambda: next(checks),
+        cancel_mode="after_turn",
+    )
+
+    assert summary.output == "partial"
+    assert summary.complete is False
+    assert summary.interrupted is True
+    assert stream.cancel_calls == ["after_turn"]
