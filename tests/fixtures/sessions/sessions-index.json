@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "id": "fixture-session",
+      "path": "fixture-session.jsonl",
+      "activeTokens": 321,
+      "createdAt": 1800000000000,
+      "updatedAt": 1800000001000,
+      "processes": {
+        "4242": {
+          "command": "pytest",
+          "startTime": "2026-05-11T00:00:00.000Z"
+        }
+      }
+    }
+  ]
+}

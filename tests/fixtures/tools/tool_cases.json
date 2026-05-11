@@ -1,0 +1,45 @@
+{
+  "cases": [
+    {
+      "name": "read_full_text",
+      "tool": "read",
+      "args": { "file_path": "sample.txt" }
+    },
+    {
+      "name": "read_partial_text_with_snippet",
+      "tool": "read",
+      "args": { "file_path": "sample.txt", "offset": 2, "limit": 3 }
+    },
+    {
+      "name": "edit_by_snippet",
+      "tool": "edit",
+      "args": { "snippet_id": "snippet_1", "old_string": "old", "new_string": "new" }
+    },
+    {
+      "name": "write_existing_without_read_rejected",
+      "tool": "write",
+      "args": { "file_path": "sample.txt", "content": "replacement" }
+    },
+    {
+      "name": "edit_stale_read_rejected",
+      "tool": "edit",
+      "args": { "file_path": "sample.txt", "old_string": "old", "new_string": "new" }
+    },
+    {
+      "name": "replace_all_guard",
+      "tool": "edit",
+      "args": {
+        "file_path": "sample.txt",
+        "old_string": "x",
+        "new_string": "y",
+        "replace_all": true,
+        "expected_occurrences": 2
+      }
+    },
+    {
+      "name": "bash_cwd_persistence",
+      "tool": "bash",
+      "args": { "command": "cd src && pwd", "description": "change directory and print it" }
+    }
+  ]
+}
