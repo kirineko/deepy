@@ -1,19 +1,65 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 from unicodedata import normalize
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
+from deepy.ui.slash_commands import SlashCommandItem
 
 
 IMAGE_ATTACHMENT_CLEAR_HINT = "ctrl+x clear images"
+DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
 
 
 @dataclass(frozen=True)
 class PromptCursorPlacement:
     rows_up: int
     column: int
+
+
+def create_prompt_session(
+    *,
+    slash_commands: list[SlashCommandItem] | None = None,
+    history_path: Path | None = None,
+    on_interrupt: Callable[[], None] | None = None,
+) -> PromptSession[str]:
+    path = history_path or DEFAULT_PROMPT_HISTORY
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    labels = [item.label for item in slash_commands or []]
+    return PromptSession(
+        history=FileHistory(str(path)),
+        completer=WordCompleter(labels, ignore_case=True, sentence=True),
+        complete_while_typing=True,
+        multiline=True,
+        key_bindings=build_prompt_key_bindings(on_interrupt=on_interrupt),
+    )
+
+
+def build_prompt_key_bindings(
+    *,
+    on_interrupt: Callable[[], None] | None = None,
+) -> KeyBindings:
+    bindings = KeyBindings()
+
+    @bindings.add("escape")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if on_interrupt is not None:
+            on_interrupt()
+
+    return bindings
+
+
+def prompt_for_input(session: PromptSession[str], message: str = "deepy> ") -> str:
+    return session.prompt(message).strip()
 
 
 def format_image_attachment_status(count: int) -> str:

@@ -40,6 +40,7 @@ async def run_prompt_once(
     max_turns: int = 10,
     session_id: str | None = None,
     skill_names: list[str] | None = None,
+    image_data_urls: list[str] | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
@@ -78,7 +79,7 @@ async def run_prompt_once(
     try:
         result = Runner.run_streamed(
             agent,
-            input=prompt,
+            input=_build_runner_input(prompt, image_data_urls or []),
             max_turns=max_turns,
             run_config=run_config,
             session=session,
@@ -119,7 +120,11 @@ async def run_prompt_once(
                 "model": resolved_settings.model.name,
                 "baseURL": resolved_settings.model.base_url,
                 "error": exc,
-                "request": {"input": prompt, "max_turns": max_turns},
+                "request": {
+                    "input": prompt,
+                    "max_turns": max_turns,
+                    "image_count": len(image_data_urls or []),
+                },
             }
         )
         raise
@@ -136,7 +141,11 @@ async def run_prompt_once(
                 "model": resolved_settings.model.name,
                 "baseURL": resolved_settings.model.base_url,
                 "durationMs": duration_ms,
-                "request": {"input": prompt, "max_turns": max_turns},
+                "request": {
+                    "input": prompt,
+                    "max_turns": max_turns,
+                    "image_count": len(image_data_urls or []),
+                },
                 "response": {"output": output},
             }
         )
@@ -172,6 +181,14 @@ def _resolve_loaded_skills(
             loaded_skills.append(skill)
         return loaded_skills
     return match_skills_for_prompt(discover_skills(root), prompt)
+
+
+def _build_runner_input(prompt: str, image_data_urls: list[str]) -> str | list[dict[str, Any]]:
+    if not image_data_urls:
+        return prompt
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    content.extend({"type": "input_image", "image_url": url} for url in image_data_urls)
+    return [{"role": "user", "content": content}]
 
 
 def _cancel_stream_result(

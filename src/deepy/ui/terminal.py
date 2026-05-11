@@ -22,9 +22,12 @@ from deepy.ui.ask_user_question import build_options
 from deepy.ui.ask_user_question import format_ask_user_question_answers
 from deepy.ui.ask_user_question import format_ask_user_question_decline
 from deepy.ui.ask_user_question import normalize_questions
+from deepy.ui.clipboard import read_clipboard_image
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
+from deepy.ui.prompt_input import create_prompt_session, prompt_for_input
 from deepy.ui.session_list import format_session_choices, resolve_session_selection
+from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.welcome import build_welcome_panel
 
 
@@ -58,6 +61,10 @@ def run_interactive(
     session_id: str | None = None
 
     loaded_skill_names: list[str] = []
+    attached_images: list[str] = []
+    prompt_session = create_prompt_session(
+        slash_commands=build_slash_commands(discover_skills(root)),
+    )
     output.print(
         build_welcome_panel(
             model=settings.model.name,
@@ -70,7 +77,7 @@ def run_interactive(
 
     while True:
         try:
-            text = Prompt.ask("[bold cyan]deepy[/bold cyan]").strip()
+            text = prompt_for_input(prompt_session)
         except (EOFError, KeyboardInterrupt):
             output.print()
             return 0
@@ -87,6 +94,7 @@ def run_interactive(
                 session_id,
                 loaded_skill_names,
                 settings=settings,
+                attached_images=attached_images,
             )
             if next_session == "__exit__":
                 return 0
@@ -102,9 +110,11 @@ def run_interactive(
                 emit_event=lambda event: _print_stream_event(output, event),
                 session_id=session_id,
                 skill_names=list(loaded_skill_names),
+                image_data_urls=list(attached_images),
             )
         )
         session_id = summary.session_id
+        attached_images.clear()
         if summary.status == "waiting_for_user":
             response = _collect_pending_question_response(output, summary.pending_questions)
             if response:
@@ -132,6 +142,7 @@ def _handle_slash_command(
     loaded_skill_names: list[str] | None = None,
     settings: Settings | None = None,
     input_func: InputFunc | None = None,
+    attached_images: list[str] | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
@@ -146,13 +157,33 @@ def _handle_slash_command(
         console.print("/status     Show project status")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
+        console.print("/paste-image Attach clipboard image to the next prompt")
+        console.print("/clear-images Clear attached images")
         console.print("/new        Start a new session")
         console.print("/exit       Quit")
         return current_session_id
     if command.name == "new":
         loaded_skill_names.clear()
+        if attached_images is not None:
+            attached_images.clear()
         console.print("Started a new session.")
         return None
+    if command.name == "paste-image":
+        if attached_images is None:
+            console.print("[red]Image attachments are not available here.[/red]")
+            return current_session_id
+        image = read_clipboard_image()
+        if image is None:
+            console.print("[red]No clipboard image found.[/red]")
+            return current_session_id
+        attached_images.append(image.data_url)
+        console.print(f"Attached clipboard image ({len(attached_images)} total).")
+        return current_session_id
+    if command.name == "clear-images":
+        if attached_images is not None:
+            attached_images.clear()
+        console.print("Cleared attached images.")
+        return current_session_id
     if command.name == "resume":
         entries = list_session_entries(project_root)
         if command.argument:

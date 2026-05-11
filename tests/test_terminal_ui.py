@@ -7,6 +7,7 @@ from deepy.llm.events import DeepyStreamEvent
 from deepy.sessions import SessionEntry
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
+from deepy.ui.clipboard import ClipboardImage
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_stream_event
@@ -76,11 +77,59 @@ def test_use_slash_command_loads_skill_name(tmp_path):
 def test_new_slash_command_clears_loaded_skill_names(tmp_path):
     console = Console(record=True)
     loaded = ["demo"]
+    attached_images = ["data:image/png;base64,x"]
 
-    next_session = _handle_slash_command(SlashCommand("new"), console, tmp_path, "s1", loaded)
+    next_session = _handle_slash_command(
+        SlashCommand("new"),
+        console,
+        tmp_path,
+        "s1",
+        loaded,
+        attached_images=attached_images,
+    )
 
     assert next_session is None
     assert loaded == []
+    assert attached_images == []
+
+
+def test_paste_image_slash_command_attaches_clipboard_image(tmp_path, monkeypatch):
+    console = Console(record=True)
+    attached_images: list[str] = []
+    monkeypatch.setattr(
+        terminal,
+        "read_clipboard_image",
+        lambda: ClipboardImage("data:image/png;base64,x", "image/png"),
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("paste-image"),
+        console,
+        tmp_path,
+        "s1",
+        attached_images=attached_images,
+    )
+
+    assert next_session == "s1"
+    assert attached_images == ["data:image/png;base64,x"]
+    assert "Attached clipboard image (1 total)." in console.export_text()
+
+
+def test_clear_images_slash_command_clears_attachments(tmp_path):
+    console = Console(record=True)
+    attached_images = ["data:image/png;base64,x"]
+
+    next_session = _handle_slash_command(
+        SlashCommand("clear-images"),
+        console,
+        tmp_path,
+        "s1",
+        attached_images=attached_images,
+    )
+
+    assert next_session == "s1"
+    assert attached_images == []
+    assert "Cleared attached images." in console.export_text()
 
 
 def test_resume_slash_command_selects_session_from_prompt(tmp_path, monkeypatch):

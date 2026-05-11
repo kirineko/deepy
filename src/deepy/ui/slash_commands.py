@@ -19,6 +19,8 @@ BUILTIN_SLASH_COMMANDS = (
     SlashCommandItem("skills", "skills", "/skills", "List available skills"),
     SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
     SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue"),
+    SlashCommandItem("paste-image", "paste-image", "/paste-image", "Attach clipboard image"),
+    SlashCommandItem("clear-images", "clear-images", "/clear-images", "Clear attached images"),
     SlashCommandItem("exit", "exit", "/exit", "Quit Deepy"),
 )
 

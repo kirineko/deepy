@@ -184,11 +184,13 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
     captured_session_ids: list[str] = []
+    captured_inputs: list[object] = []
 
     class FakeRunner:
         @staticmethod
         def run_streamed(agent, input, max_turns, run_config, session):
             captured_session_ids.append(session.session_id)
+            captured_inputs.append(input)
             return FakeStream()
 
     monkeypatch.setattr("agents.Runner", FakeRunner)
@@ -203,6 +205,40 @@ async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
 
     assert summary.session_id == "known-session"
     assert captured_session_ids == ["known-session"]
+    assert captured_inputs == ["continue"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_sends_image_data_urls_as_multimodal_input(monkeypatch, tmp_path):
+    captured_inputs: list[object] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured_inputs.append(input)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "look",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        image_data_urls=["data:image/png;base64,x"],
+    )
+
+    assert captured_inputs == [
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,x"},
+                ],
+            }
+        ]
+    ]
 
 
 @pytest.mark.asyncio
@@ -291,7 +327,11 @@ async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
     )
 
     assert summary.output == "hello"
-    assert debug_entries[0]["request"] == {"input": "say hello", "max_turns": 10}
+    assert debug_entries[0]["request"] == {
+        "input": "say hello",
+        "max_turns": 10,
+        "image_count": 0,
+    }
     assert debug_entries[0]["response"] == {"output": "hello"}
     assert notify_calls and notify_calls[0][0] == "/tmp/notify.sh"
     assert notify_calls[0][2] == tmp_path
@@ -318,7 +358,11 @@ async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_
         )
 
     assert error_entries[0]["location"] == "deepy.llm.runner.run_prompt_once"
-    assert error_entries[0]["request"] == {"input": "explode", "max_turns": 10}
+    assert error_entries[0]["request"] == {
+        "input": "explode",
+        "max_turns": 10,
+        "image_count": 0,
+    }
     assert isinstance(error_entries[0]["error"], RuntimeError)
 
 

@@ -8,7 +8,9 @@ from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import IMAGE_ATTACHMENT_CLEAR_HINT
 from deepy.ui.prompt_input import PromptCursorPlacement
 from deepy.ui.prompt_input import add_unique_skill
+from deepy.ui.prompt_input import build_prompt_key_bindings
 from deepy.ui.prompt_input import character_width
+from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_image_attachment_status
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
@@ -19,6 +21,7 @@ from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
+from deepy.ui.slash_commands import SlashCommandItem
 
 
 def _strip_ansi(text: str) -> str:
@@ -111,6 +114,26 @@ def test_get_prompt_cursor_placement_accounts_for_multiline_buffer_rows():
 
     assert end == PromptCursorPlacement(rows_up=3, column=7)
     assert middle == PromptCursorPlacement(rows_up=4, column=4)
+
+
+def test_create_prompt_session_configures_history_multiline_and_slash_completion(tmp_path):
+    session = create_prompt_session(
+        slash_commands=[
+            SlashCommandItem("new", "new", "/new", "Start fresh"),
+            SlashCommandItem("paste-image", "paste-image", "/paste-image", "Paste image"),
+        ],
+        history_path=tmp_path / "history.txt",
+    )
+
+    assert session.multiline is True
+    assert session.completer is not None
+    assert (tmp_path / "history.txt").exists()
+
+
+def test_build_prompt_key_bindings_registers_escape_interrupt():
+    bindings = build_prompt_key_bindings(on_interrupt=lambda: None)
+
+    assert any("escape" in binding.keys for binding in bindings.bindings)
 
 
 def test_text_width_counts_cjk_and_control_characters():
