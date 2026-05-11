@@ -49,3 +49,20 @@ def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     assert code == 1
     assert "Config already exists" in capsys.readouterr().err
     assert config.read_text(encoding="utf-8") == "existing"
+
+
+def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):
+    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["skills", "list"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Project skills:" in out
+    assert "demo - Demo skill" in out

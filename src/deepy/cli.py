@@ -16,6 +16,7 @@ from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import list_session_entries
+from .skills import discover_skills, format_skills_for_terminal
 from .ui import run_interactive
 
 
@@ -51,6 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
     sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_sub.add_parser("list", help="List sessions for the current project.")
+
+    skills_parser = subparsers.add_parser("skills", help="Inspect available skills.")
+    skills_sub = skills_parser.add_subparsers(dest="skills_command", required=True)
+    skills_sub.add_parser("list", help="List user and project skills.")
 
     return parser
 
@@ -186,6 +191,13 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_skills(args: argparse.Namespace) -> int:
+    if args.skills_command == "list":
+        print(format_skills_for_terminal(discover_skills(Path.cwd())))
+        return 0
+    return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -201,6 +213,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "sessions":
         return _cmd_sessions(args)
+    if args.command == "skills":
+        return _cmd_skills(args)
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")

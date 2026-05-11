@@ -27,6 +27,14 @@ def discover_skills(project_root: Path, *, home: Path | None = None) -> list[Ski
 
 
 def format_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
+    return _format_skills(skills, include_paths=True)
+
+
+def format_skills_for_terminal(skills: Iterable[SkillInfo]) -> str:
+    return _format_skills(skills, include_paths=False)
+
+
+def _format_skills(skills: Iterable[SkillInfo], *, include_paths: bool) -> str:
     grouped: dict[str, list[SkillInfo]] = {"project": [], "user": []}
     for skill in skills:
         grouped.setdefault(skill.scope, []).append(skill)
@@ -39,7 +47,8 @@ def format_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
         lines.append(f"{scope.title()} skills:")
         for skill in sorted(items, key=lambda item: item.name):
             description = f" - {skill.description}" if skill.description else ""
-            lines.append(f"- {skill.name}{description} ({skill.path})")
+            path = f" ({skill.path})" if include_paths else ""
+            lines.append(f"- {skill.name}{description}{path}")
     return "\n".join(lines) if lines else "No skills found."
 
 
@@ -57,7 +66,12 @@ def _discover_skills_root(root: Path, *, scope: str) -> list[SkillInfo]:
     return skills
 
 
-def read_skill_info(path: Path, *, default_name: str | None = None, scope: str = "user") -> SkillInfo | None:
+def read_skill_info(
+    path: Path,
+    *,
+    default_name: str | None = None,
+    scope: str = "user",
+) -> SkillInfo | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
