@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +14,7 @@ from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import build_status_report, format_status_report
+from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
@@ -173,25 +173,11 @@ def _print_stream_event(console: Console, event: DeepyStreamEvent) -> None:
         console.print(f"\n[dim]tool call:[/dim] {tool_name}")
         return
     if event.kind == "tool_output":
-        summary = _tool_output_summary(event.text)
+        summary = format_tool_output_summary(event.text)
         console.print(f"\n[dim]tool output:[/dim] {summary}")
+        diff = tool_diff_preview(event.text)
+        if diff:
+            console.print(diff.rstrip())
         return
     if event.kind == "agent_updated" and event.name:
         console.print(f"\n[dim]agent:[/dim] {event.name}")
-
-
-def _tool_output_summary(output: str) -> str:
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
-        return output[:160]
-    if not isinstance(payload, dict):
-        return output[:160]
-    name = payload.get("name") or "tool"
-    ok = payload.get("ok")
-    error = payload.get("error")
-    metadata = payload.get("metadata")
-    path = metadata.get("path") if isinstance(metadata, dict) else None
-    status = "ok" if ok else "failed"
-    details = str(error or path or "").strip()
-    return f"{name} {status}" + (f" - {details}" if details else "")
