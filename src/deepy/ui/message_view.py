@@ -15,6 +15,13 @@ DIFF_PREVIEW_TOOLS = {"edit", "write"}
 
 
 @dataclass(frozen=True)
+class DiffPreviewLine:
+    marker: str
+    content: str
+    kind: str
+
+
+@dataclass(frozen=True)
 class ToolOutputView:
     name: str
     ok: bool | None
@@ -24,6 +31,7 @@ class ToolOutputView:
     error: str | None = None
     path: str | None = None
     diff: str | None = None
+    diff_preview: str | None = None
     await_user_response: bool = False
     raw: str = ""
 
@@ -45,6 +53,7 @@ def parse_tool_output(output: str) -> ToolOutputView:
     metadata_dict = metadata if isinstance(metadata, dict) else {}
     path = _string_or_none(metadata_dict.get("path"))
     diff = _string_or_none(metadata_dict.get("diff"))
+    diff_preview = _string_or_none(metadata_dict.get("diff_preview"))
     error = _string_or_none(payload.get("error"))
     text_output = _string_or_default(payload.get("output"), "")
     await_user_response = bool(payload.get("awaitUserResponse"))
@@ -60,6 +69,7 @@ def parse_tool_output(output: str) -> ToolOutputView:
         error=error,
         path=path,
         diff=diff,
+        diff_preview=diff_preview,
         await_user_response=await_user_response,
         raw=output,
     )
@@ -71,9 +81,51 @@ def format_tool_output_summary(output: str) -> str:
 
 def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | None:
     view = parse_tool_output(output)
-    if view.ok is not True or view.name not in DIFF_PREVIEW_TOOLS or not view.diff:
+    diff = _tool_diff_text(view)
+    if not diff:
         return None
-    return _limit_lines(view.diff, max_lines=max_lines)
+    return _limit_lines(diff, max_lines=max_lines)
+
+
+def tool_diff_preview_lines(output: str) -> list[DiffPreviewLine]:
+    view = parse_tool_output(output)
+    diff = _tool_diff_text(view)
+    return parse_diff_preview(diff) if diff else []
+
+
+def parse_diff_preview(diff_preview: str) -> list[DiffPreviewLine]:
+    lines: list[DiffPreviewLine] = []
+    for line in diff_preview.splitlines():
+        if not line or line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@ "):
+            continue
+        if line.startswith("+"):
+            lines.append(DiffPreviewLine(marker="+", content=line[1:], kind="added"))
+        elif line.startswith("-"):
+            lines.append(DiffPreviewLine(marker="-", content=line[1:], kind="removed"))
+        else:
+            lines.append(
+                DiffPreviewLine(
+                    marker=" ",
+                    content=line[1:] if line.startswith(" ") else line,
+                    kind="context",
+                )
+            )
+    return lines
+
+
+def build_thinking_summary(content: str, message_params: object | None = None) -> str:
+    if content:
+        normalized = " ".join(content.split())
+        result = _truncate(normalized, max_chars=100)
+        if result.endswith((":", "：")):
+            result = result[:-1]
+        return result
+
+    if isinstance(message_params, dict):
+        reasoning_content = message_params.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            return "(reasoning...)"
+    return ""
 
 
 def render_tool_output(output: str) -> Group:
@@ -83,6 +135,12 @@ def render_tool_output(output: str) -> Group:
     if diff:
         parts.append(Syntax(diff.rstrip(), "diff", theme="ansi_dark", word_wrap=False))
     return Group(*parts)
+
+
+def _tool_diff_text(view: ToolOutputView) -> str | None:
+    if view.ok is not True or view.name.lower() not in DIFF_PREVIEW_TOOLS:
+        return None
+    return view.diff_preview or view.diff
 
 
 def _raw_tool_output(output: str) -> ToolOutputView:
