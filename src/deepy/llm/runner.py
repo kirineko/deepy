@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from deepy.config import Settings, load_settings
-from deepy.sessions import DeepyJsonlSession
+from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import discover_skills, find_skill, match_skills_for_prompt
 from deepy.tools import ToolRuntime
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
