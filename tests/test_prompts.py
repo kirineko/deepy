@@ -121,6 +121,9 @@ def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):
 
 def test_build_runtime_context_includes_top_level_entries(tmp_path):
     (tmp_path / "src").mkdir()
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "spec").mkdir()
+    (tmp_path / ".pytest_cache").mkdir()
     (tmp_path / "README.md").write_text("hello", encoding="utf-8")
 
     context = build_runtime_context(tmp_path)
@@ -129,3 +132,6 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     assert "Git dirty:" in context
     assert "- src/" in context
     assert "- README.md" in context
+    assert "reference/" not in context
+    assert "spec/" not in context
+    assert ".pytest_cache/" not in context

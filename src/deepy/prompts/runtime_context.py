@@ -3,6 +3,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+IGNORED_TOP_LEVEL_ENTRIES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "reference",
+    "spec",
+}
+
 
 def build_runtime_context(project_root: Path) -> str:
     lines = [f"Project root: {project_root}"]
@@ -40,8 +51,10 @@ def _top_level_entries(project_root: Path, limit: int = 30) -> list[str]:
     except OSError:
         return []
     names: list[str] = []
-    for entry in entries[:limit]:
-        if entry.name in {".git", ".venv", "__pycache__"}:
+    for entry in entries:
+        if entry.name in IGNORED_TOP_LEVEL_ENTRIES:
             continue
         names.append(f"{entry.name}/" if entry.is_dir() else entry.name)
+        if len(names) >= limit:
+            break
     return names
