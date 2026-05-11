@@ -727,13 +727,43 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
 
     assert [tool.name for tool in tools] == [
         "bash",
+        "AskUserQuestion",
         "read",
         "write",
         "edit",
-        "AskUserQuestion",
         "WebSearch",
     ]
     assert all(tool.description for tool in tools)
+
+
+def test_function_tool_schemas_match_legacy_names(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tools = {tool.name: tool for tool in build_function_tools(runtime)}
+
+    assert tools["bash"].params_json_schema["required"] == ["command"]
+    assert list(tools["bash"].params_json_schema["properties"]) == ["command", "description"]
+    assert tools["AskUserQuestion"].params_json_schema["required"] == ["questions"]
+    assert list(tools["AskUserQuestion"].params_json_schema["properties"]) == ["questions"]
+    assert tools["read"].params_json_schema["required"] == ["file_path"]
+    assert list(tools["read"].params_json_schema["properties"]) == [
+        "file_path",
+        "offset",
+        "limit",
+        "pages",
+    ]
+    assert tools["write"].params_json_schema["required"] == ["file_path", "content"]
+    assert list(tools["write"].params_json_schema["properties"]) == ["file_path", "content"]
+    assert tools["edit"].params_json_schema["required"] == ["old_string", "new_string"]
+    assert list(tools["edit"].params_json_schema["properties"]) == [
+        "file_path",
+        "snippet_id",
+        "old_string",
+        "new_string",
+        "replace_all",
+        "expected_occurrences",
+    ]
+    assert tools["WebSearch"].params_json_schema["required"] == ["query"]
+    assert list(tools["WebSearch"].params_json_schema["properties"]) == ["query"]
 
 
 def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
