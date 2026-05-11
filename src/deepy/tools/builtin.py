@@ -15,6 +15,10 @@ from .file_state import FileState
 from .result import ToolResult
 
 
+DEFAULT_LINE_LIMIT = 2_000
+MAX_LINE_LENGTH = 2_000
+
+
 def _resolve_in_cwd(cwd: Path, path: str) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -48,8 +52,12 @@ class ToolRuntime:
         text = target.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         start = max(start_line, 1) - 1
-        selected = lines[start : start + limit if limit and limit > 0 else None]
-        numbered = "\n".join(f"{idx + start + 1}: {line}" for idx, line in enumerate(selected))
+        effective_limit = limit if limit and limit > 0 else DEFAULT_LINE_LIMIT
+        selected = lines[start : start + effective_limit]
+        formatted_lines = [_truncate_line(line) for line in selected]
+        numbered = "\n".join(
+            f"{idx + start + 1}: {line}" for idx, line in enumerate(formatted_lines)
+        )
         self.file_state.mark_read(target)
         return ToolResult.ok_result(
             name,
@@ -59,7 +67,10 @@ class ToolRuntime:
                 "kind": "file",
                 "startLine": start + 1,
                 "lineCount": len(selected),
+                "lineLimit": effective_limit,
                 "totalLines": len(lines),
+                "truncated": start + len(selected) < len(lines)
+                or any(len(line) > MAX_LINE_LENGTH for line in selected),
             },
         ).to_json()
 
@@ -226,6 +237,12 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
             tofile=f"b/{path}",
         )
     )
+
+
+def _truncate_line(line: str) -> str:
+    if len(line) <= MAX_LINE_LENGTH:
+        return line
+    return line[:MAX_LINE_LENGTH] + "... [truncated]"
 
 
 def _format_directory_entries(path: Path) -> str:

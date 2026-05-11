@@ -7,6 +7,7 @@ from deepy.config import Settings
 from deepy.config.settings import ToolsConfig, WebSearchToolConfig
 from deepy.tools import ToolResult, ToolRuntime
 from deepy.tools.agents import build_function_tools
+from deepy.tools.builtin import DEFAULT_LINE_LIMIT, MAX_LINE_LENGTH
 
 
 def decode(payload: str) -> dict:
@@ -58,6 +59,36 @@ def test_read_directory_lists_entries(tmp_path):
     assert payload["metadata"]["kind"] == "directory"
     assert "dir/" in payload["output"]
     assert "a.txt" in payload["output"]
+
+
+def test_read_limits_large_files_by_default(tmp_path):
+    target = tmp_path / "large.txt"
+    target.write_text(
+        "".join(f"line {idx}\n" for idx in range(DEFAULT_LINE_LIMIT + 5)),
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("large.txt"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["lineCount"] == DEFAULT_LINE_LIMIT
+    assert payload["metadata"]["lineLimit"] == DEFAULT_LINE_LIMIT
+    assert payload["metadata"]["totalLines"] == DEFAULT_LINE_LIMIT + 5
+    assert payload["metadata"]["truncated"] is True
+    assert f"{DEFAULT_LINE_LIMIT + 1}: line" not in payload["output"]
+
+
+def test_read_truncates_long_lines(tmp_path):
+    target = tmp_path / "long.txt"
+    target.write_text("x" * (MAX_LINE_LENGTH + 5), encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("long.txt"))
+
+    assert payload["ok"] is True
+    assert "... [truncated]" in payload["output"]
+    assert payload["metadata"]["truncated"] is True
 
 
 def test_edit_detects_mtime_change_after_read(tmp_path):
