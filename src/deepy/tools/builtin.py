@@ -387,6 +387,100 @@ def _find_closest_match(
     return best_match
 
 
+def _correct_escaped_strings_with_llm(
+    settings: Settings,
+    *,
+    snippet_text: str,
+    old: str,
+    new: str,
+    matched_text: str,
+) -> tuple[str, str] | None:
+    if not settings.model.api_key or not settings.model.base_url or not settings.model.name:
+        return None
+    try:
+        content = _edit_correction_chat(settings, snippet_text, old, new, matched_text)
+        parsed = _parse_corrected_edit_strings(content)
+        if parsed is None:
+            return None
+        corrected_old, corrected_new = parsed
+        if _normalize_loose_text(corrected_old) != _normalize_loose_text(old):
+            return None
+        if _normalize_loose_text(corrected_new) != _normalize_loose_text(new):
+            return None
+        if corrected_old == corrected_new:
+            return None
+        return corrected_old, corrected_new
+    except Exception:
+        return None
+
+
+def _edit_correction_chat(
+    settings: Settings,
+    snippet_text: str,
+    old: str,
+    new: str,
+    matched_text: str,
+) -> str:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=settings.model.api_key, base_url=settings.model.base_url)
+    response = client.chat.completions.create(
+        model=settings.model.name,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You correct file-edit strings when the only problem is escaping. "
+                    "Return XML only using <response><corrected_old_string>...</corrected_old_string>"
+                    "<corrected_new_string>...</corrected_new_string></response>. "
+                    "Do not change semantics; only fix quoting or escaping so corrected_old_string "
+                    "matches the snippet exactly."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "<request>\n"
+                    f"  <snippet_text><![CDATA[{snippet_text}]]></snippet_text>\n"
+                    f"  <old_string><![CDATA[{old}]]></old_string>\n"
+                    f"  <new_string><![CDATA[{new}]]></new_string>\n"
+                    f"  <matched_text><![CDATA[{matched_text}]]></matched_text>\n"
+                    "</request>\n"
+                    "<output_format>\n"
+                    "  <response>\n"
+                    "    <corrected_old_string><![CDATA[...]]></corrected_old_string>\n"
+                    "    <corrected_new_string><![CDATA[...]]></corrected_new_string>\n"
+                    "  </response>\n"
+                    "</output_format>"
+                ),
+            },
+        ],
+    )
+    content = response.choices[0].message.content
+    return content.strip() if isinstance(content, str) else ""
+
+
+def _parse_corrected_edit_strings(content: str) -> tuple[str, str] | None:
+    normalized = _strip_code_fence(content).strip()
+    if not normalized:
+        return None
+    old_match = re.search(
+        r"<corrected_old_string>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))</corrected_old_string>",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    new_match = re.search(
+        r"<corrected_new_string>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))</corrected_new_string>",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    corrected_old = old_match.group(1) or old_match.group(2) if old_match else None
+    corrected_new = new_match.group(1) or new_match.group(2) if new_match else None
+    if isinstance(corrected_old, str) and isinstance(corrected_new, str):
+        return corrected_old, corrected_new
+    return None
+
+
 def _slice_lines(text: str, start_line: int, end_line: int) -> str:
     lines = text.splitlines(keepends=True)
     return "".join(lines[start_line - 1 : end_line])
@@ -768,11 +862,27 @@ class ToolRuntime:
         scope = _edit_scope(text, snippet)
         matches = _find_occurrences(text, old, scope)
         matched_via = "exact"
+        replacement_new = new
         if not matches:
             loose_matches = _find_loose_escape_occurrences(text, old, scope)
             if len(loose_matches) == 1 and loose_matches[0][1] == 1.0:
-                matches = [loose_matches[0][0]]
-                matched_via = "loose_escape"
+                corrected = _correct_escaped_strings_with_llm(
+                    self.settings,
+                    snippet_text=text[scope[0] : scope[1]],
+                    old=old,
+                    new=new,
+                    matched_text=loose_matches[0][2],
+                )
+                if corrected is not None:
+                    corrected_old, corrected_new = corrected
+                    corrected_matches = _find_occurrences(text, corrected_old, scope)
+                    if corrected_matches:
+                        matches = corrected_matches
+                        replacement_new = corrected_new
+                        matched_via = "llm_escape_correction"
+                if not matches:
+                    matches = [loose_matches[0][0]]
+                    matched_via = "loose_escape"
         if not matches:
             closest_match = _find_closest_match(text, old, scope)
             metadata = {"scope": _format_scope_metadata(target, snippet, scope, text)}
@@ -805,7 +915,7 @@ class ToolRuntime:
                 },
             ).to_json()
         line_endings = text_metadata.line_endings
-        normalized_new = _normalize_line_endings(new, line_endings)
+        normalized_new = _normalize_line_endings(replacement_new, line_endings)
         updated = _apply_replacements(text, matches, normalized_new, replace_all)
         _write_text_with_encoding(target, updated, text_metadata.encoding)
         self.file_state.mark_written(target)

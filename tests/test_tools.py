@@ -422,6 +422,47 @@ def test_edit_uses_loose_escape_match_when_quotes_are_overescaped(tmp_path):
     assert target.read_text(encoding="utf-8") == 'print("hi")\n'
 
 
+def test_edit_uses_llm_escape_correction_when_configured(tmp_path, monkeypatch):
+    target = tmp_path / "query.py"
+    target.write_text("params['city_json'] = f'\"{city}\"'\n", encoding="utf-8")
+    runtime = ToolRuntime(
+        cwd=tmp_path,
+        settings=Settings(
+            model=ModelConfig(
+                api_key="sk-test",
+                base_url="https://api.deepseek.com",
+                name="deepseek-chat",
+            )
+        ),
+    )
+    prompts: list[tuple[str, str, str, str]] = []
+
+    def fake_correction_chat(settings, snippet_text, old, new, matched_text):
+        prompts.append((snippet_text, old, new, matched_text))
+        return (
+            "<response>"
+            "<corrected_old_string><![CDATA[params['city_json'] = f'\"{city}\"']]></corrected_old_string>"
+            "<corrected_new_string><![CDATA[params['city_json'] = city]]></corrected_new_string>"
+            "</response>"
+        )
+
+    monkeypatch.setattr("deepy.tools.builtin._edit_correction_chat", fake_correction_chat)
+
+    decode(runtime.read("query.py"))
+    payload = decode(
+        runtime.edit(
+            "query.py",
+            "params['city_json'] = f'\\\\\"{city}\\\\\"'",
+            "params['city_json'] = city",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["matched_via"] == "llm_escape_correction"
+    assert target.read_text(encoding="utf-8") == "params['city_json'] = city\n"
+    assert prompts[0][3] == "params['city_json'] = f'\"{city}\"'"
+
+
 def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path):
     target = tmp_path / "near.txt"
     target.write_text("alpha\nbeta = 1\ngamma\n", encoding="utf-8")
