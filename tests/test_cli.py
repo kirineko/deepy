@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from argparse import Namespace
 
 from deepy.cli import _doctor, main
@@ -59,6 +60,19 @@ def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     assert code == 1
     assert "Config already exists" in capsys.readouterr().err
     assert config.read_text(encoding="utf-8") == "existing"
+
+
+def test_interactive_mode_requires_tty(monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+    try:
+        main([])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("main([]) should exit when stdin is not a TTY")
+
+    assert "interactive mode requires a TTY" in capsys.readouterr().err
 
 
 def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):
