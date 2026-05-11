@@ -47,6 +47,7 @@ def run_interactive(
     output.print("[bold]Deepy[/bold] interactive mode")
     output.print(f"Project: {root}")
     output.print("Type /help for commands, /exit to quit.")
+    loaded_skill_names: list[str] = []
 
     while True:
         try:
@@ -60,7 +61,7 @@ def run_interactive(
 
         slash = parse_slash_command(text)
         if slash is not None:
-            next_session = _handle_slash_command(slash, output, root, session_id)
+            next_session = _handle_slash_command(slash, output, root, session_id, loaded_skill_names)
             if next_session == "__exit__":
                 return 0
             session_id = next_session
@@ -74,6 +75,7 @@ def run_interactive(
                 emit=lambda delta: output.print(delta, end=""),
                 emit_event=lambda event: _print_stream_event(output, event),
                 session_id=session_id,
+                skill_names=list(loaded_skill_names),
             )
         )
         session_id = summary.session_id
@@ -86,19 +88,23 @@ def _handle_slash_command(
     console: Console,
     project_root: Path,
     current_session_id: str | None,
+    loaded_skill_names: list[str] | None = None,
 ) -> str | None:
+    loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     if command.name in {"exit", "quit"}:
         return "__exit__"
     if command.name == "help":
         console.print("/help       Show commands")
         console.print("/skills     List available skills")
         console.print("/skill NAME Show a skill document")
+        console.print("/use NAME   Load a skill for subsequent prompts")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
         console.print("/new        Start a new session")
         console.print("/exit       Quit")
         return current_session_id
     if command.name == "new":
+        loaded_skill_names.clear()
         console.print("Started a new session.")
         return None
     if command.name == "resume":
@@ -127,6 +133,18 @@ def _handle_slash_command(
             console.print(f"[red]Skill not found:[/red] {command.argument}")
             return current_session_id
         console.print(read_skill_body(skill) or "(empty skill)")
+        return current_session_id
+    if command.name == "use":
+        if not command.argument:
+            console.print("[red]Usage:[/red] /use NAME")
+            return current_session_id
+        skill = find_skill(project_root, command.argument)
+        if skill is None:
+            console.print(f"[red]Skill not found:[/red] {command.argument}")
+            return current_session_id
+        if skill.name not in loaded_skill_names:
+            loaded_skill_names.append(skill.name)
+        console.print(f"Loaded skill: {skill.name}")
         return current_session_id
 
     console.print(f"[red]Unknown command:[/red] /{command.name}")

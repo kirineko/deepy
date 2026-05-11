@@ -52,6 +52,33 @@ def test_skill_slash_command_prints_skill_body(tmp_path):
     assert "Use this skill." in console.export_text()
 
 
+def test_use_slash_command_loads_skill_name(tmp_path):
+    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\nUse this skill.",
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+    loaded: list[str] = []
+
+    next_session = _handle_slash_command(SlashCommand("use", "demo"), console, tmp_path, "s1", loaded)
+
+    assert next_session == "s1"
+    assert loaded == ["demo"]
+    assert "Loaded skill: demo" in console.export_text()
+
+
+def test_new_slash_command_clears_loaded_skill_names(tmp_path):
+    console = Console(record=True)
+    loaded = ["demo"]
+
+    next_session = _handle_slash_command(SlashCommand("new"), console, tmp_path, "s1", loaded)
+
+    assert next_session is None
+    assert loaded == []
+
+
 def test_print_stream_event_shows_tool_call_and_output():
     console = Console(record=True)
 

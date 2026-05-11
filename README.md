@@ -36,6 +36,7 @@ Interactive slash commands:
 /help
 /skills
 /skill <skill-name>
+/use <skill-name>
 /sessions
 /resume <session-id>
 /new
