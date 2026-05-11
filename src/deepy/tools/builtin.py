@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+import signal
 import shlex
 import subprocess
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -44,6 +47,7 @@ class ToolRuntime:
     cwd: Path
     settings: Settings
     file_state: FileState = field(default_factory=FileState)
+    running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def read(self, path: str, start_line: int = 1, limit: int | None = None) -> str:
         name = "read"
@@ -154,16 +158,29 @@ class ToolRuntime:
             f"printf '\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n' \"$PWD\" \"$__deepy_exit\"\n"
             "exit $__deepy_exit\n"
         )
+        process: subprocess.Popen[str] | None = None
+        process_id: str | None = None
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 ["/bin/zsh", "-lc", script],
                 cwd=self.cwd,
                 text=True,
-                capture_output=True,
-                timeout=timeout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=os.name != "nt",
             )
-        except subprocess.TimeoutExpired as exc:
-            output, output_truncated = _truncate_output((exc.stdout or "") + (exc.stderr or ""))
+            process_id = str(process.pid)
+            self.running_processes[process_id] = {
+                "startTime": _now_iso(),
+                "command": command,
+            }
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stdout = stderr = ""
+            if process is not None:
+                _terminate_process(process)
+                stdout, stderr = process.communicate()
+            output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
             return ToolResult.error_result(
                 name,
                 f"Command timed out after {timeout_ms}ms.",
@@ -171,15 +188,20 @@ class ToolRuntime:
                 metadata={
                     "cwd": str(self.cwd),
                     "timeoutMs": timeout_ms,
+                    "processId": process_id,
+                    "interrupted": True,
                     "outputTruncated": output_truncated,
                 },
             ).to_json()
+        finally:
+            if process_id is not None:
+                self.running_processes.pop(process_id, None)
 
-        stdout, final_cwd, exit_code = _extract_bash_sentinel(completed.stdout or "", marker)
+        stdout, final_cwd, exit_code = _extract_bash_sentinel(stdout or "", marker)
         if final_cwd is not None and final_cwd.is_dir():
             self.cwd = final_cwd
-        returncode = exit_code if exit_code is not None else completed.returncode
-        output, output_truncated = _truncate_output(stdout + (completed.stderr or ""))
+        returncode = exit_code if exit_code is not None else process.returncode
+        output, output_truncated = _truncate_output(stdout + (stderr or ""))
         result = ToolResult.ok_result if returncode == 0 else ToolResult.error_result
         if returncode == 0:
             return result(
@@ -188,6 +210,7 @@ class ToolRuntime:
                 metadata={
                     "cwd": str(self.cwd),
                     "exitCode": returncode,
+                    "processId": process_id,
                     "outputTruncated": output_truncated,
                 },
             ).to_json()
@@ -198,6 +221,7 @@ class ToolRuntime:
             metadata={
                 "cwd": str(self.cwd),
                 "exitCode": returncode,
+                "processId": process_id,
                 "outputTruncated": output_truncated,
             },
         ).to_json()
@@ -288,6 +312,20 @@ def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tup
         return output, False
     omitted = len(output) - max_chars
     return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except OSError:
+        return
 
 
 def _format_directory_entries(path: Path) -> tuple[str, int, int]:

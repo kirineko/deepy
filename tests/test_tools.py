@@ -203,6 +203,18 @@ def test_bash_truncates_large_output(tmp_path):
     assert payload["metadata"]["outputTruncated"] is True
 
 
+def test_bash_timeout_tracks_and_clears_process(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("sleep 1", timeout_ms=20))
+
+    assert payload["ok"] is False
+    assert "timed out" in payload["error"]
+    assert payload["metadata"]["interrupted"] is True
+    assert payload["metadata"]["processId"]
+    assert runtime.running_processes == {}
+
+
 def test_ask_user_question_sets_wait_flag(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
