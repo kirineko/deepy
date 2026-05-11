@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from rich.console import Group
+from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
@@ -12,6 +13,12 @@ from rich.text import Text
 MAX_SUMMARY_CHARS = 160
 MAX_DIFF_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
+ROLE_TITLES = {
+    "user": "You",
+    "assistant": "Deepy",
+    "system": "System",
+    "developer": "Developer",
+}
 
 
 @dataclass(frozen=True)
@@ -182,10 +189,59 @@ def render_tool_output(output: str) -> Group:
     return Group(*parts)
 
 
+def render_message(
+    message: dict[str, Any],
+    *,
+    project_root: str | None = None,
+) -> Any:
+    role = _string_or_default(message.get("role"), "message")
+    content = _message_content_text(message.get("content"))
+    if role == "tool":
+        return render_tool_output(content)
+
+    title = ROLE_TITLES.get(role, role.title())
+    if role == "assistant":
+        return Panel(Text(content), title=title, border_style="green", expand=False)
+    if role == "user":
+        return Panel(Text(content), title=title, border_style="cyan", expand=False)
+    if role == "system":
+        label = _system_message_label(content)
+        return Panel(Text(content), title=label, border_style="magenta", expand=False)
+    params_snippet = build_tool_params_snippet(message.get("function"), project_root=project_root)
+    if params_snippet:
+        return Panel(Text(params_snippet), title=title, border_style="yellow", expand=False)
+    return Panel(Text(content), title=title, border_style="dim", expand=False)
+
+
 def _tool_diff_text(view: ToolOutputView) -> str | None:
     if view.ok is not True or view.name.lower() not in DIFF_PREVIEW_TOOLS:
         return None
     return view.diff_preview or view.diff
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    if content is None:
+        return ""
+    return json.dumps(content, ensure_ascii=False)
+
+
+def _system_message_label(content: str) -> str:
+    normalized = " ".join(content.split()).casefold()
+    if "loaded skills" in normalized:
+        return "System Skill"
+    if "compacted" in normalized or "summary" in normalized:
+        return "Summary"
+    return "System"
 
 
 def _format_tool_params_snippet(

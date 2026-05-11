@@ -12,6 +12,7 @@ from deepy.ui.message_view import DiffPreviewLine
 from deepy.ui.message_view import is_invisible_execution
 from deepy.ui.message_view import parse_diff_preview
 from deepy.ui.message_view import parse_tool_output
+from deepy.ui.message_view import render_message
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
 from deepy.ui.message_view import tool_diff_preview_lines
@@ -120,6 +121,45 @@ def test_render_tool_output_includes_summary_and_diff():
     rendered = console.export_text()
     assert "write ok - file" in rendered
     assert "+new" in rendered
+
+
+def test_render_message_renders_user_and_assistant_panels():
+    console = Console(record=True, width=120)
+
+    console.print(render_message({"role": "user", "content": "hello"}))
+    console.print(render_message({"role": "assistant", "content": "hi"}))
+
+    rendered = console.export_text()
+    assert "You" in rendered
+    assert "hello" in rendered
+    assert "Deepy" in rendered
+    assert "hi" in rendered
+
+
+def test_render_message_renders_system_skill_and_summary_labels():
+    console = Console(record=True, width=120)
+
+    console.print(render_message({"role": "system", "content": "Loaded skills:\nreview"}))
+    console.print(render_message({"role": "system", "content": "Earlier conversation was compacted."}))
+
+    rendered = console.export_text()
+    assert "System Skill" in rendered
+    assert "Summary" in rendered
+
+
+def test_render_message_renders_tool_outputs():
+    console = Console(record=True, width=120)
+
+    console.print(
+        render_message(
+            {
+                "role": "tool",
+                "content": '{"ok":true,"name":"read","output":"","metadata":{"path":"file"}}',
+            }
+        )
+    )
+
+    assert "read ok - file" in console.export_text()
 
 
 def test_parse_diff_preview_removes_headers_and_classifies_lines():
