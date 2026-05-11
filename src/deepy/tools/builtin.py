@@ -31,7 +31,16 @@ class ToolRuntime:
         if not target.exists():
             return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
         if target.is_dir():
-            return ToolResult.error_result(name, f"Path is a directory: {target}").to_json()
+            entries = _format_directory_entries(target)
+            return ToolResult.ok_result(
+                name,
+                entries,
+                metadata={
+                    "path": str(target),
+                    "kind": "directory",
+                    "entryCount": len(list(target.iterdir())),
+                },
+            ).to_json()
 
         text = target.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
@@ -44,6 +53,7 @@ class ToolRuntime:
             numbered,
             metadata={
                 "path": str(target),
+                "kind": "file",
                 "startLine": start + 1,
                 "lineCount": len(selected),
                 "totalLines": len(lines),
@@ -191,3 +201,15 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
             tofile=f"b/{path}",
         )
     )
+
+
+def _format_directory_entries(path: Path) -> str:
+    lines: list[str] = []
+    for entry in sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+        suffix = "/" if entry.is_dir() else ""
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        lines.append(f"{entry.name}{suffix}\t{size}")
+    return "\n".join(lines)

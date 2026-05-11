@@ -44,6 +44,20 @@ def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "ONE\ntwo\n"
 
 
+def test_read_directory_lists_entries(tmp_path):
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("."))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["kind"] == "directory"
+    assert "dir/" in payload["output"]
+    assert "a.txt" in payload["output"]
+
+
 def test_edit_detects_mtime_change_after_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")
