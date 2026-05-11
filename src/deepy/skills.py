@@ -11,6 +11,7 @@ class SkillInfo:
     path: Path
     description: str = ""
     scope: str = "user"
+    is_loaded: bool = False
 
 
 def discover_skills(project_root: Path, *, home: Path | None = None) -> list[SkillInfo]:
