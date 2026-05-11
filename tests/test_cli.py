@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from deepy.cli import main
+from argparse import Namespace
+
+from deepy.cli import _doctor, main
 
 
 def test_config_show_json_masks_secret(tmp_path, capsys):
@@ -83,3 +85,16 @@ def test_skills_show_prints_skill_body(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Use this skill." in out
     assert "description:" not in out
+
+
+def test_doctor_checks_config_permissions(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.chmod(0o644)
+
+    code, report = _doctor(Namespace(config=config))
+
+    assert code == 1
+    permissions = next(item for item in report["checks"] if item["name"] == "config_permissions")
+    assert permissions["ok"] is False
+    assert "expected private permissions" in permissions["detail"]

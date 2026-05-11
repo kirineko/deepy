@@ -110,6 +110,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         checks.append({"name": name, "ok": ok, "detail": detail})
 
     check("config", True, str(settings.path))
+    check("config_permissions", *_config_permissions_check(settings.path))
     check(
         "api_key",
         bool(settings.model.api_key),
@@ -146,6 +147,15 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
             "reasoning_effort": settings.model.reasoning_effort,
         },
     }
+
+
+def _config_permissions_check(path: Path | None) -> tuple[bool, str]:
+    if path is None or not path.exists():
+        return False, "missing"
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        return False, f"{mode:o}; expected private permissions like 600"
+    return True, f"{mode:o}"
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
