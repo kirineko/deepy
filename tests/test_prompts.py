@@ -3,6 +3,7 @@ from __future__ import annotations
 from deepy.config import Settings
 from deepy.prompts import build_system_prompt
 from deepy.prompts.rules import load_project_rules
+from deepy.prompts.runtime_context import build_runtime_context
 from deepy.skills import (
     discover_skills,
     find_skill,
@@ -80,11 +81,13 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
         Settings(),
         project_rules="Follow local rules.",
         skills=discover_skills(tmp_path, home=tmp_path / "home"),
+        runtime_context="Runtime context here.",
     )
 
     assert "Keep the user's current task" in prompt
     assert "Follow local rules." in prompt
     assert "demo - Demo skill" in prompt
+    assert "Runtime context here." in prompt
 
 
 def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
@@ -114,3 +117,15 @@ def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):
 
     assert '<skill name="demo">' in rendered
     assert "Use this skill." in rendered
+
+
+def test_build_runtime_context_includes_top_level_entries(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "README.md").write_text("hello", encoding="utf-8")
+
+    context = build_runtime_context(tmp_path)
+
+    assert f"Project root: {tmp_path}" in context
+    assert "Git dirty:" in context
+    assert "- src/" in context
+    assert "- README.md" in context

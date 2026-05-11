@@ -11,6 +11,7 @@ from deepy.skills import (
 )
 
 from .rules import AGENT_DRIFT_GUARD, load_project_rules
+from .runtime_context import build_runtime_context
 
 
 def build_system_prompt(
@@ -20,6 +21,7 @@ def build_system_prompt(
     project_rules: str | None = None,
     skills: list[SkillInfo] | None = None,
     loaded_skills: list[SkillInfo] | None = None,
+    runtime_context: str | None = None,
 ) -> str:
     resolved_project_rules = (
         load_project_rules(project_root) if project_rules is None else project_rules.strip()
@@ -28,6 +30,7 @@ def build_system_prompt(
     project_rules_block = resolved_project_rules or "No project rules found."
     skills_block = format_skills_for_prompt(resolved_skills)
     loaded_skills_block = format_loaded_skills_for_prompt(loaded_skills or [])
+    runtime_context_block = runtime_context or build_runtime_context(project_root)
     return f"""You are Deepy, a terminal coding agent running in the user's project.
 
 Work directly in the repository when asked to implement changes. Prefer small, verifiable edits.
@@ -39,6 +42,9 @@ Runtime:
 - Model: {settings.model.name}
 - Thinking enabled: {settings.model.thinking_enabled}
 - Reasoning effort: {settings.model.reasoning_effort}
+
+Project context:
+{runtime_context_block}
 
 Tool protocol:
 - Tool results are JSON strings with ok, name, output, error, metadata, and awaitUserResponse.
