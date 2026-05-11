@@ -9,6 +9,7 @@ from deepy.skills import (
     find_skill,
     format_loaded_skills_for_prompt,
     format_skills_for_prompt,
+    match_skills_for_prompt,
     read_skill_body,
 )
 
@@ -104,6 +105,29 @@ def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
 
     assert skill is not None
     assert read_skill_body(skill) == "# Body\nUse this skill."
+
+
+def test_match_skills_for_prompt_uses_name_and_description(tmp_path):
+    project = tmp_path / "project"
+    django_dir = project / ".deepy" / "skills" / "django"
+    review_dir = project / ".deepy" / "skills" / "review"
+    django_dir.mkdir(parents=True)
+    review_dir.mkdir(parents=True)
+    django_dir.joinpath("SKILL.md").write_text(
+        "---\nname: django\ndescription: Django migration specialist\n---\n",
+        encoding="utf-8",
+    )
+    review_dir.joinpath("SKILL.md").write_text(
+        "---\nname: review\ndescription: Pull request review\n---\n",
+        encoding="utf-8",
+    )
+
+    matches = match_skills_for_prompt(
+        discover_skills(project, home=tmp_path / "home"),
+        "Please fix the Django migration failure.",
+    )
+
+    assert [skill.name for skill in matches] == ["django"]
 
 
 def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):

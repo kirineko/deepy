@@ -4,6 +4,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+SKILL_MATCH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "use",
+    "with",
+}
+
 
 @dataclass(frozen=True)
 class SkillInfo:
@@ -33,6 +49,24 @@ def find_skill(project_root: Path, name: str, *, home: Path | None = None) -> Sk
         if _normalize_name(skill.name) == normalized:
             return skill
     return None
+
+
+def match_skills_for_prompt(
+    skills: Iterable[SkillInfo],
+    prompt: str,
+    *,
+    max_matches: int = 3,
+) -> list[SkillInfo]:
+    normalized_prompt = _normalize_match_text(prompt)
+    if not normalized_prompt:
+        return []
+    scored: list[tuple[int, str, SkillInfo]] = []
+    for skill in skills:
+        score = _skill_match_score(skill, normalized_prompt)
+        if score > 0:
+            scored.append((score, skill.name, skill))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [skill for _score, _name, skill in scored[:max_matches]]
 
 
 def read_skill_body(skill: SkillInfo) -> str:
@@ -142,3 +176,27 @@ def _clean_scalar(value: str | None) -> str:
 
 def _normalize_name(name: str) -> str:
     return name.strip().lower()
+
+
+def _skill_match_score(skill: SkillInfo, normalized_prompt: str) -> int:
+    name = _normalize_match_text(skill.name)
+    if name and name in normalized_prompt:
+        return 100 + len(name)
+    score = 0
+    for token in _match_tokens(f"{skill.name} {skill.description}"):
+        if f" {token} " in f" {normalized_prompt} ":
+            score += 1
+    return score
+
+
+def _match_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _normalize_match_text(value).split()
+        if len(token) >= 3 and token not in SKILL_MATCH_STOPWORDS
+    }
+
+
+def _normalize_match_text(value: str) -> str:
+    chars = [char.lower() if char.isalnum() else " " for char in value]
+    return " ".join("".join(chars).split())

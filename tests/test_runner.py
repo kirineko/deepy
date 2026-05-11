@@ -160,6 +160,34 @@ async def test_run_prompt_once_loads_requested_skill(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_prompt_once_auto_loads_matching_skill(monkeypatch, tmp_path):
+    skill_dir = tmp_path / ".deepy" / "skills" / "django"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: django\ndescription: Django migration specialist\n---\nUse Django skill.",
+        encoding="utf-8",
+    )
+    captured_instructions: list[str] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured_instructions.append(agent.instructions)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "fix the django migration",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert "Use Django skill." in captured_instructions[0]
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
     debug_entries: list[dict] = []
     notify_calls: list[tuple[str, int, Path]] = []

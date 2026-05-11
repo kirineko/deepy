@@ -8,7 +8,7 @@ from typing import Any
 
 from deepy.config import Settings, load_settings
 from deepy.sessions import DeepyJsonlSession
-from deepy.skills import find_skill
+from deepy.skills import discover_skills, find_skill, match_skills_for_prompt
 from deepy.tools import ToolRuntime
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
@@ -43,12 +43,7 @@ async def run_prompt_once(
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
     runtime = ToolRuntime(cwd=root, settings=resolved_settings)
-    loaded_skills = []
-    for skill_name in skill_names or []:
-        skill = find_skill(root, skill_name)
-        if skill is None:
-            raise ValueError(f"Skill not found: {skill_name}")
-        loaded_skills.append(skill)
+    loaded_skills = _resolve_loaded_skills(root, prompt, skill_names)
     agent = build_deepy_agent(
         resolved_settings,
         runtime,
@@ -128,3 +123,19 @@ async def run_prompt_once(
         session_id=session.session_id,
         complete=bool(getattr(result, "is_complete", True)),
     )
+
+
+def _resolve_loaded_skills(
+    root: Path,
+    prompt: str,
+    skill_names: list[str] | None,
+) -> list[Any]:
+    if skill_names:
+        loaded_skills = []
+        for skill_name in skill_names:
+            skill = find_skill(root, skill_name)
+            if skill is None:
+                raise ValueError(f"Skill not found: {skill_name}")
+            loaded_skills.append(skill)
+        return loaded_skills
+    return match_skills_for_prompt(discover_skills(root), prompt)
