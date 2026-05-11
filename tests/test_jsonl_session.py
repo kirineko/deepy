@@ -5,7 +5,7 @@ import json
 import pytest
 
 from deepy.sessions import DeepyJsonlSession, list_session_entries, project_code
-from deepy.sessions.jsonl import project_sessions_dir
+from deepy.sessions.jsonl import MAX_SESSION_INDEX_ENTRIES, project_sessions_dir
 
 
 def test_project_code_matches_deepcode_shape(tmp_path):
@@ -83,6 +83,29 @@ async def test_clear_session_resets_active_tokens(tmp_path):
     await session.clear_session()
 
     assert list_session_entries(project, deepy_home=home)[0].active_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_session_index_recovers_from_invalid_json_and_trims_entries(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    sessions_dir = project_sessions_dir(project, home)
+    sessions_dir.mkdir(parents=True)
+    sessions_dir.joinpath("sessions-index.json").write_text("not-json", encoding="utf-8")
+
+    recovered = DeepyJsonlSession.create(project, deepy_home=home, session_id="recovered")
+    await recovered.add_items([{"role": "user", "content": "hello"}])
+
+    assert [entry.id for entry in list_session_entries(project, deepy_home=home)] == ["recovered"]
+
+    for index in range(MAX_SESSION_INDEX_ENTRIES + 5):
+        session = DeepyJsonlSession.create(project, deepy_home=home, session_id=f"s{index}")
+        await session.add_items([{"role": "user", "content": str(index)}])
+
+    entries = list_session_entries(project, deepy_home=home)
+    assert len(entries) == MAX_SESSION_INDEX_ENTRIES
+    assert entries[0].id == f"s{MAX_SESSION_INDEX_ENTRIES + 4}"
+    assert entries[-1].id == "s5"
 
 
 def test_list_session_entries_reads_legacy_entries_shape(tmp_path):

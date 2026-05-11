@@ -205,7 +205,10 @@ class DeepyJsonlSession:
         index_path = self.path.parent / "sessions-index.json"
         now = _now_ms()
         if index_path.exists():
-            raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
+            try:
+                raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
+            except json.JSONDecodeError:
+                raw = {"version": SESSION_INDEX_VERSION, "sessions": []}
         else:
             raw = {"version": SESSION_INDEX_VERSION, "sessions": []}
         sessions = raw.get("sessions")
