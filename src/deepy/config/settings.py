@@ -65,9 +65,12 @@ class ModelConfig:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -> Self:
         env = env or {}
-        name = _as_str(raw.get("name"), env.get("DEEPY_MODEL", DEFAULT_MODEL))
-        base_url = _as_str(raw.get("base_url"), env.get("DEEPY_BASE_URL", DEFAULT_BASE_URL))
-        api_key = _as_str(raw.get("api_key"), env.get("DEEPY_API_KEY", "")) or None
+        name = _as_str(env.get("DEEPY_MODEL"), _as_str(raw.get("name"), DEFAULT_MODEL))
+        base_url = _as_str(
+            env.get("DEEPY_BASE_URL"),
+            _as_str(raw.get("base_url"), DEFAULT_BASE_URL),
+        )
+        api_key = _as_str(env.get("DEEPY_API_KEY"), _as_str(raw.get("api_key"), "")) or None
         effort = _as_str(raw.get("reasoning_effort"), "max")
         if effort not in REASONING_EFFORTS:
             effort = "max"

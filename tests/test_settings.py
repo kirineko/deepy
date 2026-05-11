@@ -38,6 +38,32 @@ def test_json_config_is_not_supported(tmp_path):
         load_settings(config)
 
 
+def test_environment_overrides_toml_model_settings(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+name = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+api_key = "sk-config"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(
+        config,
+        env={
+            "DEEPY_MODEL": "deepseek-v4-flash",
+            "DEEPY_BASE_URL": "https://proxy.example/v1",
+            "DEEPY_API_KEY": "sk-env",
+        },
+    )
+
+    assert settings.model.name == "deepseek-v4-flash"
+    assert settings.model.base_url == "https://proxy.example/v1"
+    assert settings.model.api_key == "sk-env"
+
+
 def test_settings_to_toml_masks_api_key(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-1234567890"\n', encoding="utf-8")
