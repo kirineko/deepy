@@ -218,11 +218,45 @@ def test_bash_timeout_tracks_and_clears_process(tmp_path):
 def test_ask_user_question_sets_wait_flag(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.ask_user_question("continue?"))
+    payload = decode(
+        runtime.ask_user_question(
+            [
+                {
+                    "question": "continue?",
+                    "options": [
+                        {"label": "Yes", "description": "Proceed."},
+                        {"label": "No"},
+                    ],
+                }
+            ]
+        )
+    )
 
     assert payload["ok"] is True
     assert payload["name"] == "AskUserQuestion"
     assert payload["awaitUserResponse"] is True
+    assert payload["metadata"] == {
+        "kind": "ask_user_question",
+        "questions": [
+            {
+                "question": "continue?",
+                "options": [
+                    {"label": "Yes", "description": "Proceed."},
+                    {"label": "No"},
+                ],
+            }
+        ],
+    }
+    assert "Waiting for user input." in payload["output"]
+
+
+def test_ask_user_question_rejects_invalid_questions(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.ask_user_question([]))
+
+    assert payload["ok"] is False
+    assert payload["error"] == '"questions" must be a non-empty array.'
 
 
 def test_function_tools_have_stable_names_and_descriptions(tmp_path):

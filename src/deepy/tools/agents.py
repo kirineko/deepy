@@ -1,6 +1,23 @@
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from .builtin import ToolRuntime
+
+
+class AskUserQuestionOptionArg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    description: str | None = None
+
+
+class AskUserQuestionItemArg(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    question: str
+    options: list[AskUserQuestionOptionArg]
+    multi_select: bool | None = Field(default=None, alias="multiSelect")
 
 
 def build_function_tools(runtime: ToolRuntime) -> list[object]:
@@ -27,9 +44,11 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         return runtime.edit(path, old, new, replace_all)
 
     @function_tool(name_override="AskUserQuestion")
-    def ask_user_question(question: str) -> str:
-        """Ask the user a blocking clarification question."""
-        return runtime.ask_user_question(question)
+    def ask_user_question(questions: list[AskUserQuestionItemArg]) -> str:
+        """Ask the user one or more blocking clarification questions."""
+        return runtime.ask_user_question(
+            [question.model_dump(by_alias=True, exclude_none=True) for question in questions]
+        )
 
     @function_tool(name_override="WebSearch")
     def web_search(query: str) -> str:

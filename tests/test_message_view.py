@@ -30,13 +30,14 @@ def test_format_tool_output_summary_uses_error_detail():
 
 def test_parse_tool_output_preserves_pending_question_state():
     view = parse_tool_output(
-        '{"ok":true,"name":"AskUserQuestion","output":"Choose one","error":null,'
-        '"metadata":{"question":"Choose one"},"awaitUserResponse":true}'
+        '{"ok":true,"name":"AskUserQuestion","output":"Waiting for user input.","error":null,'
+        '"metadata":{"kind":"ask_user_question","questions":[{"question":"Choose one",'
+        '"options":[{"label":"Yes"}]}]},"awaitUserResponse":true}'
     )
 
     assert view.name == "AskUserQuestion"
     assert view.await_user_response is True
-    assert view.summary == "AskUserQuestion ok - Choose one"
+    assert view.summary == "AskUserQuestion ok - Waiting for user input."
 
 
 def test_raw_tool_output_is_truncated():

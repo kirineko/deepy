@@ -226,12 +226,15 @@ class ToolRuntime:
             },
         ).to_json()
 
-    def ask_user_question(self, question: str) -> str:
+    def ask_user_question(self, questions: object) -> str:
+        parsed_questions, error = _parse_ask_user_questions(questions)
+        if error is not None:
+            return ToolResult.error_result("AskUserQuestion", error).to_json()
         return ToolResult(
             ok=True,
             name="AskUserQuestion",
-            output=question,
-            metadata={"question": question},
+            output=_build_question_summary(parsed_questions),
+            metadata={"kind": "ask_user_question", "questions": parsed_questions},
             awaitUserResponse=True,
         ).to_json()
 
@@ -342,6 +345,73 @@ def _format_directory_entries(path: Path) -> tuple[str, int, int]:
             size = 0
         lines.append(f"{entry.name}{suffix}\t{size}")
     return "\n".join(lines), len(lines), ignored_count
+
+
+def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], str | None]:
+    if not isinstance(value, list) or not value:
+        return [], '"questions" must be a non-empty array.'
+
+    questions: list[dict[str, object]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            return [], f"Question at index {index} must be an object."
+
+        question = _trimmed_string(item.get("question"))
+        if not question:
+            return [], f'Question at index {index} is missing a non-empty "question" string.'
+
+        raw_options = item.get("options")
+        if not isinstance(raw_options, list) or not raw_options:
+            return [], f'Question at index {index} must include a non-empty "options" array.'
+
+        options: list[dict[str, str]] = []
+        for option_index, option in enumerate(raw_options):
+            if not isinstance(option, dict):
+                return [], f"Option {option_index} for question {index} must be an object."
+
+            label = _trimmed_string(option.get("label"))
+            if not label:
+                return (
+                    [],
+                    f'Option {option_index} for question {index} is missing a non-empty "label" string.',
+                )
+
+            parsed_option = {"label": label}
+            description = _trimmed_string(option.get("description"))
+            if description:
+                parsed_option["description"] = description
+            options.append(parsed_option)
+
+        parsed_question: dict[str, object] = {
+            "question": question,
+            "options": options,
+        }
+        multi_select = item.get("multiSelect")
+        if isinstance(multi_select, bool):
+            parsed_question["multiSelect"] = multi_select
+        questions.append(parsed_question)
+
+    return questions, None
+
+
+def _build_question_summary(questions: list[dict[str, object]]) -> str:
+    lines = ["Waiting for user input."]
+    for index, item in enumerate(questions):
+        lines.append("")
+        lines.append(f"{index + 1}. {item['question']}")
+        lines.append(f"   Mode: {'multi-select' if item.get('multiSelect') else 'single-select'}")
+        for option in item["options"]:
+            if not isinstance(option, dict):
+                continue
+            lines.append(f"   - {option['label']}")
+            if option.get("description"):
+                lines.append(f"     {option['description']}")
+        lines.append("   - Other")
+    return "\n".join(lines)
+
+
+def _trimmed_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _extract_bash_sentinel(stdout: str, marker: str) -> tuple[str, Path | None, int | None]:
