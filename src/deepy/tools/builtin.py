@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+from difflib import unified_diff
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,10 +56,18 @@ class ToolRuntime:
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
+        old_content = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         self.file_state.mark_written(target)
-        return ToolResult.ok_result(name, f"Wrote {target}", metadata={"path": str(target)}).to_json()
+        return ToolResult.ok_result(
+            name,
+            f"Wrote {target}",
+            metadata={
+                "path": str(target),
+                "diff": _unified_diff(old_content, content, path=str(target)),
+            },
+        ).to_json()
 
     def edit(self, path: str, old: str, new: str, replace_all: bool = False) -> str:
         name = "edit"
@@ -84,7 +93,11 @@ class ToolRuntime:
         return ToolResult.ok_result(
             name,
             f"Edited {target}",
-            metadata={"path": str(target), "occurrences": occurrences if replace_all else 1},
+            metadata={
+                "path": str(target),
+                "occurrences": occurrences if replace_all else 1,
+                "diff": _unified_diff(text, updated, path=str(target)),
+            },
         ).to_json()
 
     def bash(self, command: str, timeout_ms: int = 120_000) -> str:
@@ -167,3 +180,14 @@ class ToolRuntime:
             target = _resolve_in_cwd(self.cwd, parts[1])
             if target.is_dir():
                 self.cwd = target
+
+
+def _unified_diff(old: str, new: str, *, path: str) -> str:
+    return "".join(
+        unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
