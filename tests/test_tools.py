@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 
 from deepy.config import Settings
 from deepy.config.settings import ToolsConfig, WebSearchToolConfig
@@ -212,3 +213,33 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["output"] == "results"
     assert requested == ["https://search.example/api?q=deep+seek"]
+
+
+def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatch):
+    settings = Settings(
+        tools=ToolsConfig(
+            web_search=WebSearchToolConfig(
+                command="search-tool",
+                api_url="https://search.example/api",
+            )
+        )
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    commands: list[str] = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        assert kwargs["cwd"] == tmp_path
+        return SimpleNamespace(returncode=0, stdout="local results", stderr="")
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("api_url should not be used when command is configured")
+
+    monkeypatch.setattr("deepy.tools.builtin.subprocess.run", fake_run)
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+
+    payload = decode(runtime.web_search("deep seek"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "local results"
+    assert commands == ["search-tool 'deep seek'"]

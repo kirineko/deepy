@@ -188,8 +188,12 @@ class ToolRuntime:
                 "WebSearch command or api_url is not configured.",
                 metadata={"query": query},
             ).to_json()
-        if api_url:
-            return self._web_search_api(query, api_url)
+        if command:
+            return self._web_search_command(query, command)
+        return self._web_search_api(query, api_url)
+
+    def _web_search_command(self, query: str, command: str) -> str:
+        name = "WebSearch"
         completed = subprocess.run(
             f"{command} {shlex.quote(query)}",
             shell=True,
