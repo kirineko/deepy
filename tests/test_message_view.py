@@ -6,7 +6,10 @@ from rich.console import Console
 
 from deepy.ui.message_view import format_tool_output_summary
 from deepy.ui.message_view import build_thinking_summary
+from deepy.ui.message_view import build_tool_params_snippet
+from deepy.ui.message_view import build_tool_result_snippet
 from deepy.ui.message_view import DiffPreviewLine
+from deepy.ui.message_view import is_invisible_execution
 from deepy.ui.message_view import parse_diff_preview
 from deepy.ui.message_view import parse_tool_output
 from deepy.ui.message_view import render_tool_output
@@ -152,3 +155,37 @@ def test_build_thinking_summary_uses_placeholder_for_hidden_reasoning():
     assert build_thinking_summary("", {"reasoning_content": "hidden chain of thought"}) == (
         "(reasoning...)"
     )
+
+
+def test_build_tool_params_snippet_formats_bash_command_and_description():
+    assert (
+        build_tool_params_snippet(
+            {"name": "bash", "arguments": '{"command":"pytest","description":"run tests"}'}
+        )
+        == "pytest  # run tests"
+    )
+
+
+def test_build_tool_params_snippet_shortens_read_path_under_project_root():
+    assert (
+        build_tool_params_snippet(
+            {"name": "read", "arguments": '{"path":"/repo/src/app.py"}'},
+            project_root="/repo",
+        )
+        == "src/app.py"
+    )
+
+
+def test_build_tool_result_snippet_extracts_output_and_truncates():
+    content = json.dumps({"ok": True, "name": "bash", "output": "x" * 2_010})
+
+    snippet = build_tool_result_snippet(content)
+
+    assert snippet.startswith("x" * 2_000)
+    assert snippet.endswith("... (total 2010 chars)")
+
+
+def test_is_invisible_execution_detects_failed_bash_payload():
+    assert is_invisible_execution(json.dumps({"ok": False, "name": "bash"})) is True
+    assert is_invisible_execution(json.dumps({"ok": True, "name": "bash"})) is False
+    assert is_invisible_execution(json.dumps({"ok": False, "name": "read"})) is False

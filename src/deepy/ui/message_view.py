@@ -128,6 +128,51 @@ def build_thinking_summary(content: str, message_params: object | None = None) -
     return ""
 
 
+def build_tool_params_snippet(tool_function: object | None, *, project_root: str | None = None) -> str:
+    if not isinstance(tool_function, dict):
+        return ""
+    args = tool_function.get("arguments")
+    tool_name = tool_function.get("name")
+    if not isinstance(args, str) or not args.strip():
+        return ""
+    try:
+        parsed = json.loads(args)
+    except json.JSONDecodeError:
+        return args.strip()
+    if not isinstance(parsed, dict):
+        return args.strip()
+    return _format_tool_params_snippet(
+        tool_name if isinstance(tool_name, str) else None,
+        parsed,
+        project_root=project_root,
+    )
+
+
+def build_tool_result_snippet(content: str, *, max_chars: int = 2_000) -> str:
+    trimmed = content.strip()
+    if not trimmed:
+        return ""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return _format_tool_result_snippet(content, max_chars=max_chars)
+    if isinstance(parsed, dict) and "output" in parsed:
+        output = parsed["output"]
+        value = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
+        return _format_tool_result_snippet(value, max_chars=max_chars)
+    return _format_tool_result_snippet(content, max_chars=max_chars)
+
+
+def is_invisible_execution(content: str) -> bool:
+    if not content.strip():
+        return False
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict) and parsed.get("name") == "bash" and parsed.get("ok") is not True
+
+
 def render_tool_output(output: str) -> Group:
     view = parse_tool_output(output)
     parts: list[Any] = [Text(view.summary)]
@@ -141,6 +186,37 @@ def _tool_diff_text(view: ToolOutputView) -> str | None:
     if view.ok is not True or view.name.lower() not in DIFF_PREVIEW_TOOLS:
         return None
     return view.diff_preview or view.diff
+
+
+def _format_tool_params_snippet(
+    tool_name: str | None,
+    args: dict[str, Any],
+    *,
+    project_root: str | None,
+) -> str:
+    if tool_name == "bash":
+        command = args.get("command")
+        description = args.get("description")
+        command_text = command.strip() if isinstance(command, str) else ""
+        description_text = description.strip() if isinstance(description, str) else ""
+        if command_text and description_text:
+            return f"{command_text}  # {description_text}"
+        return command_text or description_text
+
+    first_key = next(iter(args), "")
+    if not first_key:
+        return ""
+    value = args[first_key]
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if tool_name == "read" and project_root and text.startswith(project_root):
+        return text[len(project_root) :].lstrip("/\\")
+    return text
+
+
+def _format_tool_result_snippet(value: str, *, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return f"{value[:max_chars]}... (total {len(value)} chars)"
 
 
 def _raw_tool_output(output: str) -> ToolOutputView:

@@ -275,3 +275,109 @@ async def test_jsonl_session_replays_legacy_message_params(tmp_path):
         },
         {"role": "tool", "content": '{"ok":true}', "tool_call_id": "call-1"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_jsonl_session_inserts_interrupted_tool_result_for_missing_pair(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session.path.parent.mkdir(parents=True)
+    records = [
+        {
+            "id": "assistant-tool",
+            "sessionId": "s1",
+            "role": "assistant",
+            "content": "I will run a tool.",
+            "contentParams": None,
+            "messageParams": {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"sleep 100"}'},
+                    }
+                ]
+            },
+            "compacted": False,
+            "visible": True,
+        },
+        {
+            "id": "user-after",
+            "sessionId": "s1",
+            "role": "user",
+            "content": "continue",
+            "contentParams": None,
+            "messageParams": None,
+            "compacted": False,
+            "visible": True,
+        },
+    ]
+    session.path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+    items = await session.get_items()
+
+    assert items[1]["role"] == "tool"
+    assert items[1]["tool_call_id"] == "call-1"
+    assert "Previous tool call did not complete" in items[1]["content"]
+    assert items[2] == {"role": "user", "content": "continue"}
+
+
+@pytest.mark.asyncio
+async def test_jsonl_session_prefers_real_tool_result_over_interrupted_placeholder(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session.path.parent.mkdir(parents=True)
+    assistant = {
+        "id": "assistant-tool",
+        "sessionId": "s1",
+        "role": "assistant",
+        "content": "",
+        "contentParams": None,
+        "messageParams": {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": '{"command":"date"}'},
+                }
+            ]
+        },
+        "compacted": False,
+        "visible": False,
+    }
+    interrupted = {
+        "id": "tool-interrupted",
+        "sessionId": "s1",
+        "role": "tool",
+        "content": json.dumps(
+            {
+                "ok": False,
+                "name": "bash",
+                "error": "Previous tool call did not complete.",
+                "metadata": {"interrupted": True},
+            }
+        ),
+        "contentParams": None,
+        "messageParams": {"tool_call_id": "call-1"},
+        "compacted": False,
+        "visible": True,
+    }
+    real = {
+        "id": "tool-real",
+        "sessionId": "s1",
+        "role": "tool",
+        "content": json.dumps({"ok": True, "name": "bash", "output": "real result"}),
+        "contentParams": None,
+        "messageParams": {"tool_call_id": "call-1"},
+        "compacted": False,
+        "visible": True,
+    }
+    session.path.write_text(
+        "\n".join(json.dumps(record) for record in [assistant, interrupted, real]) + "\n",
+        encoding="utf-8",
+    )
+
+    items = await session.get_items()
+
+    tool_items = [item for item in items if item.get("role") == "tool"]
+    assert len(tool_items) == 1
+    assert "real result" in tool_items[0]["content"]
+    assert "Previous tool call did not complete" not in tool_items[0]["content"]

@@ -64,6 +64,160 @@ def _content_with_params(content: Any, content_params: Any, role: Any) -> Any:
     return parts or content
 
 
+def _records_to_sdk_items(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pairings = _pair_tool_records(records)
+    items: list[dict[str, Any]] = []
+    for index, record in enumerate(records):
+        if record.get("role") == "tool":
+            continue
+        item = _sdk_item_from_record_data(record)
+        items.append(item)
+        tool_calls = _assistant_tool_calls(record, item)
+        for tool_call_index, tool_call in enumerate(tool_calls):
+            tool_call_id = _tool_call_id(tool_call)
+            if not tool_call_id:
+                continue
+            paired_index = pairings.get((index, tool_call_index))
+            if paired_index is not None:
+                items.append(_sdk_item_from_record_data(records[paired_index]))
+            else:
+                items.append(_interrupted_tool_item(tool_call, tool_call_id))
+    return items
+
+
+def _sdk_item_from_record_data(record: dict[str, Any]) -> dict[str, Any]:
+    meta = record.get("meta")
+    if isinstance(meta, dict) and isinstance(meta.get("sdk_item"), dict):
+        return dict(meta["sdk_item"])
+    role = record.get("role")
+    content = record.get("content", "")
+    message_params = record.get("messageParams")
+    content_params = record.get("contentParams")
+    if role in {"user", "assistant", "system", "developer"}:
+        item = {"role": role, "content": _content_with_params(content, content_params, role)}
+        if isinstance(message_params, dict):
+            tool_calls = message_params.get("tool_calls")
+            if isinstance(tool_calls, list):
+                item["tool_calls"] = tool_calls
+                item["reasoning_content"] = str(message_params.get("reasoning_content", ""))
+            elif isinstance(message_params.get("reasoning_content"), str):
+                item["reasoning_content"] = message_params["reasoning_content"]
+        return item
+    if role == "tool":
+        item = {"role": "tool", "content": content}
+        if isinstance(message_params, dict) and isinstance(message_params.get("tool_call_id"), str):
+            item["tool_call_id"] = message_params["tool_call_id"]
+        return item
+    return {"type": str(role or "unknown"), "content": content}
+
+
+def _pair_tool_records(records: list[dict[str, Any]]) -> dict[tuple[int, int], int]:
+    pairings: dict[tuple[int, int], int] = {}
+    used_tool_indexes: set[int] = set()
+    for assistant_index, record in enumerate(records):
+        assistant_item = _sdk_item_from_record_data(record)
+        tool_calls = _assistant_tool_calls(record, assistant_item)
+        for tool_call_index, tool_call in enumerate(tool_calls):
+            tool_call_id = _tool_call_id(tool_call)
+            if not tool_call_id:
+                continue
+            tool_index = _find_pairable_tool_record(records, assistant_index, tool_call_id, used_tool_indexes)
+            if tool_index is None:
+                continue
+            used_tool_indexes.add(tool_index)
+            pairings[(assistant_index, tool_call_index)] = tool_index
+    return pairings
+
+
+def _assistant_tool_calls(record: dict[str, Any], item: dict[str, Any]) -> list[Any]:
+    if record.get("role") != "assistant":
+        return []
+    tool_calls = item.get("tool_calls")
+    if isinstance(tool_calls, list):
+        return tool_calls
+    message_params = record.get("messageParams")
+    if isinstance(message_params, dict) and isinstance(message_params.get("tool_calls"), list):
+        return message_params["tool_calls"]
+    return []
+
+
+def _tool_call_id(tool_call: Any) -> str | None:
+    if isinstance(tool_call, dict):
+        value = tool_call.get("id") or tool_call.get("call_id")
+        return value if isinstance(value, str) and value else None
+    value = getattr(tool_call, "id", None) or getattr(tool_call, "call_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _find_pairable_tool_record(
+    records: list[dict[str, Any]],
+    assistant_index: int,
+    tool_call_id: str,
+    used_tool_indexes: set[int],
+) -> int | None:
+    first_matching_index = None
+    for index in range(assistant_index + 1, len(records)):
+        record = records[index]
+        if record.get("role") != "tool" or index in used_tool_indexes:
+            continue
+        if _tool_record_call_id(record) != tool_call_id:
+            continue
+        if first_matching_index is None:
+            first_matching_index = index
+        if not _is_interrupted_tool_record(record):
+            return index
+    return first_matching_index
+
+
+def _tool_record_call_id(record: dict[str, Any]) -> str | None:
+    item = _sdk_item_from_record_data(record)
+    value = item.get("tool_call_id")
+    if isinstance(value, str) and value:
+        return value
+    message_params = record.get("messageParams")
+    if isinstance(message_params, dict):
+        value = message_params.get("tool_call_id")
+        return value if isinstance(value, str) and value else None
+    return None
+
+
+def _is_interrupted_tool_record(record: dict[str, Any]) -> bool:
+    content = record.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return False
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return False
+    metadata = parsed.get("metadata") if isinstance(parsed, dict) else None
+    return isinstance(metadata, dict) and metadata.get("interrupted") is True
+
+
+def _interrupted_tool_item(tool_call: Any, tool_call_id: str) -> dict[str, Any]:
+    tool_name = _tool_call_name(tool_call)
+    payload = {
+        "ok": False,
+        "name": tool_name or "tool",
+        "output": "",
+        "error": "Previous tool call did not complete.",
+        "metadata": {"interrupted": True},
+        "awaitUserResponse": False,
+    }
+    return {
+        "role": "tool",
+        "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        "tool_call_id": tool_call_id,
+    }
+
+
+def _tool_call_name(tool_call: Any) -> str:
+    function = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+    if isinstance(function, dict) and isinstance(function.get("name"), str):
+        return function["name"]
+    value = getattr(function, "name", None)
+    return value if isinstance(value, str) else ""
+
+
 @dataclass
 class DeepyJsonlSession:
     session_id: str
@@ -150,29 +304,7 @@ class DeepyJsonlSession:
         }
 
     def _sdk_item_from_record(self, record: dict[str, Any]) -> dict[str, Any]:
-        meta = record.get("meta")
-        if isinstance(meta, dict) and isinstance(meta.get("sdk_item"), dict):
-            return dict(meta["sdk_item"])
-        role = record.get("role")
-        content = record.get("content", "")
-        message_params = record.get("messageParams")
-        content_params = record.get("contentParams")
-        if role in {"user", "assistant", "system", "developer"}:
-            item = {"role": role, "content": _content_with_params(content, content_params, role)}
-            if isinstance(message_params, dict):
-                tool_calls = message_params.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    item["tool_calls"] = tool_calls
-                    item["reasoning_content"] = str(message_params.get("reasoning_content", ""))
-                elif isinstance(message_params.get("reasoning_content"), str):
-                    item["reasoning_content"] = message_params["reasoning_content"]
-            return item
-        if role == "tool":
-            item = {"role": "tool", "content": content}
-            if isinstance(message_params, dict) and isinstance(message_params.get("tool_call_id"), str):
-                item["tool_call_id"] = message_params["tool_call_id"]
-            return item
-        return {"type": str(role or "unknown"), "content": content}
+        return _sdk_item_from_record_data(record)
 
     def _load_records(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -191,11 +323,9 @@ class DeepyJsonlSession:
 
     def _load_items(self) -> list[dict[str, Any]]:
         if self._loaded_items is None:
-            self._loaded_items = [
-                self._sdk_item_from_record(record)
-                for record in self._load_records()
-                if not record.get("compacted", False)
-            ]
+            self._loaded_items = _records_to_sdk_items(
+                [record for record in self._load_records() if not record.get("compacted", False)]
+            )
         return list(self._loaded_items)
 
     def _estimate_active_tokens(self, records: list[dict[str, Any]] | None = None) -> int:

@@ -5,7 +5,7 @@ import os
 from types import SimpleNamespace
 
 from deepy.config import Settings
-from deepy.config.settings import ToolsConfig, WebSearchToolConfig
+from deepy.config.settings import ModelConfig, ToolsConfig, WebSearchToolConfig
 from deepy.tools import ToolResult, ToolRuntime
 from deepy.tools.agents import build_function_tools
 from deepy.tools.builtin import DEFAULT_LINE_LIMIT, MAX_BASH_OUTPUT_CHARS, MAX_LINE_LENGTH
@@ -697,6 +697,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
 
 def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     settings = Settings(
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
         tools=ToolsConfig(
             web_search=WebSearchToolConfig(
                 api_url="https://search.example/api",
@@ -706,6 +707,7 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     requested: list[object] = []
+    chat_prompts: list[str] = []
 
     class FakeResponse:
         def __enter__(self):
@@ -722,6 +724,11 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
         assert timeout == 30
         return FakeResponse()
 
+    def fake_chat(settings, prompt):
+        chat_prompts.append(prompt)
+        return '{"dominant_language":"en","reason":"English docs are richer."}'
+
+    monkeypatch.setattr("deepy.tools.builtin._web_search_chat", fake_chat)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     payload = decode(runtime.web_search("deep seek"))
@@ -731,7 +738,9 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     assert requested[0].full_url == "https://search.example/api?q=deep+seek"
     assert requested[0].get_header("Token") == "machine-1"
     assert payload["metadata"]["dominantLanguage"] == "en"
+    assert payload["metadata"]["languageReason"] == "English docs are richer."
     assert payload["metadata"]["usedMachineId"] is True
+    assert len(chat_prompts) == 1
 
 
 def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatch):
@@ -790,9 +799,17 @@ def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatc
 
 def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     settings = Settings(
-        tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        tools=ToolsConfig(
+            web_search=WebSearchToolConfig(
+                api_url="https://search.example/api",
+                machine_id="machine-1",
+            )
+        ),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    requested: list[object] = []
+    chat_prompts: list[str] = []
 
     class FakeResponse:
         def __enter__(self):
@@ -804,11 +821,38 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
         def read(self):
             return "中文结果".encode()
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+    def fake_urlopen(request, timeout):
+        requested.append(request)
+        return FakeResponse()
+
+    def fake_chat(settings, prompt):
+        chat_prompts.append(prompt)
+        if "Return strict JSON" in prompt:
+            return '{"dominant_language":"en","reason":"English results are better."}'
+        return "latest DeepSeek model"
+
+    monkeypatch.setattr("deepy.tools.builtin._web_search_chat", fake_chat)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     payload = decode(runtime.web_search("DeepSeek 最新模型"))
 
     assert payload["ok"] is True
-    assert payload["metadata"]["dominantLanguage"] == "zh"
-    assert payload["metadata"]["translated"] is False
-    assert payload["metadata"]["resolvedQuery"] == "DeepSeek 最新模型"
+    assert payload["metadata"]["dominantLanguage"] == "en"
+    assert payload["metadata"]["translated"] is True
+    assert payload["metadata"]["resolvedQuery"] == "latest DeepSeek model"
+    assert requested[0].full_url == "https://search.example/api?q=latest+DeepSeek+model"
+    assert len(chat_prompts) == 2
+
+
+def test_web_search_default_api_requires_llm_config_and_machine_id(tmp_path):
+    runtime = ToolRuntime(
+        cwd=tmp_path,
+        settings=Settings(
+            tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+        ),
+    )
+
+    payload = decode(runtime.web_search("latest node release"))
+
+    assert payload["ok"] is False
+    assert "valid LLM configuration" in payload["error"]
