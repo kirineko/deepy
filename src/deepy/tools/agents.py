@@ -34,7 +34,7 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         return runtime.read(path, start_line, limit)
 
     @function_tool(name_override="write")
-    def write(path: str, content: str) -> str:
+    def write(path: str, content: object) -> str:
         """Create or replace a file after read-before-write checks."""
         return runtime.write(path, content)
 

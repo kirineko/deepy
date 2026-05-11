@@ -199,6 +199,31 @@ def test_write_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"one\r\ntwo\r\n"
 
 
+def test_write_repairs_json_object_content_for_json_files(tmp_path):
+    target = tmp_path / "package.json"
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.write("package.json", {"name": "demo", "private": True}))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["input_repaired"] is True
+    assert payload["metadata"]["repair_kind"] == "json-stringify-content"
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "name": "demo",
+        "private": True,
+    }
+    assert target.read_text(encoding="utf-8").startswith('{\n  "name": "demo"')
+
+
+def test_write_rejects_non_string_content_for_non_json_files(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.write("notes.txt", {"text": "demo"}))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "content must be a string."
+
+
 def test_edit_preserves_existing_crlf_line_endings(tmp_path):
     target = tmp_path / "windows.txt"
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")

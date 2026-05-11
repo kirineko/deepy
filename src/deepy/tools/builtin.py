@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import shlex
@@ -129,15 +130,18 @@ class ToolRuntime:
             },
         ).to_json()
 
-    def write(self, path: str, content: str) -> str:
+    def write(self, path: str, content: object) -> str:
         name = "write"
         target = _resolve_in_cwd(self.cwd, path)
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
+        text_content, repair_metadata, content_error = _coerce_write_content(target, content)
+        if content_error is not None:
+            return ToolResult.error_result(name, content_error).to_json()
         old_content = _read_text_preserving_newlines(target) if target.exists() else ""
-        line_endings = _detect_line_endings(old_content or content)
-        normalized_content = _normalize_line_endings(content, line_endings)
+        line_endings = _detect_line_endings(old_content or text_content)
+        normalized_content = _normalize_line_endings(text_content, line_endings)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(normalized_content, encoding="utf-8")
         self.file_state.mark_written(target)
@@ -148,6 +152,7 @@ class ToolRuntime:
             metadata={
                 "path": str(target),
                 "line_endings": line_endings,
+                **repair_metadata,
                 "diff": diff,
                 "diff_preview": diff,
             },
@@ -362,6 +367,21 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
 def _read_text_preserving_newlines(path: Path) -> str:
     with path.open("r", encoding="utf-8", errors="replace", newline="") as fh:
         return fh.read()
+
+
+def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, object], str | None]:
+    if isinstance(content, str):
+        return content, {}, None
+    if path.suffix.lower() == ".json" and content is not None and not isinstance(content, bytes):
+        try:
+            return (
+                json.dumps(content, ensure_ascii=False, indent=2),
+                {"input_repaired": True, "repair_kind": "json-stringify-content"},
+                None,
+            )
+        except TypeError as exc:
+            return "", {}, f"JSON content is not serializable: {exc}"
+    return "", {}, "content must be a string."
 
 
 def _detect_line_endings(text: str) -> str:
