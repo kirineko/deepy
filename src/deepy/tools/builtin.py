@@ -17,6 +17,7 @@ from .result import ToolResult
 
 DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
+MAX_BASH_OUTPUT_CHARS = 30_000
 
 
 def _resolve_in_cwd(cwd: Path, path: str) -> Path:
@@ -148,30 +149,43 @@ class ToolRuntime:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
+            output, output_truncated = _truncate_output((exc.stdout or "") + (exc.stderr or ""))
             return ToolResult.error_result(
                 name,
                 f"Command timed out after {timeout_ms}ms.",
-                output=(exc.stdout or "") + (exc.stderr or ""),
-                metadata={"cwd": str(self.cwd), "timeoutMs": timeout_ms},
+                output=output,
+                metadata={
+                    "cwd": str(self.cwd),
+                    "timeoutMs": timeout_ms,
+                    "outputTruncated": output_truncated,
+                },
             ).to_json()
 
         stdout, final_cwd, exit_code = _extract_bash_sentinel(completed.stdout or "", marker)
         if final_cwd is not None and final_cwd.is_dir():
             self.cwd = final_cwd
         returncode = exit_code if exit_code is not None else completed.returncode
-        output = stdout + (completed.stderr or "")
+        output, output_truncated = _truncate_output(stdout + (completed.stderr or ""))
         result = ToolResult.ok_result if returncode == 0 else ToolResult.error_result
         if returncode == 0:
             return result(
                 name,
                 output,
-                metadata={"cwd": str(self.cwd), "exitCode": returncode},
+                metadata={
+                    "cwd": str(self.cwd),
+                    "exitCode": returncode,
+                    "outputTruncated": output_truncated,
+                },
             ).to_json()
         return result(
             name,
             f"Command exited with code {returncode}.",
             output=output,
-            metadata={"cwd": str(self.cwd), "exitCode": returncode},
+            metadata={
+                "cwd": str(self.cwd),
+                "exitCode": returncode,
+                "outputTruncated": output_truncated,
+            },
         ).to_json()
 
     def ask_user_question(self, question: str) -> str:
@@ -252,6 +266,13 @@ def _truncate_line(line: str) -> str:
     if len(line) <= MAX_LINE_LENGTH:
         return line
     return line[:MAX_LINE_LENGTH] + "... [truncated]"
+
+
+def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tuple[str, bool]:
+    if len(output) <= max_chars:
+        return output, False
+    omitted = len(output) - max_chars
+    return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
 
 
 def _format_directory_entries(path: Path) -> str:

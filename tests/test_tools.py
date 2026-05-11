@@ -8,7 +8,7 @@ from deepy.config import Settings
 from deepy.config.settings import ToolsConfig, WebSearchToolConfig
 from deepy.tools import ToolResult, ToolRuntime
 from deepy.tools.agents import build_function_tools
-from deepy.tools.builtin import DEFAULT_LINE_LIMIT, MAX_LINE_LENGTH
+from deepy.tools.builtin import DEFAULT_LINE_LIMIT, MAX_BASH_OUTPUT_CHARS, MAX_LINE_LENGTH
 
 
 def decode(payload: str) -> dict:
@@ -176,6 +176,18 @@ def test_bash_tracks_cwd_even_when_command_fails(tmp_path):
     assert payload["metadata"]["exitCode"] == 1
     assert payload["metadata"]["cwd"] == str(subdir)
     assert runtime.cwd == subdir
+
+
+def test_bash_truncates_large_output(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("printf 'x%.0s' {1..31000}"))
+
+    assert payload["ok"] is True
+    assert len(payload["output"]) > MAX_BASH_OUTPUT_CHARS
+    assert len(payload["output"]) < 31_000
+    assert payload["output"].endswith("... [truncated 1000 chars]")
+    assert payload["metadata"]["outputTruncated"] is True
 
 
 def test_ask_user_question_sets_wait_flag(tmp_path):
