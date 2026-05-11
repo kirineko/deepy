@@ -100,6 +100,19 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
             "compact_trigger_ratio": 0.8,
             "compact_prompt_token_threshold": 838_861,
         },
+        "logging": {
+            "debug": False,
+        },
+        "notify": {
+            "enabled": False,
+            "command": "",
+        },
+        "tools": {
+            "web_search": {
+                "command": "",
+                "api_url": "",
+            },
+        },
     }
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")

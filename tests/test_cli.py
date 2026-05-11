@@ -43,6 +43,11 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     text = config.read_text(encoding="utf-8")
     assert 'api_key = "sk-test"' in text
     assert "compact_prompt_token_threshold = 838861" in text
+    assert "[logging]" in text
+    assert "[notify]" in text
+    assert "[tools.web_search]" in text
+    assert 'command = ""' in text
+    assert 'api_url = ""' in text
 
 
 def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
