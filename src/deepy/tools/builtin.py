@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import urllib.parse
+import urllib.request
 from difflib import unified_diff
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,12 +161,15 @@ class ToolRuntime:
     def web_search(self, query: str) -> str:
         name = "WebSearch"
         command = self.settings.tools.web_search.command
-        if not command:
+        api_url = self.settings.tools.web_search.api_url
+        if not command and not api_url:
             return ToolResult.error_result(
                 name,
-                "WebSearch command is not configured.",
+                "WebSearch command or api_url is not configured.",
                 metadata={"query": query},
             ).to_json()
+        if api_url:
+            return self._web_search_api(query, api_url)
         completed = subprocess.run(
             f"{command} {shlex.quote(query)}",
             shell=True,
@@ -183,6 +188,25 @@ class ToolRuntime:
                 metadata={"query": query},
             ).to_json()
         return ToolResult.ok_result(name, output, metadata={"query": query}).to_json()
+
+    def _web_search_api(self, query: str, api_url: str) -> str:
+        name = "WebSearch"
+        separator = "&" if "?" in api_url else "?"
+        url = f"{api_url}{separator}{urllib.parse.urlencode({'q': query})}"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            return ToolResult.error_result(
+                name,
+                f"WebSearch API request failed: {exc}",
+                metadata={"query": query, "apiUrl": api_url},
+            ).to_json()
+        return ToolResult.ok_result(
+            name,
+            body,
+            metadata={"query": query, "apiUrl": api_url},
+        ).to_json()
 
     def _update_cwd_from_cd(self, command: str) -> None:
         parts = shlex.split(command)

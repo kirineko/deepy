@@ -4,6 +4,7 @@ import json
 import os
 
 from deepy.config import Settings
+from deepy.config.settings import ToolsConfig, WebSearchToolConfig
 from deepy.tools import ToolResult, ToolRuntime
 from deepy.tools.agents import build_function_tools
 
@@ -123,3 +124,34 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "WebSearch",
     ]
     assert all(tool.description for tool in tools)
+
+
+def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
+    settings = Settings(
+        tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    requested: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"results"
+
+    def fake_urlopen(url, timeout):
+        requested.append(url)
+        assert timeout == 30
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = decode(runtime.web_search("deep seek"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "results"
+    assert requested == ["https://search.example/api?q=deep+seek"]
