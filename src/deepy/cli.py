@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -11,6 +12,7 @@ import tomli_w
 
 from . import __version__
 from .config import load_settings, settings_to_toml_dict
+from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import list_session_entries
@@ -32,6 +34,11 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser = config_sub.add_parser("show", help="Print resolved TOML config.")
     show_parser.add_argument("--show-secret", action="store_true", help="Show API key.")
     show_parser.add_argument("--json", action="store_true", help="Print JSON instead of TOML.")
+    init_parser = config_sub.add_parser("init", help="Create a TOML config file.")
+    init_parser.add_argument("--api-key", help="DeepSeek API key.")
+    init_parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name.")
+    init_parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible base URL.")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate local Deepy setup.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
@@ -55,6 +62,35 @@ def _cmd_config_show(args: argparse.Namespace) -> int:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         print(tomli_w.dumps(data), end="")
+    return 0
+
+
+def _cmd_config_init(args: argparse.Namespace) -> int:
+    config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
+    if config_path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    if config_path.exists() and not args.force:
+        print(f"Config already exists: {config_path}", file=sys.stderr)
+        return 1
+
+    payload = {
+        "model": {
+            "name": args.model,
+            "base_url": args.base_url,
+            "api_key": args.api_key or "",
+            "thinking": True,
+            "reasoning_effort": "max",
+        },
+        "context": {
+            "window_tokens": 1_048_576,
+            "compact_trigger_ratio": 0.8,
+            "compact_prompt_token_threshold": 838_861,
+        },
+    }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    os.chmod(config_path, 0o600)
+    print(f"Wrote {config_path}")
     return 0
 
 
@@ -157,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "config":
         if args.config_command == "show":
             return _cmd_config_show(args)
+        if args.config_command == "init":
+            return _cmd_config_init(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
     if args.command == "run":
