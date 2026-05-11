@@ -44,9 +44,15 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         return runtime.write(path, content)
 
     @function_tool(name_override="edit")
-    def edit(path: str, old: str, new: str, replace_all: bool = False) -> str:
-        """Replace exact text in a file after it has been read."""
-        return runtime.edit(path, old, new, replace_all)
+    def edit(
+        path: str | None = None,
+        old: str = "",
+        new: str = "",
+        replace_all: bool = False,
+        snippet_id: str | None = None,
+    ) -> str:
+        """Replace exact text in a file after it has been read, optionally scoped to a snippet."""
+        return runtime.edit(path, old, new, replace_all, snippet_id)
 
     @function_tool(name_override="AskUserQuestion")
     def ask_user_question(questions: list[AskUserQuestionItemArg]) -> str:

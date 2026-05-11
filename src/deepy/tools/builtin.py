@@ -20,7 +20,7 @@ from pathlib import Path
 
 from deepy.config import Settings
 
-from .file_state import FileState
+from .file_state import FileSnippet, FileState
 from .result import ToolResult
 from .shell_utils import build_disable_extglob_command
 from .shell_utils import build_shell_init_command
@@ -76,6 +76,35 @@ def _resolve_read_target(cwd: Path, path: str) -> tuple[Path | None, str | None]
     if len(matches) == 1:
         return matches[0], None
     return target, None
+
+
+def _snippet_metadata(snippet: FileSnippet) -> dict[str, object]:
+    return {
+        "id": snippet.id,
+        "filePath": str(snippet.path),
+        "file_path": str(snippet.path),
+        "startLine": snippet.start_line,
+        "endLine": snippet.end_line,
+        "start_line": snippet.start_line,
+        "end_line": snippet.end_line,
+    }
+
+
+def _edit_scope(text: str, snippet: FileSnippet | None) -> tuple[int, int]:
+    if snippet is None:
+        return 0, len(text)
+    return _line_scope_offsets(text, snippet.start_line, snippet.end_line)
+
+
+def _line_scope_offsets(text: str, start_line: int, end_line: int) -> tuple[int, int]:
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return 0, 0
+    start_idx = min(max(start_line - 1, 0), len(lines))
+    end_idx = min(max(end_line, start_idx), len(lines))
+    start = sum(len(line) for line in lines[:start_idx])
+    end = sum(len(line) for line in lines[:end_idx])
+    return start, end
 
 
 @dataclass
@@ -155,19 +184,32 @@ class ToolRuntime:
         )
         if full_file_read:
             self.file_state.mark_read(target)
+        snippet_metadata = None
+        if not full_file_read and selected:
+            snippet = self.file_state.create_snippet(
+                target,
+                start_line=start + 1,
+                end_line=start + len(selected),
+                text="\n".join(selected),
+            )
+            self.file_state.mark_read(target, full=False)
+            snippet_metadata = _snippet_metadata(snippet)
+        metadata = {
+            "path": str(target),
+            "kind": "file",
+            "startLine": start + 1,
+            "lineCount": len(selected),
+            "lineLimit": effective_limit,
+            "totalLines": len(lines),
+            "truncated": truncated,
+            "trackedForWrite": full_file_read,
+        }
+        if snippet_metadata is not None:
+            metadata["snippet"] = snippet_metadata
         return ToolResult.ok_result(
             name,
             numbered,
-            metadata={
-                "path": str(target),
-                "kind": "file",
-                "startLine": start + 1,
-                "lineCount": len(selected),
-                "lineLimit": effective_limit,
-                "totalLines": len(lines),
-                "truncated": truncated,
-                "trackedForWrite": full_file_read,
-            },
+            metadata=metadata,
         ).to_json()
 
     def write(self, path: str, content: object) -> str:
@@ -198,18 +240,52 @@ class ToolRuntime:
             },
         ).to_json()
 
-    def edit(self, path: str, old: str, new: str, replace_all: bool = False) -> str:
+    def edit(
+        self,
+        path: str | None,
+        old: str,
+        new: str,
+        replace_all: bool = False,
+        snippet_id: str | None = None,
+    ) -> str:
         name = "edit"
-        target = _resolve_in_cwd(self.cwd, path)
+        if not old:
+            return ToolResult.error_result(name, "old text must not be empty.").to_json()
+        snippet = None
+        if snippet_id:
+            snippet = self.file_state.get_snippet(snippet_id)
+            if snippet is None:
+                return ToolResult.error_result(name, f"Unknown snippet_id: {snippet_id}").to_json()
+            target = snippet.path
+            if path:
+                requested_target = _resolve_in_cwd(self.cwd, path)
+                if requested_target != target:
+                    return ToolResult.error_result(
+                        name,
+                        "snippet_id does not belong to the provided file path.",
+                    ).to_json()
+        else:
+            if not path:
+                return ToolResult.error_result(
+                    name,
+                    "path is required unless snippet_id is provided.",
+                ).to_json()
+            target = _resolve_in_cwd(self.cwd, path)
         if not target.exists():
             return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
-        ok, error = self.file_state.check_writable(target, require_read=True)
+        ok, error = self.file_state.check_writable(
+            target,
+            require_read=True,
+            allow_partial=snippet is not None,
+        )
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
         text = _read_text_preserving_newlines(target)
-        if old not in text:
+        scope = _edit_scope(text, snippet)
+        scoped_text = text[scope[0] : scope[1]]
+        if old not in scoped_text:
             return ToolResult.error_result(name, "Old text was not found in the file.").to_json()
-        occurrences = text.count(old)
+        occurrences = scoped_text.count(old)
         if occurrences > 1 and not replace_all:
             return ToolResult.error_result(
                 name,
@@ -218,25 +294,27 @@ class ToolRuntime:
             ).to_json()
         line_endings = _detect_line_endings(text)
         normalized_new = _normalize_line_endings(new, line_endings)
-        updated = (
-            text.replace(old, normalized_new)
+        updated_scope = (
+            scoped_text.replace(old, normalized_new)
             if replace_all
-            else text.replace(old, normalized_new, 1)
+            else scoped_text.replace(old, normalized_new, 1)
         )
+        updated = text[: scope[0]] + updated_scope + text[scope[1] :]
         target.write_text(updated, encoding="utf-8")
         self.file_state.mark_written(target)
         diff = _unified_diff(text, updated, path=str(target))
-        return ToolResult.ok_result(
-            name,
-            f"Edited {target}",
-            metadata={
-                "path": str(target),
-                "occurrences": occurrences if replace_all else 1,
-                "line_endings": line_endings,
-                "diff": diff,
-                "diff_preview": diff,
-            },
-        ).to_json()
+        metadata = {
+            "path": str(target),
+            "file_path": str(target),
+            "occurrences": occurrences if replace_all else 1,
+            "line_endings": line_endings,
+            "read_scope_type": "snippet" if snippet is not None else "full",
+            "diff": diff,
+            "diff_preview": diff,
+        }
+        if snippet is not None:
+            metadata["scope"] = _snippet_metadata(snippet)
+        return ToolResult.ok_result(name, f"Edited {target}", metadata=metadata).to_json()
 
     def bash(self, command: str, timeout_ms: int = 120_000) -> str:
         name = "bash"

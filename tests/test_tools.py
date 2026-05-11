@@ -329,6 +329,53 @@ def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
     assert "read before" in denied["error"]
 
 
+def test_partial_read_returns_snippet_metadata(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("a.txt", start_line=2, limit=1))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["trackedForWrite"] is False
+    assert payload["metadata"]["snippet"]["id"] == "snippet_1"
+    assert payload["metadata"]["snippet"]["filePath"] == str(target)
+    assert payload["metadata"]["snippet"]["startLine"] == 2
+    assert payload["metadata"]["snippet"]["endLine"] == 2
+
+
+def test_edit_can_scope_replacement_by_snippet_id(tmp_path):
+    target = tmp_path / "sample.txt"
+    target.write_text(
+        "\n".join(["alpha", "target = 1", "omega", "beta", "target = 1", "done"]),
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read("sample.txt", start_line=4, limit=2))
+    snippet_id = read_payload["metadata"]["snippet"]["id"]
+    edit_payload = decode(runtime.edit(None, "target = 1", "target = 2", snippet_id=snippet_id))
+
+    assert edit_payload["ok"] is True
+    assert edit_payload["metadata"]["read_scope_type"] == "snippet"
+    assert edit_payload["metadata"]["scope"]["startLine"] == 4
+    assert edit_payload["metadata"]["scope"]["endLine"] == 5
+    assert edit_payload["metadata"]["line_endings"] == "LF"
+    assert "+target = 2" in edit_payload["metadata"]["diff_preview"]
+    assert target.read_text(encoding="utf-8") == "\n".join(
+        ["alpha", "target = 1", "omega", "beta", "target = 2", "done"]
+    )
+
+
+def test_edit_rejects_unknown_snippet_id(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.edit(None, "old", "new", snippet_id="snippet_404"))
+
+    assert payload["ok"] is False
+    assert "Unknown snippet_id" in payload["error"]
+
+
 def test_edit_detects_mtime_change_after_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")
