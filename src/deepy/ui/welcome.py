@@ -4,6 +4,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.console import Group
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
 from deepy.skills import SkillInfo
 from deepy.ui.slash_commands import (
     BUILTIN_SLASH_COMMANDS,
@@ -73,3 +78,46 @@ def build_welcome_settings(
         WelcomeSetting("Reasoning Effort", reasoning_effort),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
+
+
+def build_welcome_panel(
+    *,
+    model: str,
+    thinking_enabled: bool,
+    reasoning_effort: str,
+    project_root: str | Path,
+    skills: list[SkillInfo],
+    home: str | Path | None = None,
+) -> Panel:
+    settings = build_welcome_settings(
+        model=model,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+        project_root=project_root,
+        home=home,
+    )
+    tips = build_welcome_tips(skills)
+    settings_table = Table.grid(padding=(0, 2))
+    settings_table.add_column(style="bold")
+    settings_table.add_column()
+    for item in settings:
+        settings_table.add_row(item.label, item.value)
+
+    tips_table = Table.grid(padding=(0, 2))
+    tips_table.add_column(style="cyan")
+    tips_table.add_column()
+    for tip in tips[:10]:
+        tips_table.add_row(tip.label, tip.description)
+
+    return Panel(
+        Group(
+            Text("Vibe coding for DeepSeek models in your terminal.", style="dim"),
+            Text(""),
+            settings_table,
+            Text(""),
+            Text("Shortcuts and commands", style="bold"),
+            tips_table,
+        ),
+        title="Deepy",
+        expand=False,
+    )

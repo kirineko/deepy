@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.console import Console
+
 from deepy.skills import SkillInfo
+from deepy.ui.welcome import build_welcome_panel
 from deepy.ui.welcome import build_welcome_settings
 from deepy.ui.welcome import build_welcome_tips
 from deepy.ui.welcome import format_home_relative_path
@@ -61,3 +64,25 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
         ("Reasoning Effort", "max"),
         ("CWD", "~/project"),
     ]
+
+
+def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
+    console = Console(record=True, width=120)
+
+    console.print(
+        build_welcome_panel(
+            model="deepseek-v4-pro",
+            thinking_enabled=True,
+            reasoning_effort="max",
+            project_root=tmp_path,
+            skills=[],
+            home=tmp_path.parent,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Deepy" in rendered
+    assert "deepseek-v4-pro" in rendered
+    assert "Reasoning Effort" in rendered
+    assert "/resume" in rendered
+    assert "Ctrl+D twice" in rendered

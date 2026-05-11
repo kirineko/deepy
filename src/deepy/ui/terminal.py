@@ -25,6 +25,7 @@ from deepy.ui.ask_user_question import normalize_questions
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
 from deepy.ui.session_list import format_session_choices, resolve_session_selection
+from deepy.ui.welcome import build_welcome_panel
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
@@ -56,10 +57,16 @@ def run_interactive(
     output = console or Console()
     session_id: str | None = None
 
-    output.print("[bold]Deepy[/bold] interactive mode")
-    output.print(f"Project: {root}")
-    output.print("Type /help for commands, /exit to quit.")
     loaded_skill_names: list[str] = []
+    output.print(
+        build_welcome_panel(
+            model=settings.model.name,
+            thinking_enabled=settings.model.thinking_enabled,
+            reasoning_effort=settings.model.reasoning_effort,
+            project_root=root,
+            skills=discover_skills(root),
+        )
+    )
 
     while True:
         try:
