@@ -10,7 +10,6 @@ import shlex
 import subprocess
 import tempfile
 import time
-import urllib.parse
 import urllib.request
 import uuid
 from difflib import unified_diff
@@ -1127,9 +1126,6 @@ class ToolRuntime:
                 f"WebSearch default mode failed: {prepare_error}",
                 metadata={"query": query, "apiUrl": api_url},
             ).to_json()
-        separator = "&" if "?" in api_url else "?"
-        url = f"{api_url}{separator}{urllib.parse.urlencode({'q': prepared.resolved_query})}"
-        request = urllib.request.Request(url)
         machine_id = self.settings.tools.web_search.machine_id
         if not machine_id:
             return ToolResult.error_result(
@@ -1137,7 +1133,16 @@ class ToolRuntime:
                 "WebSearch default mode requires machine_id in the TOML tools.web_search config.",
                 metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
-        request.add_header("Token", machine_id)
+        body = json.dumps({"query": prepared.resolved_query}).encode("utf-8")
+        request = urllib.request.Request(
+            api_url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Token": machine_id,
+            },
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 body = response.read().decode("utf-8", errors="replace")
@@ -1147,9 +1152,24 @@ class ToolRuntime:
                 f"WebSearch API request failed: {exc}",
                 metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
+        output = body.strip()
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            result = payload.get("result")
+            if isinstance(result, str) and result.strip():
+                output = result.strip()
+        if not output:
+            return ToolResult.error_result(
+                name,
+                "WebSearch default mode failed: The web search response was empty.",
+                metadata={**prepared.metadata(), "apiUrl": api_url},
+            ).to_json()
         return ToolResult.ok_result(
             name,
-            body,
+            output,
             metadata={**prepared.metadata(), "apiUrl": api_url, "usedMachineId": bool(machine_id)},
         ).to_json()
 

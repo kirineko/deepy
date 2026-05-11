@@ -758,11 +758,14 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return b"results"
+            return b'{"success":true,"result":"results"}'
 
     def fake_urlopen(request, timeout):
         requested.append(request)
         assert timeout == 30
+        assert request.get_method() == "POST"
+        assert request.get_header("Content-type") == "application/json"
+        assert json.loads(request.data.decode()) == {"query": "deep seek"}
         return FakeResponse()
 
     def fake_chat(settings, prompt):
@@ -776,7 +779,7 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
 
     assert payload["ok"] is True
     assert payload["output"] == "results"
-    assert requested[0].full_url == "https://search.example/api?q=deep+seek"
+    assert requested[0].full_url == "https://search.example/api"
     assert requested[0].get_header("Token") == "machine-1"
     assert payload["metadata"]["dominantLanguage"] == "en"
     assert payload["metadata"]["languageReason"] == "English docs are richer."
@@ -860,10 +863,12 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return "中文结果".encode()
+            return json.dumps({"success": True, "result": "中文结果"}).encode()
 
     def fake_urlopen(request, timeout):
         requested.append(request)
+        assert request.get_method() == "POST"
+        assert json.loads(request.data.decode()) == {"query": "latest DeepSeek model"}
         return FakeResponse()
 
     def fake_chat(settings, prompt):
@@ -881,7 +886,7 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     assert payload["metadata"]["dominantLanguage"] == "en"
     assert payload["metadata"]["translated"] is True
     assert payload["metadata"]["resolvedQuery"] == "latest DeepSeek model"
-    assert requested[0].full_url == "https://search.example/api?q=latest+DeepSeek+model"
+    assert requested[0].full_url == "https://search.example/api"
     assert len(chat_prompts) == 2
 
 
