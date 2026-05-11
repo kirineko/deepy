@@ -12,11 +12,28 @@ Current migration status:
 - DeepSeek V4 models default to thinking mode.
 - The model adapter uses the OpenAI Agents SDK `OpenAIChatCompletionsModel`.
 - Session history is stored as project-scoped JSONL files for inspectability.
+- Context input uses a 1M token window and compacts above the configured threshold.
+- Project rules from `AGENTS.md` and skills from `.deepy/skills/*/SKILL.md` are injected into the system prompt.
+- A minimal Rich terminal shell is available while the full TUI is being migrated.
 
 Useful commands:
 
 ```bash
 deepy --version
+deepy config init --api-key sk-...
 deepy config show
 deepy doctor
+deepy sessions list
+deepy run "say hello"
+deepy run --session <session-id> "continue"
+```
+
+Interactive slash commands:
+
+```text
+/help
+/sessions
+/resume <session-id>
+/new
+/exit
 ```
