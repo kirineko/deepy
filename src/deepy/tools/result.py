@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    ok: bool
+    name: str
+    output: str = ""
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    awaitUserResponse: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "name": self.name,
+            "output": self.output,
+            "error": self.error,
+            "metadata": self.metadata,
+            "awaitUserResponse": self.awaitUserResponse,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+
+    @classmethod
+    def ok_result(
+        cls,
+        name: str,
+        output: str = "",
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ToolResult":
+        return cls(ok=True, name=name, output=output, metadata=metadata or {})
+
+    @classmethod
+    def error_result(
+        cls,
+        name: str,
+        error: str,
+        *,
+        output: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> "ToolResult":
+        return cls(ok=False, name=name, output=output, error=error, metadata=metadata or {})
