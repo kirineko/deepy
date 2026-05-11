@@ -6,6 +6,33 @@ The command name is:
 deepy
 ```
 
+## Install
+
+From the GitHub repository:
+
+```bash
+uv tool install git+https://github.com/kirineko/deepy.git
+```
+
+For local development from this checkout:
+
+```bash
+uv sync --group dev
+uv run deepy --help
+```
+
+After a PyPI release, `pipx install deepy` is the intended non-uv installation path.
+
+## Configuration
+
+Create a private TOML config file:
+
+```bash
+deepy config init --api-key sk-...
+```
+
+Deepy only supports TOML config. JSON config files are intentionally not supported.
+
 Current migration status:
 
 - TOML config lives at `~/.deepy/config.toml`.
@@ -46,3 +73,11 @@ Interactive slash commands:
 /new
 /exit
 ```
+
+## Release Strategy
+
+- Python is the primary implementation and distribution path.
+- Versions follow the `pyproject.toml` package version and should use PEP 440 compatible releases.
+- Release artifacts are wheel and sdist builds produced by `uv build`.
+- A standalone executable can be added later, but is not part of the first stable Python release.
+- npm distribution is not the primary path. If npm support is needed later, it should be a thin wrapper that delegates to the Python `deepy` command instead of carrying a second implementation.
