@@ -23,6 +23,15 @@ class FakeStream:
         yield type(
             "Event",
             (),
+            {
+                "type": "run_item_stream_event",
+                "name": "tool_called",
+                "item": type("Item", (), {"tool_name": "read", "call_id": "call-1"})(),
+            },
+        )()
+        yield type(
+            "Event",
+            (),
             {"type": "raw_response_event", "data": type("Data", (), {"delta": "lo"})()},
         )()
 
@@ -57,6 +66,7 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
 
     monkeypatch.setattr("agents.Runner", FakeRunner)
     emitted: list[str] = []
+    emitted_events: list[str] = []
 
     summary = await run_prompt_once(
         "say hello",
@@ -64,12 +74,14 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
         settings=Settings(),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
         emit=emitted.append,
+        emit_event=lambda event: emitted_events.append(event.kind),
         max_turns=3,
     )
 
     assert summary.output == "hello"
     assert summary.complete is True
     assert emitted == ["hel", "lo"]
+    assert emitted_events == ["text_delta", "tool_call", "text_delta"]
     assert captured == [
         CapturedRun(
             agent_name="Deepy",

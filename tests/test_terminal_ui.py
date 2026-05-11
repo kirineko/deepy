@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from rich.console import Console
 
+from deepy.llm.events import DeepyStreamEvent
 from deepy.ui.terminal import _handle_slash_command
+from deepy.ui.terminal import _print_stream_event
 from deepy.ui import SlashCommand, parse_slash_command
 
 
@@ -48,3 +50,20 @@ def test_skill_slash_command_prints_skill_body(tmp_path):
 
     assert next_session == "s1"
     assert "Use this skill." in console.export_text()
+
+
+def test_print_stream_event_shows_tool_call_and_output():
+    console = Console(record=True)
+
+    _print_stream_event(console, DeepyStreamEvent(kind="tool_call", name="read"))
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            text='{"ok":true,"name":"read","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
+        ),
+    )
+
+    rendered = console.export_text()
+    assert "tool call: read" in rendered
+    assert "tool output: read ok - /tmp/a" in rendered

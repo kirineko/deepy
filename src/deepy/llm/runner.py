@@ -11,6 +11,7 @@ from deepy.tools import ToolRuntime
 
 from .agent import build_deepy_agent
 from .context import build_session_input_callback
+from .events import DeepyStreamEvent, normalize_stream_event
 from .provider import ProviderBundle, build_provider_bundle
 
 
@@ -21,14 +22,6 @@ class RunSummary:
     complete: bool
 
 
-def _event_delta_text(event: Any) -> str:
-    if getattr(event, "type", None) != "raw_response_event":
-        return ""
-    data = getattr(event, "data", None)
-    delta = getattr(data, "delta", None)
-    return delta if isinstance(delta, str) else ""
-
-
 async def run_prompt_once(
     prompt: str,
     *,
@@ -36,6 +29,7 @@ async def run_prompt_once(
     settings: Settings | None = None,
     provider: ProviderBundle | None = None,
     emit: Callable[[str], None] | None = None,
+    emit_event: Callable[[DeepyStreamEvent], None] | None = None,
     max_turns: int = 10,
     session_id: str | None = None,
 ) -> RunSummary:
@@ -72,12 +66,16 @@ async def run_prompt_once(
     )
     chunks: list[str] = []
     async for event in result.stream_events():
-        delta = _event_delta_text(event)
-        if not delta:
+        normalized = normalize_stream_event(event)
+        if normalized is None:
             continue
-        chunks.append(delta)
+        if emit_event is not None:
+            emit_event(normalized)
+        if normalized.kind != "text_delta" or not normalized.text:
+            continue
+        chunks.append(normalized.text)
         if emit is not None:
-            emit(delta)
+            emit(normalized.text)
 
     final_output = getattr(result, "final_output", None)
     output = final_output if isinstance(final_output, str) else "".join(chunks)

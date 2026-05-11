@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from deepy.config import Settings
+from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
@@ -70,6 +72,7 @@ def run_interactive(
                 project_root=root,
                 settings=settings,
                 emit=lambda delta: output.print(delta, end=""),
+                emit_event=lambda event: _print_stream_event(output, event),
                 session_id=session_id,
             )
         )
@@ -128,3 +131,35 @@ def _handle_slash_command(
 
     console.print(f"[red]Unknown command:[/red] /{command.name}")
     return current_session_id
+
+
+def _print_stream_event(console: Console, event: DeepyStreamEvent) -> None:
+    if event.kind in {"text_delta", "message"}:
+        return
+    if event.kind == "tool_call":
+        tool_name = event.name or "tool"
+        console.print(f"\n[dim]tool call:[/dim] {tool_name}")
+        return
+    if event.kind == "tool_output":
+        summary = _tool_output_summary(event.text)
+        console.print(f"\n[dim]tool output:[/dim] {summary}")
+        return
+    if event.kind == "agent_updated" and event.name:
+        console.print(f"\n[dim]agent:[/dim] {event.name}")
+
+
+def _tool_output_summary(output: str) -> str:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return output[:160]
+    if not isinstance(payload, dict):
+        return output[:160]
+    name = payload.get("name") or "tool"
+    ok = payload.get("ok")
+    error = payload.get("error")
+    metadata = payload.get("metadata")
+    path = metadata.get("path") if isinstance(metadata, dict) else None
+    status = "ok" if ok else "failed"
+    details = str(error or path or "").strip()
+    return f"{name} {status}" + (f" - {details}" if details else "")
