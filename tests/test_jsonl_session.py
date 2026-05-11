@@ -133,3 +133,88 @@ def test_list_session_entries_reads_legacy_entries_shape(tmp_path):
             "command": "pytest",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_jsonl_session_replays_legacy_message_params(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session.path.parent.mkdir(parents=True)
+    records = [
+        {
+            "id": "user-image",
+            "sessionId": "s1",
+            "role": "user",
+            "content": "look",
+            "contentParams": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}}],
+            "messageParams": None,
+            "compacted": False,
+            "visible": True,
+        },
+        {
+            "id": "assistant-tool",
+            "sessionId": "s1",
+            "role": "assistant",
+            "content": "",
+            "contentParams": None,
+            "messageParams": {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ]
+            },
+            "compacted": False,
+            "visible": False,
+        },
+        {
+            "id": "tool-result",
+            "sessionId": "s1",
+            "role": "tool",
+            "content": '{"ok":true}',
+            "contentParams": None,
+            "messageParams": {"tool_call_id": "call-1"},
+            "compacted": False,
+            "visible": True,
+        },
+        {
+            "id": "old-summary",
+            "sessionId": "s1",
+            "role": "system",
+            "content": "old compacted summary",
+            "contentParams": None,
+            "messageParams": None,
+            "compacted": True,
+            "visible": False,
+        },
+    ]
+    session.path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\nnot-json\n",
+        encoding="utf-8",
+    )
+
+    items = await session.get_items()
+
+    assert items == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "content": '{"ok":true}', "tool_call_id": "call-1"},
+    ]

@@ -52,6 +52,17 @@ def _content_from_item(item: dict[str, Any]) -> Any:
     return ""
 
 
+def _content_with_params(content: Any, content_params: Any, role: Any) -> Any:
+    if role not in {"user", "system"} or not content_params:
+        return content
+    params = content_params if isinstance(content_params, list) else [content_params]
+    parts: list[Any] = []
+    if content:
+        parts.append({"type": "text", "text": content})
+    parts.extend(param for param in params if isinstance(param, dict))
+    return parts or content
+
+
 @dataclass
 class DeepyJsonlSession:
     session_id: str
@@ -143,8 +154,23 @@ class DeepyJsonlSession:
             return dict(meta["sdk_item"])
         role = record.get("role")
         content = record.get("content", "")
+        message_params = record.get("messageParams")
+        content_params = record.get("contentParams")
         if role in {"user", "assistant", "system", "developer"}:
-            return {"role": role, "content": content}
+            item = {"role": role, "content": _content_with_params(content, content_params, role)}
+            if isinstance(message_params, dict):
+                tool_calls = message_params.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    item["tool_calls"] = tool_calls
+                    item["reasoning_content"] = str(message_params.get("reasoning_content", ""))
+                elif isinstance(message_params.get("reasoning_content"), str):
+                    item["reasoning_content"] = message_params["reasoning_content"]
+            return item
+        if role == "tool":
+            item = {"role": "tool", "content": content}
+            if isinstance(message_params, dict) and isinstance(message_params.get("tool_call_id"), str):
+                item["tool_call_id"] = message_params["tool_call_id"]
+            return item
         return {"type": str(role or "unknown"), "content": content}
 
     def _load_records(self) -> list[dict[str, Any]]:
@@ -156,13 +182,18 @@ class DeepyJsonlSession:
                 line = line.strip()
                 if not line:
                     continue
-                records.append(json.loads(line))
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
         return records
 
     def _load_items(self) -> list[dict[str, Any]]:
         if self._loaded_items is None:
             self._loaded_items = [
-                self._sdk_item_from_record(record) for record in self._load_records()
+                self._sdk_item_from_record(record)
+                for record in self._load_records()
+                if not record.get("compacted", False)
             ]
         return list(self._loaded_items)
 
