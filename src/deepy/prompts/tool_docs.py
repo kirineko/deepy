@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+from importlib import resources
+
+
+TOOL_DOC_FILES = (
+    "bash.md",
+    "read.md",
+    "write.md",
+    "edit.md",
+    "AskUserQuestion.md",
+    "WebSearch.md",
+)
+
+
+def load_tool_docs() -> str:
+    docs = resources.files("deepy.data.tools")
+    sections: list[str] = []
+    for filename in TOOL_DOC_FILES:
+        sections.append(docs.joinpath(filename).read_text(encoding="utf-8").strip())
+    return "\n\n".join(sections)

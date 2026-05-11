@@ -12,6 +12,7 @@ from deepy.skills import (
 
 from .rules import AGENT_DRIFT_GUARD, load_project_rules
 from .runtime_context import build_runtime_context
+from .tool_docs import load_tool_docs
 
 
 def build_system_prompt(
@@ -31,6 +32,7 @@ def build_system_prompt(
     skills_block = format_skills_for_prompt(resolved_skills)
     loaded_skills_block = format_loaded_skills_for_prompt(loaded_skills or [])
     runtime_context_block = runtime_context or build_runtime_context(project_root)
+    tool_docs_block = load_tool_docs()
     return f"""You are Deepy, a terminal coding agent running in the user's project.
 
 Work directly in the repository when asked to implement changes. Prefer small, verifiable edits.
@@ -50,6 +52,9 @@ Tool protocol:
 - Tool results are JSON strings with ok, name, output, error, metadata, and awaitUserResponse.
 - Read files before editing existing files.
 - Ask the user only when the next action is genuinely blocked by missing intent or approval.
+
+Tool documentation:
+{tool_docs_block}
 
 Default skill:
 {AGENT_DRIFT_GUARD}

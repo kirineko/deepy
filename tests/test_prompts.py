@@ -86,6 +86,8 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
 
     assert "Keep the user's current task" in prompt
     assert "Follow local rules." in prompt
+    assert "## WebSearch" in prompt
+    assert "## bash" in prompt
     assert "demo - Demo skill" in prompt
     assert "Runtime context here." in prompt
 
