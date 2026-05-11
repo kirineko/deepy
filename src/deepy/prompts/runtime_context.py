@@ -10,8 +10,6 @@ IGNORED_TOP_LEVEL_ENTRIES = {
     ".ruff_cache",
     ".venv",
     "__pycache__",
-    "reference",
-    "spec",
 }
 
 

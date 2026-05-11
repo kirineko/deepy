@@ -132,6 +132,6 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     assert "Git dirty:" in context
     assert "- src/" in context
     assert "- README.md" in context
-    assert "reference/" not in context
-    assert "spec/" not in context
+    assert "- reference/" in context
+    assert "- spec/" in context
     assert ".pytest_cache/" not in context
