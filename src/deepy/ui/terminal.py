@@ -11,7 +11,7 @@ from rich.prompt import Prompt
 from deepy.config import Settings
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import list_session_entries
-from deepy.skills import discover_skills, format_skills_for_terminal
+from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
@@ -89,6 +89,7 @@ def _handle_slash_command(
     if command.name == "help":
         console.print("/help       Show commands")
         console.print("/skills     List available skills")
+        console.print("/skill NAME Show a skill document")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
         console.print("/new        Start a new session")
@@ -113,6 +114,16 @@ def _handle_slash_command(
         return current_session_id
     if command.name == "skills":
         console.print(format_skills_for_terminal(discover_skills(project_root)))
+        return current_session_id
+    if command.name == "skill":
+        if not command.argument:
+            console.print("[red]Usage:[/red] /skill NAME")
+            return current_session_id
+        skill = find_skill(project_root, command.argument)
+        if skill is None:
+            console.print(f"[red]Skill not found:[/red] {command.argument}")
+            return current_session_id
+        console.print(read_skill_body(skill) or "(empty skill)")
         return current_session_id
 
     console.print(f"[red]Unknown command:[/red] /{command.name}")

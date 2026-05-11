@@ -16,7 +16,7 @@ from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import list_session_entries
-from .skills import discover_skills, format_skills_for_terminal
+from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .ui import run_interactive
 
 
@@ -56,6 +56,8 @@ def _build_parser() -> argparse.ArgumentParser:
     skills_parser = subparsers.add_parser("skills", help="Inspect available skills.")
     skills_sub = skills_parser.add_subparsers(dest="skills_command", required=True)
     skills_sub.add_parser("list", help="List user and project skills.")
+    skills_show = skills_sub.add_parser("show", help="Print a skill document.")
+    skills_show.add_argument("name", help="Skill name.")
 
     return parser
 
@@ -194,6 +196,13 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
 def _cmd_skills(args: argparse.Namespace) -> int:
     if args.skills_command == "list":
         print(format_skills_for_terminal(discover_skills(Path.cwd())))
+        return 0
+    if args.skills_command == "show":
+        skill = find_skill(Path.cwd(), args.name)
+        if skill is None:
+            print(f"Skill not found: {args.name}", file=sys.stderr)
+            return 1
+        print(read_skill_body(skill))
         return 0
     return 1
 

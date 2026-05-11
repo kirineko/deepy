@@ -33,3 +33,18 @@ def test_skills_slash_command_lists_project_skills(tmp_path):
     rendered = console.export_text()
     assert "Project skills:" in rendered
     assert "demo - Demo skill" in rendered
+
+
+def test_skill_slash_command_prints_skill_body(tmp_path):
+    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(SlashCommand("skill", "demo"), console, tmp_path, "s1")
+
+    assert next_session == "s1"
+    assert "Use this skill." in console.export_text()

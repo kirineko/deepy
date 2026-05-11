@@ -26,6 +26,20 @@ def discover_skills(project_root: Path, *, home: Path | None = None) -> list[Ski
     return sorted(by_name.values(), key=lambda item: item.name)
 
 
+def find_skill(project_root: Path, name: str, *, home: Path | None = None) -> SkillInfo | None:
+    normalized = _normalize_name(name)
+    for skill in discover_skills(project_root, home=home):
+        if _normalize_name(skill.name) == normalized:
+            return skill
+    return None
+
+
+def read_skill_body(skill: SkillInfo) -> str:
+    text = skill.path.read_text(encoding="utf-8", errors="replace")
+    _frontmatter, body = _split_frontmatter(text)
+    return body.strip()
+
+
 def format_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
     return _format_skills(skills, include_paths=True)
 

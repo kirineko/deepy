@@ -3,7 +3,7 @@ from __future__ import annotations
 from deepy.config import Settings
 from deepy.prompts import build_system_prompt
 from deepy.prompts.rules import load_project_rules
-from deepy.skills import discover_skills, format_skills_for_prompt
+from deepy.skills import discover_skills, find_skill, format_skills_for_prompt, read_skill_body
 
 
 def test_discover_skills_reads_user_and_project_skills_with_project_override(tmp_path):
@@ -79,3 +79,17 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Keep the user's current task" in prompt
     assert "Follow local rules." in prompt
     assert "demo - Demo skill" in prompt
+
+
+def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
+    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",
+        encoding="utf-8",
+    )
+
+    skill = find_skill(tmp_path, "demo", home=tmp_path / "home")
+
+    assert skill is not None
+    assert read_skill_body(skill) == "# Body\nUse this skill."
