@@ -5,10 +5,14 @@ from typing import Any, Literal
 
 StreamKind = Literal[
     "text_delta",
+    "reasoning_delta",
+    "reasoning_item",
     "tool_call",
     "tool_output",
     "message",
     "agent_updated",
+    "usage",
+    "raw_response",
     "unknown",
 ]
 
@@ -24,10 +28,20 @@ class DeepyStreamEvent:
 def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
     event_type = getattr(event, "type", None)
     if event_type == "raw_response_event":
+        data = getattr(event, "data", None)
+        data_type = getattr(data, "type", "")
         delta = _raw_delta(event)
+        if data_type == "response.reasoning_summary_text.delta" and delta:
+            return DeepyStreamEvent(kind="reasoning_delta", text=delta, payload={"raw": data})
         if delta:
             return DeepyStreamEvent(kind="text_delta", text=delta)
-        return None
+        if data_type == "response.completed":
+            usage = _response_usage(data)
+            return DeepyStreamEvent(
+                kind="usage",
+                payload={"usage": usage, "raw": data},
+            )
+        return DeepyStreamEvent(kind="raw_response", name=str(data_type or ""), payload={"raw": data})
 
     if event_type == "agent_updated_stream_event":
         agent = getattr(event, "new_agent", None)
@@ -58,6 +72,8 @@ def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
     if name == "message_output_created":
         text = _message_text(item)
         return DeepyStreamEvent(kind="message", text=text)
+    if name == "reasoning_item_created":
+        return DeepyStreamEvent(kind="reasoning_item", payload={"item": item})
 
     return DeepyStreamEvent(kind="unknown", name=str(name), payload={"item": item})
 
@@ -68,6 +84,23 @@ def _raw_delta(event: Any) -> str:
     if isinstance(delta, str):
         return delta
     return ""
+
+
+def _response_usage(data: Any) -> Any:
+    response = getattr(data, "response", None)
+    usage = getattr(response, "usage", None)
+    return _to_payload(usage)
+
+
+def _to_payload(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    if hasattr(value, "__dict__"):
+        return dict(value.__dict__)
+    return value
 
 
 def _tool_name(item: Any) -> str:
