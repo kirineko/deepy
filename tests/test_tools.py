@@ -143,6 +143,60 @@ def test_read_rejects_ambiguous_relative_suffix(tmp_path):
     assert str(second / "settings.py") in payload["error"]
 
 
+def test_read_notebook_returns_textual_cells_and_outputs(tmp_path):
+    notebook = tmp_path / "demo.ipynb"
+    notebook.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "markdown",
+                        "source": ["# Title\n", "intro"],
+                    },
+                    {
+                        "cell_type": "code",
+                        "source": "print('hi')\n",
+                        "outputs": [
+                            {"output_type": "stream", "text": ["hi\n"]},
+                            {
+                                "output_type": "display_data",
+                                "data": {
+                                    "text/plain": "'value'",
+                                    "image/png": "abcd",
+                                },
+                            },
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("demo.ipynb"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["kind"] == "notebook"
+    assert payload["metadata"]["trackedForWrite"] is False
+    assert "1: # Cell 1 (markdown)" in payload["output"]
+    assert "2: # Title" in payload["output"]
+    assert "5: print('hi')" in payload["output"]
+    assert "7: hi" in payload["output"]
+    assert "10: [image/png 4 chars]" in payload["output"]
+
+
+def test_read_invalid_notebook_returns_parse_error(tmp_path):
+    notebook = tmp_path / "broken.ipynb"
+    notebook.write_text("{not json", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("broken.ipynb"))
+
+    assert payload["ok"] is False
+    assert "Failed to parse notebook JSON" in payload["error"]
+
+
 def test_read_limits_large_files_by_default(tmp_path):
     target = tmp_path / "large.txt"
     target.write_text(

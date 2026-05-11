@@ -101,6 +101,20 @@ class ToolRuntime:
                 },
             ).to_json()
 
+        if target.suffix.lower() == ".ipynb":
+            output, error = _format_notebook(target)
+            if error is not None:
+                return ToolResult.error_result(name, error, metadata={"path": str(target)}).to_json()
+            return ToolResult.ok_result(
+                name,
+                output,
+                metadata={
+                    "path": str(target),
+                    "kind": "notebook",
+                    "trackedForWrite": False,
+                },
+            ).to_json()
+
         text = _read_text_preserving_newlines(target)
         lines = text.splitlines()
         start = max(start_line, 1) - 1
@@ -383,6 +397,71 @@ def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, o
         except TypeError as exc:
             return "", {}, f"JSON content is not serializable: {exc}"
     return "", {}, "content must be a string."
+
+
+def _format_notebook(path: Path) -> tuple[str, str | None]:
+    raw = _read_text_preserving_newlines(path)
+    if not raw:
+        return "WARNING: File is empty.", None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return "", f"Failed to parse notebook JSON: {exc}"
+    if not isinstance(parsed, dict):
+        return "WARNING: Notebook has no cells.", None
+
+    cells = parsed.get("cells")
+    lines: list[str] = []
+    if isinstance(cells, list):
+        for index, cell in enumerate(cells):
+            if not isinstance(cell, dict):
+                continue
+            cell_type = cell.get("cell_type") if isinstance(cell.get("cell_type"), str) else "unknown"
+            lines.append(f"# Cell {index + 1} ({cell_type})")
+            lines.extend(_normalize_notebook_field(cell.get("source")))
+
+            outputs = cell.get("outputs")
+            if not isinstance(outputs, list):
+                continue
+            for output_index, output in enumerate(outputs):
+                if not isinstance(output, dict):
+                    continue
+                output_type = (
+                    output.get("output_type")
+                    if isinstance(output.get("output_type"), str)
+                    else "output"
+                )
+                lines.append(f"# Output {output_index + 1} ({output_type})")
+                lines.extend(_format_notebook_output(output))
+
+    if not lines:
+        return "WARNING: Notebook has no cells.", None
+    return "\n".join(f"{idx + 1}: {line}" for idx, line in enumerate(lines)), None
+
+
+def _normalize_notebook_field(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).removesuffix("\n").removesuffix("\r") for item in value]
+    if isinstance(value, str):
+        return value.splitlines()
+    return []
+
+
+def _format_notebook_output(output: dict[str, object]) -> list[str]:
+    lines = _normalize_notebook_field(output.get("text"))
+    data = output.get("data")
+    if isinstance(data, dict):
+        lines.extend(_normalize_notebook_field(data.get("text/plain")))
+        image_png = data.get("image/png")
+        if isinstance(image_png, str):
+            lines.append(f"[image/png {len(image_png)} chars]")
+        image_jpeg = data.get("image/jpeg")
+        if isinstance(image_jpeg, str):
+            lines.append(f"[image/jpeg {len(image_jpeg)} chars]")
+    traceback = output.get("traceback")
+    if isinstance(traceback, list):
+        lines.extend(str(item).removesuffix("\n").removesuffix("\r") for item in traceback)
+    return lines or ["[output omitted]"]
 
 
 def _detect_line_endings(text: str) -> str:
