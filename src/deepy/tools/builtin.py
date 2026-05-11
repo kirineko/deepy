@@ -126,6 +126,13 @@ class ClosestMatch:
     strategy: str
 
 
+@dataclass(frozen=True)
+class TextFileMetadata:
+    content: str
+    encoding: str
+    line_endings: str
+
+
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
     matches: list[MatchOccurrence] = []
     scoped_text = text[scope[0] : scope[1]]
@@ -462,7 +469,8 @@ class ToolRuntime:
                 followUpMessages=[_build_image_follow_up_message(target, mime, data)],
             ).to_json()
 
-        text = _read_text_preserving_newlines(target)
+        text_metadata = _read_text_metadata(target)
+        text = text_metadata.content
         lines = text.splitlines()
         start = max(start_line, 1) - 1
         effective_limit = limit if limit and limit > 0 else DEFAULT_LINE_LIMIT
@@ -496,6 +504,7 @@ class ToolRuntime:
             "totalLines": len(lines),
             "truncated": truncated,
             "trackedForWrite": full_file_read,
+            "encoding": text_metadata.encoding,
         }
         if snippet_metadata is not None:
             metadata["snippet"] = snippet_metadata
@@ -514,11 +523,13 @@ class ToolRuntime:
         text_content, repair_metadata, content_error = _coerce_write_content(target, content)
         if content_error is not None:
             return ToolResult.error_result(name, content_error).to_json()
-        old_content = _read_text_preserving_newlines(target) if target.exists() else ""
+        existing_metadata = _read_text_metadata(target) if target.exists() else None
+        old_content = existing_metadata.content if existing_metadata is not None else ""
+        encoding = existing_metadata.encoding if existing_metadata is not None else "utf8"
         line_endings = _detect_line_endings(old_content or text_content)
         normalized_content = _normalize_line_endings(text_content, line_endings)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(normalized_content, encoding="utf-8")
+        _write_text_with_encoding(target, normalized_content, encoding)
         self.file_state.mark_written(target)
         diff = _unified_diff(old_content, normalized_content, path=str(target))
         return ToolResult.ok_result(
@@ -526,6 +537,7 @@ class ToolRuntime:
             f"Wrote {target}",
             metadata={
                 "path": str(target),
+                "encoding": encoding,
                 "line_endings": line_endings,
                 **repair_metadata,
                 "diff": diff,
@@ -573,7 +585,8 @@ class ToolRuntime:
         )
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
-        text = _read_text_preserving_newlines(target)
+        text_metadata = _read_text_metadata(target)
+        text = text_metadata.content
         scope = _edit_scope(text, snippet)
         matches = _find_occurrences(text, old, scope)
         matched_via = "exact"
@@ -613,10 +626,10 @@ class ToolRuntime:
                     ),
                 },
             ).to_json()
-        line_endings = _detect_line_endings(text)
+        line_endings = text_metadata.line_endings
         normalized_new = _normalize_line_endings(new, line_endings)
         updated = _apply_replacements(text, matches, normalized_new, replace_all)
-        target.write_text(updated, encoding="utf-8")
+        _write_text_with_encoding(target, updated, text_metadata.encoding)
         self.file_state.mark_written(target)
         diff = _unified_diff(text, updated, path=str(target))
         metadata = {
@@ -624,6 +637,7 @@ class ToolRuntime:
             "file_path": str(target),
             "occurrences": occurrences if replace_all else 1,
             "matched_via": matched_via,
+            "encoding": text_metadata.encoding,
             "line_endings": line_endings,
             "read_scope_type": "snippet" if snippet is not None else "full",
             "diff": diff,
@@ -800,8 +814,30 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
 
 
 def _read_text_preserving_newlines(path: Path) -> str:
-    with path.open("r", encoding="utf-8", errors="replace", newline="") as fh:
-        return fh.read()
+    return _read_text_metadata(path).content
+
+
+def _read_text_metadata(path: Path) -> TextFileMetadata:
+    data = path.read_bytes()
+    encoding = _detect_text_encoding(data)
+    python_encoding = "utf-16" if encoding == "utf16le" else "utf-8"
+    text = data.decode(python_encoding, errors="replace")
+    return TextFileMetadata(
+        content=text,
+        encoding=encoding,
+        line_endings=_detect_line_endings(text),
+    )
+
+
+def _detect_text_encoding(data: bytes) -> str:
+    if len(data) >= 2 and data[0] == 0xFF and data[1] == 0xFE:
+        return "utf16le"
+    return "utf8"
+
+
+def _write_text_with_encoding(path: Path, content: str, encoding: str) -> None:
+    python_encoding = "utf-16" if encoding == "utf16le" else "utf-8"
+    path.write_text(content, encoding=python_encoding)
 
 
 def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, object], str | None]:

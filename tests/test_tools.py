@@ -484,6 +484,21 @@ def test_write_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"one\r\ntwo\r\n"
 
 
+def test_write_preserves_existing_utf16le_encoding(tmp_path):
+    target = tmp_path / "utf16.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-16")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read("utf16.txt"))
+    payload = decode(runtime.write("utf16.txt", "one\ntwo\n"))
+
+    assert read_payload["metadata"]["encoding"] == "utf16le"
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf16le"
+    assert target.read_bytes().startswith(b"\xff\xfe")
+    assert target.read_text(encoding="utf-16") == "one\ntwo\n"
+
+
 def test_write_repairs_json_object_content_for_json_files(tmp_path):
     target = tmp_path / "package.json"
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -520,6 +535,20 @@ def test_edit_preserves_existing_crlf_line_endings(tmp_path):
     assert payload["ok"] is True
     assert payload["metadata"]["line_endings"] == "CRLF"
     assert target.read_bytes() == b"alpha\r\ngamma\r\n"
+
+
+def test_edit_preserves_existing_utf16le_encoding(tmp_path):
+    target = tmp_path / "utf16.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-16")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("utf16.txt"))
+    payload = decode(runtime.edit("utf16.txt", "beta", "gamma"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf16le"
+    assert target.read_bytes().startswith(b"\xff\xfe")
+    assert target.read_text(encoding="utf-16") == "alpha\ngamma\n"
 
 
 def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path):
