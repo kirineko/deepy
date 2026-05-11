@@ -16,6 +16,9 @@ from deepy.config import Settings
 
 from .file_state import FileState
 from .result import ToolResult
+from .shell_utils import build_disable_extglob_command
+from .shell_utils import build_shell_init_command
+from .shell_utils import rewrite_windows_null_redirect
 
 
 DEFAULT_LINE_LIMIT = 2_000
@@ -156,21 +159,17 @@ class ToolRuntime:
         name = "bash"
         timeout = max(timeout_ms, 1) / 1000
         marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
-        script = (
-            f"{command}\n"
-            "__deepy_exit=$?\n"
-            f"printf '\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n' \"$PWD\" \"$__deepy_exit\"\n"
-            "exit $__deepy_exit\n"
-        )
+        shell_path, shell_args = _build_shell_command(command, marker)
         process: subprocess.Popen[str] | None = None
         process_id: str | None = None
         try:
             process = subprocess.Popen(
-                ["/bin/zsh", "-lc", script],
+                [shell_path, *shell_args],
                 cwd=self.cwd,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 start_new_session=os.name != "nt",
             )
             process_id = str(process.pid)
@@ -193,6 +192,7 @@ class ToolRuntime:
                     "cwd": str(self.cwd),
                     "timeoutMs": timeout_ms,
                     "processId": process_id,
+                    "shellPath": shell_path,
                     "interrupted": True,
                     "outputTruncated": output_truncated,
                 },
@@ -215,6 +215,7 @@ class ToolRuntime:
                     "cwd": str(self.cwd),
                     "exitCode": returncode,
                     "processId": process_id,
+                    "shellPath": shell_path,
                     "outputTruncated": output_truncated,
                 },
             ).to_json()
@@ -226,6 +227,7 @@ class ToolRuntime:
                 "cwd": str(self.cwd),
                 "exitCode": returncode,
                 "processId": process_id,
+                "shellPath": shell_path,
                 "outputTruncated": output_truncated,
             },
         ).to_json()
@@ -319,6 +321,31 @@ def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tup
         return output, False
     omitted = len(output) - max_chars
     return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
+
+
+def _build_shell_command(command: str, marker: str) -> tuple[str, list[str]]:
+    shell_path = _resolve_shell_path()
+    normalized_command = rewrite_windows_null_redirect(command)
+    parts = [
+        part
+        for part in (
+            build_shell_init_command(shell_path),
+            build_disable_extglob_command(shell_path),
+            normalized_command,
+            "__deepy_exit=$?",
+            f"printf '\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n' \"$PWD\" \"$__deepy_exit\"",
+            "exit $__deepy_exit",
+        )
+        if part
+    ]
+    return shell_path, ["-c", "{ " + "; ".join(parts) + "; } < /dev/null"]
+
+
+def _resolve_shell_path() -> str:
+    shell_path = os.environ.get("SHELL")
+    if shell_path:
+        return shell_path
+    return "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
 
 
 def _now_iso() -> str:

@@ -193,6 +193,17 @@ def test_bash_tracks_cwd_even_when_command_fails(tmp_path):
     assert runtime.cwd == subdir
 
 
+def test_bash_uses_shell_compatibility_wrapper(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("printf hidden >nul"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == ""
+    assert payload["metadata"]["shellPath"]
+    assert not (tmp_path / "nul").exists()
+
+
 def test_bash_truncates_large_output(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
