@@ -17,7 +17,7 @@ from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import DeepyJsonlSession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
-from .status import build_status_report, format_status_report
+from .status import build_status_report, format_status_report, status_report_to_dict
 from .ui import run_interactive
 
 
@@ -63,7 +63,8 @@ def _build_parser() -> argparse.ArgumentParser:
     skills_show = skills_sub.add_parser("show", help="Print a skill document.")
     skills_show.add_argument("name", help="Skill name.")
 
-    subparsers.add_parser("status", help="Print current Deepy project status.")
+    status_parser = subparsers.add_parser("status", help="Print current Deepy project status.")
+    status_parser.add_argument("--json", action="store_true", help="Print JSON status.")
 
     return parser
 
@@ -235,7 +236,11 @@ def _cmd_skills(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
-    print(format_status_report(build_status_report(Path.cwd(), settings)))
+    report = build_status_report(Path.cwd(), settings)
+    if args.json:
+        print(json.dumps(status_report_to_dict(report), ensure_ascii=False, indent=2))
+    else:
+        print(format_status_report(report))
     return 0
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from deepy.config import Settings
 from deepy.prompts.runtime_context import build_runtime_context
@@ -49,3 +50,16 @@ def format_status_report(report: StatusReport) -> str:
             report.runtime_context,
         ]
     )
+
+
+def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
+    return {
+        "project_root": str(report.project_root),
+        "model": report.model,
+        "api_key_configured": report.api_key_configured,
+        "context_window_tokens": report.context_window_tokens,
+        "compact_threshold_tokens": report.compact_threshold_tokens,
+        "session_count": report.session_count,
+        "skill_count": report.skill_count,
+        "runtime_context": report.runtime_context,
+    }

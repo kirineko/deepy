@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from deepy.config.settings import ModelConfig, Settings
-from deepy.status import build_status_report, format_status_report
+from deepy.status import build_status_report, format_status_report, status_report_to_dict
 
 
 def test_status_report_includes_counts_and_context(tmp_path):
@@ -20,3 +20,12 @@ def test_status_report_includes_counts_and_context(tmp_path):
     assert "API key: configured" in rendered
     assert f"Project: {tmp_path}" in rendered
     assert "Git dirty:" in rendered
+
+
+def test_status_report_to_dict_is_json_ready(tmp_path):
+    report = build_status_report(tmp_path, Settings())
+
+    payload = status_report_to_dict(report)
+
+    assert payload["project_root"] == str(tmp_path)
+    assert payload["model"] == "deepseek-v4-pro"

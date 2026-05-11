@@ -124,6 +124,19 @@ def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
     assert "API key: configured" in out
 
 
+def test_status_command_prints_json(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--config", str(config), "status", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["project_root"] == str(tmp_path)
+    assert payload["api_key_configured"] is True
+
+
 def test_doctor_checks_config_permissions(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")

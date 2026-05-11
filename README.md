@@ -24,6 +24,7 @@ deepy config init --api-key sk-...
 deepy config show
 deepy doctor
 deepy status
+deepy status --json
 deepy skills list
 deepy skills show <skill-name>
 deepy sessions list
