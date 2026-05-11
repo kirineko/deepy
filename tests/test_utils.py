@@ -65,6 +65,9 @@ def test_log_api_error_masks_sensitive_values_and_trims_log(tmp_path):
         mask_sensitive("Authorization: Bearer sk-secret api_key=sk-value")
         == "Authorization: Bearer ***MASKED*** api_key=***MASKED***"
     )
+    assert mask_sensitive('"apiKey":"sk-json","token":"tok-json"') == (
+        '"apiKey":"***MASKED***","token":"***MASKED***"'
+    )
 
     for index in range(25):
         log_api_error(

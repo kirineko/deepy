@@ -13,7 +13,10 @@ CONTENT_PREVIEW_CHARS = 100
 
 _SENSITIVE_PATTERNS = (
     re.compile(r"(Authorization:\s*Bearer\s+)[^\s\r\n]+", re.IGNORECASE),
-    re.compile(r"((?:api[Kk]ey|api_key|secret)\s*[:=]\s*\"?)[^\",}\s]+", re.IGNORECASE),
+    re.compile(
+        r"((?:\"?(?:api[Kk]ey|api_key|secret|token)\"?\s*[:=]\s*\"?))[^\",}\s]+",
+        re.IGNORECASE,
+    ),
 )
 
 
