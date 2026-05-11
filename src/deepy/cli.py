@@ -15,7 +15,7 @@ from .config import load_settings, settings_to_toml_dict
 from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
-from .sessions import list_session_entries
+from .sessions import DeepyJsonlSession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .ui import run_interactive
 
@@ -53,6 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
     sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_sub.add_parser("list", help="List sessions for the current project.")
+    sessions_show = sessions_sub.add_parser("show", help="Print session items as JSON.")
+    sessions_show.add_argument("session_id", help="Session id.")
 
     skills_parser = subparsers.add_parser("skills", help="Inspect available skills.")
     skills_sub = skills_parser.add_subparsers(dest="skills_command", required=True)
@@ -205,6 +207,11 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             return 0
         for entry in entries:
             print(f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}")
+        return 0
+    if args.sessions_command == "show":
+        session = DeepyJsonlSession.open(Path.cwd(), args.session_id)
+        items = asyncio.run(session.get_items())
+        print(json.dumps(items, ensure_ascii=False, indent=2))
         return 0
     return 1
 

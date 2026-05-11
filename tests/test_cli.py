@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from argparse import Namespace
 
 from deepy.cli import _doctor, main
+from deepy.sessions import DeepyJsonlSession
 
 
 def test_config_show_json_masks_secret(tmp_path, capsys):
@@ -95,6 +98,17 @@ def test_run_reports_missing_skill_without_traceback(tmp_path, capsys):
 
     assert code == 1
     assert "deepy run failed: Skill not found: missing" in capsys.readouterr().err
+
+
+def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
+
+    code = main(["sessions", "show", "s1"])
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == [{"role": "user", "content": "hello"}]
 
 
 def test_doctor_checks_config_permissions(tmp_path):
