@@ -90,7 +90,7 @@ class ModelConfig:
     def thinking_enabled(self) -> bool:
         if self.thinking is not None:
             return self.thinking
-        return self.name in {"deepseek-v4-pro", "deepseek-v4-flash"}
+        return self.name.lower() in {"deepseek-v4-pro", "deepseek-v4-flash"}
 
 
 @dataclass(frozen=True)

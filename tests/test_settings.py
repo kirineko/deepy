@@ -30,6 +30,15 @@ compact_trigger_ratio = 0.8
     assert settings.context.resolved_compact_threshold == 838861
 
 
+def test_deepseek_thinking_default_is_case_insensitive(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\nname = "DeepSeek-V4-Pro"\n', encoding="utf-8")
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.thinking_enabled is True
+
+
 def test_json_config_is_not_supported(tmp_path):
     config = tmp_path / "config.json"
     config.write_text("{}", encoding="utf-8")
