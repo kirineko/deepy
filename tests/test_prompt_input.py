@@ -6,13 +6,18 @@ from pathlib import Path
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import IMAGE_ATTACHMENT_CLEAR_HINT
+from deepy.ui.prompt_input import PromptCursorPlacement
 from deepy.ui.prompt_input import add_unique_skill
+from deepy.ui.prompt_input import character_width
 from deepy.ui.prompt_input import format_image_attachment_status
 from deepy.ui.prompt_input import format_selected_skills_status
+from deepy.ui.prompt_input import get_prompt_cursor_placement
 from deepy.ui.prompt_input import is_clear_image_attachments_shortcut
 from deepy.ui.prompt_input import is_skill_selected
+from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
+from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
 
 
@@ -80,3 +85,36 @@ def test_render_buffer_with_cursor_shows_placeholder_for_empty_input():
     assert _strip_ansi(render_buffer_with_cursor(PromptBufferState("", 0), True, "Ask Deepy")) == (
         "  Ask Deepy"
     )
+
+
+def test_get_prompt_cursor_placement_targets_prompt_row_above_footer():
+    placement = get_prompt_cursor_placement(PromptBufferState("hello", 5), 80, 2, "Enter send")
+
+    assert placement == PromptCursorPlacement(rows_up=3, column=7)
+
+
+def test_get_prompt_cursor_placement_targets_reserved_row_after_trailing_newline():
+    placement = get_prompt_cursor_placement(PromptBufferState("hello\n", 6), 80, 2, "Enter send")
+
+    assert placement == PromptCursorPlacement(rows_up=3, column=2)
+
+
+def test_get_prompt_cursor_placement_accounts_for_cjk_width():
+    placement = get_prompt_cursor_placement(PromptBufferState("你好", 2), 80, 2, "Enter send")
+
+    assert placement.column == 6
+
+
+def test_get_prompt_cursor_placement_accounts_for_multiline_buffer_rows():
+    end = get_prompt_cursor_placement(PromptBufferState("hello\nworld", 11), 80, 2, "Enter send")
+    middle = get_prompt_cursor_placement(PromptBufferState("hello\nworld", 2), 80, 2, "Enter send")
+
+    assert end == PromptCursorPlacement(rows_up=3, column=7)
+    assert middle == PromptCursorPlacement(rows_up=4, column=4)
+
+
+def test_text_width_counts_cjk_and_control_characters():
+    assert text_width("hello") == 5
+    assert text_width("你好") == 4
+    assert character_width("\n") == 0
+    assert measure_text_position("ab", width=80, initial_column=2).column == 4
