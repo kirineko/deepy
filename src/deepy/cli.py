@@ -14,6 +14,7 @@ from .config import load_settings, settings_to_toml_dict
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import list_session_entries
+from .ui import run_interactive
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -165,8 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
-    print("Deepy interactive TUI migration is not wired yet. Run `deepy doctor` to verify setup.")
-    return 0
+    return run_interactive(load_settings(args.config))
 
 
 if __name__ == "__main__":
