@@ -77,7 +77,12 @@ def test_read_limits_large_files_by_default(tmp_path):
     assert payload["metadata"]["lineLimit"] == DEFAULT_LINE_LIMIT
     assert payload["metadata"]["totalLines"] == DEFAULT_LINE_LIMIT + 5
     assert payload["metadata"]["truncated"] is True
+    assert payload["metadata"]["trackedForWrite"] is False
     assert f"{DEFAULT_LINE_LIMIT + 1}: line" not in payload["output"]
+
+    denied = decode(runtime.write("large.txt", "changed"))
+    assert denied["ok"] is False
+    assert "read before" in denied["error"]
 
 
 def test_read_truncates_long_lines(tmp_path):
@@ -90,6 +95,21 @@ def test_read_truncates_long_lines(tmp_path):
     assert payload["ok"] is True
     assert "... [truncated]" in payload["output"]
     assert payload["metadata"]["truncated"] is True
+    assert payload["metadata"]["trackedForWrite"] is False
+
+
+def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("a.txt", start_line=2, limit=1))
+    denied = decode(runtime.edit("a.txt", "two", "TWO"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["trackedForWrite"] is False
+    assert denied["ok"] is False
+    assert "read before" in denied["error"]
 
 
 def test_edit_detects_mtime_change_after_read(tmp_path):

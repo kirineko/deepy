@@ -55,10 +55,15 @@ class ToolRuntime:
         effective_limit = limit if limit and limit > 0 else DEFAULT_LINE_LIMIT
         selected = lines[start : start + effective_limit]
         formatted_lines = [_truncate_line(line) for line in selected]
+        truncated = start + len(selected) < len(lines) or any(
+            len(line) > MAX_LINE_LENGTH for line in selected
+        )
+        full_file_read = start == 0 and not truncated
         numbered = "\n".join(
             f"{idx + start + 1}: {line}" for idx, line in enumerate(formatted_lines)
         )
-        self.file_state.mark_read(target)
+        if full_file_read:
+            self.file_state.mark_read(target)
         return ToolResult.ok_result(
             name,
             numbered,
@@ -69,8 +74,8 @@ class ToolRuntime:
                 "lineCount": len(selected),
                 "lineLimit": effective_limit,
                 "totalLines": len(lines),
-                "truncated": start + len(selected) < len(lines)
-                or any(len(line) > MAX_LINE_LENGTH for line in selected),
+                "truncated": truncated,
+                "trackedForWrite": full_file_read,
             },
         ).to_json()
 
