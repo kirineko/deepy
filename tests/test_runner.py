@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -58,6 +59,57 @@ class CancellableStream:
             "Event",
             (),
             {"type": "raw_response_event", "data": type("Data", (), {"delta": "partial"})()},
+        )()
+        yield type(
+            "Event",
+            (),
+            {"type": "raw_response_event", "data": type("Data", (), {"delta": "late"})()},
+        )()
+
+    def cancel(self, mode="immediate"):
+        self.cancel_calls.append(mode)
+
+
+class AskUserQuestionStream:
+    final_output = None
+    is_complete = False
+
+    def __init__(self):
+        self.cancel_calls: list[str] = []
+
+    async def stream_events(self):
+        yield type(
+            "Event",
+            (),
+            {
+                "type": "run_item_stream_event",
+                "name": "tool_output",
+                "item": type(
+                    "Item",
+                    (),
+                    {
+                        "tool_name": "AskUserQuestion",
+                        "call_id": "call-1",
+                        "output": json.dumps(
+                            {
+                                "ok": True,
+                                "name": "AskUserQuestion",
+                                "output": "Waiting for user input.",
+                                "awaitUserResponse": True,
+                                "metadata": {
+                                    "kind": "ask_user_question",
+                                    "questions": [
+                                        {
+                                            "question": "Continue?",
+                                            "options": [{"label": "Yes"}, {"label": "No"}],
+                                        }
+                                    ],
+                                },
+                            }
+                        ),
+                    },
+                )(),
+            },
         )()
         yield type(
             "Event",
@@ -293,4 +345,31 @@ async def test_run_prompt_once_cancels_stream_when_interrupted(monkeypatch, tmp_
     assert summary.output == "partial"
     assert summary.complete is False
     assert summary.interrupted is True
+    assert summary.status == "interrupted"
+    assert stream.cancel_calls == ["after_turn"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_stops_for_ask_user_question(monkeypatch, tmp_path):
+    stream = AskUserQuestionStream()
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "ask me",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.complete is False
+    assert summary.status == "waiting_for_user"
+    assert summary.pending_questions == [
+        {"question": "Continue?", "options": [{"label": "Yes"}, {"label": "No"}]}
+    ]
     assert stream.cancel_calls == ["after_turn"]

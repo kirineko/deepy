@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,6 +25,8 @@ class RunSummary:
     session_id: str
     complete: bool
     interrupted: bool = False
+    status: str = "completed"
+    pending_questions: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def run_prompt_once(
@@ -70,6 +73,8 @@ async def run_prompt_once(
     chunks: list[str] = []
     result: Any | None = None
     interrupted = False
+    waiting_for_user = False
+    pending_questions: list[dict[str, Any]] = []
     try:
         result = Runner.run_streamed(
             agent,
@@ -88,6 +93,13 @@ async def run_prompt_once(
                 continue
             if emit_event is not None:
                 emit_event(normalized)
+            if normalized.kind == "tool_output":
+                questions = _pending_questions_from_tool_output(normalized.text)
+                if questions:
+                    pending_questions = questions
+                    waiting_for_user = True
+                    _cancel_stream_result(result, mode="after_turn")
+                    break
             if normalized.kind != "text_delta" or not normalized.text:
                 continue
             chunks.append(normalized.text)
@@ -133,8 +145,16 @@ async def run_prompt_once(
     return RunSummary(
         output=output,
         session_id=session.session_id,
-        complete=False if interrupted else bool(getattr(result, "is_complete", True)),
+        complete=False
+        if interrupted or waiting_for_user
+        else bool(getattr(result, "is_complete", True)),
         interrupted=interrupted,
+        status=_run_status(
+            interrupted=interrupted,
+            waiting_for_user=waiting_for_user,
+            complete=bool(getattr(result, "is_complete", True)),
+        ),
+        pending_questions=pending_questions,
     )
 
 
@@ -166,3 +186,29 @@ def _cancel_stream_result(
         cancel(mode=mode)
     except TypeError:
         cancel()
+
+
+def _pending_questions_from_tool_output(output: str) -> list[dict[str, Any]]:
+    if not output.strip():
+        return []
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or payload.get("awaitUserResponse") is not True:
+        return []
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("kind") != "ask_user_question":
+        return []
+    questions = metadata.get("questions")
+    if not isinstance(questions, list):
+        return []
+    return [question for question in questions if isinstance(question, dict)]
+
+
+def _run_status(*, interrupted: bool, waiting_for_user: bool, complete: bool) -> str:
+    if interrupted:
+        return "interrupted"
+    if waiting_for_user:
+        return "waiting_for_user"
+    return "completed" if complete else "incomplete"

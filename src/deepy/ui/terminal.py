@@ -14,6 +14,14 @@ from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import build_status_report, format_status_report
+from deepy.ui.ask_user_question import OTHER_VALUE
+from deepy.ui.ask_user_question import AskUserQuestionItem
+from deepy.ui.ask_user_question import AskUserQuestionOptionEntry
+from deepy.ui.ask_user_question import build_answer_for_question
+from deepy.ui.ask_user_question import build_options
+from deepy.ui.ask_user_question import format_ask_user_question_answers
+from deepy.ui.ask_user_question import format_ask_user_question_decline
+from deepy.ui.ask_user_question import normalize_questions
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
 from deepy.ui.session_list import format_session_choices, resolve_session_selection
@@ -90,6 +98,21 @@ def run_interactive(
             )
         )
         session_id = summary.session_id
+        if summary.status == "waiting_for_user":
+            response = _collect_pending_question_response(output, summary.pending_questions)
+            if response:
+                summary = asyncio.run(
+                    run_once(
+                        response,
+                        project_root=root,
+                        settings=settings,
+                        emit=lambda delta: output.print(delta, end=""),
+                        emit_event=lambda event: _print_stream_event(output, event),
+                        session_id=session_id,
+                        skill_names=list(loaded_skill_names),
+                    )
+                )
+                session_id = summary.session_id
         if summary.output and not summary.output.endswith("\n"):
             output.print()
 
@@ -225,3 +248,76 @@ def _print_stream_event(console: Console, event: DeepyStreamEvent) -> None:
         return
     if event.kind == "agent_updated" and event.name:
         console.print(f"\n[dim]agent:[/dim] {event.name}")
+
+
+def _collect_pending_question_response(
+    console: Console,
+    pending_questions: list[dict[str, object]],
+    input_func: InputFunc | None = None,
+) -> str:
+    questions = normalize_questions(pending_questions)
+    if not questions:
+        return ""
+    answers: dict[str, str] = {}
+    chooser = input_func or (lambda prompt: Prompt.ask(prompt, default=""))
+    for question in questions:
+        answer = _prompt_for_question(console, question, chooser)
+        if answer is None:
+            return format_ask_user_question_decline()
+        answers[question.question] = answer
+    return format_ask_user_question_answers(answers)
+
+
+def _prompt_for_question(
+    console: Console,
+    question: AskUserQuestionItem,
+    input_func: InputFunc,
+) -> str | None:
+    options = build_options(question)
+    console.print(f"\n[bold]Question:[/bold] {question.question}")
+    for index, option in enumerate(options, 1):
+        detail = f" - {option.description}" if option.description else ""
+        console.print(f"{index}. {option.label}{detail}")
+    raw_answer = input_func("Answer number, text, or empty to decline").strip()
+    if not raw_answer:
+        return None
+    return _answer_question_from_text(question, raw_answer)
+
+
+def _answer_question_from_text(question: AskUserQuestionItem, raw_answer: str) -> str | None:
+    options = build_options(question)
+    if question.multi_select:
+        selected_values: list[str] = []
+        custom_values: list[str] = []
+        for token in [part.strip() for part in raw_answer.split(",") if part.strip()]:
+            option = _option_from_token(options, token)
+            if option is not None:
+                selected_values.append(option.value)
+            else:
+                custom_values.append(token)
+        if custom_values:
+            selected_values.append(OTHER_VALUE)
+        return build_answer_for_question(
+            question,
+            None,
+            selected_values,
+            ", ".join(custom_values),
+        )
+
+    option = _option_from_token(options, raw_answer)
+    if option is None:
+        option = next((item for item in options if item.value == OTHER_VALUE), None)
+    other_text = raw_answer if option is not None and option.is_other else ""
+    return build_answer_for_question(question, option, [], other_text)
+
+
+def _option_from_token(
+    options: list[AskUserQuestionOptionEntry],
+    token: str,
+) -> AskUserQuestionOptionEntry | None:
+    if token.isdigit():
+        index = int(token) - 1
+        if 0 <= index < len(options):
+            return options[index]
+    lowered = token.casefold()
+    return next((option for option in options if option.label.casefold() == lowered), None)

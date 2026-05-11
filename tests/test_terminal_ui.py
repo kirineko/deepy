@@ -7,6 +7,7 @@ from deepy.llm.events import DeepyStreamEvent
 from deepy.sessions import SessionEntry
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
+from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_stream_event
 
@@ -120,6 +121,55 @@ def test_resume_slash_command_keeps_current_session_on_invalid_selection(tmp_pat
 
     assert next_session == "old"
     assert "Invalid session selection." in console.export_text()
+
+
+def test_collect_pending_question_response_formats_selected_answers():
+    console = Console(record=True)
+
+    response = _collect_pending_question_response(
+        console,
+        [
+            {
+                "question": "Continue?",
+                "options": [{"label": "Yes", "description": "Proceed."}, {"label": "No"}],
+            }
+        ],
+        input_func=lambda prompt: "1",
+    )
+
+    assert response == (
+        'User has answered your questions: "Continue?"="Yes". '
+        "You can now continue with the user's answers in mind."
+    )
+    rendered = console.export_text()
+    assert "Question: Continue?" in rendered
+    assert "1. Yes - Proceed." in rendered
+
+
+def test_collect_pending_question_response_declines_empty_answer():
+    response = _collect_pending_question_response(
+        Console(record=True),
+        [{"question": "Continue?", "options": [{"label": "Yes"}]}],
+        input_func=lambda prompt: "",
+    )
+
+    assert "declined to answer" in response
+
+
+def test_collect_pending_question_response_accepts_multi_select_text():
+    response = _collect_pending_question_response(
+        Console(record=True),
+        [
+            {
+                "question": "Which scopes?",
+                "multiSelect": True,
+                "options": [{"label": "tests"}, {"label": "docs"}],
+            }
+        ],
+        input_func=lambda prompt: "1, lint",
+    )
+
+    assert '"Which scopes?"="tests, lint"' in response
 
 
 def test_print_stream_event_shows_tool_call_and_output():
