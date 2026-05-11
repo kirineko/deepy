@@ -11,9 +11,10 @@ from rich.prompt import Prompt
 from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary, run_prompt_once
-from deepy.sessions import list_session_entries
+from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import build_status_report, format_status_report
+from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
 
 
@@ -102,6 +103,7 @@ def _handle_slash_command(
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
     if command.name in {"exit", "quit"}:
+        _print_exit_summary(console, project_root, current_session_id, settings)
         return "__exit__"
     if command.name == "help":
         console.print("/help       Show commands")
@@ -163,6 +165,32 @@ def _handle_slash_command(
 
     console.print(f"[red]Unknown command:[/red] /{command.name}")
     return current_session_id
+
+
+def _print_exit_summary(
+    console: Console,
+    project_root: Path,
+    session_id: str | None,
+    settings: Settings,
+) -> None:
+    session_entry: SessionEntry | None = None
+    messages: list[dict[str, object]] = []
+    if session_id:
+        session_entry = next(
+            (entry for entry in list_session_entries(project_root) if entry.id == session_id),
+            None,
+        )
+        try:
+            messages = asyncio.run(DeepyJsonlSession.open(project_root, session_id).get_items())
+        except Exception:
+            messages = []
+    console.print(
+        build_exit_summary_text(
+            session=session_entry,
+            messages=messages,
+            model=settings.model.name,
+        )
+    )
 
 
 def _print_stream_event(console: Console, event: DeepyStreamEvent) -> None:

@@ -20,6 +20,7 @@ class SessionEntry:
     created_at: int
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
+    usage: Any | None = None
 
 
 def project_code(project_root: Path) -> str:
@@ -226,6 +227,8 @@ class DeepyJsonlSession:
                 else _coerce_int(previous.get("activeTokens"), 0),
                 "createdAt": _coerce_int(previous.get("createdAt"), now),
                 "updatedAt": now,
+                **({"usage": previous["usage"]} if "usage" in previous else {}),
+                **({"processes": previous["processes"]} if "processes" in previous else {}),
             },
         )
         payload = {
@@ -270,6 +273,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 created_at=_coerce_time_ms(item.get("createdAt", item.get("createTime"))),
                 updated_at=_coerce_time_ms(item.get("updatedAt", item.get("updateTime"))),
                 processes=_normalize_processes(item.get("processes")),
+                usage=item.get("usage"),
             )
         )
     return entries

@@ -62,6 +62,40 @@ async def test_session_index_preserves_created_at_and_lists_sessions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_index_preserves_usage_and_processes_on_touch(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    sessions_dir = project_sessions_dir(project, home)
+    sessions_dir.mkdir(parents=True)
+    sessions_dir.joinpath("sessions-index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sessions": [
+                    {
+                        "id": "s1",
+                        "path": "s1.jsonl",
+                        "activeTokens": 10,
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                        "processes": {"123": {"startTime": "now", "command": "pytest"}},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = DeepyJsonlSession.open(project, "s1", deepy_home=home)
+
+    await session.add_items([{"role": "assistant", "content": "hello"}])
+
+    entry = list_session_entries(project, deepy_home=home)[0]
+    assert entry.usage == {"prompt_tokens": 12, "completion_tokens": 3}
+    assert entry.processes == {"123": {"startTime": "now", "command": "pytest"}}
+
+
+@pytest.mark.asyncio
 async def test_open_existing_session_reads_same_jsonl(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"

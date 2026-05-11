@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rich.console import Console
 
+from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_stream_event
@@ -103,3 +104,18 @@ def test_status_slash_command_prints_status(tmp_path):
 
     assert next_session == "s1"
     assert f"Project: {tmp_path}" in console.export_text()
+
+
+def test_exit_slash_command_prints_exit_summary(tmp_path):
+    console = Console(record=True, width=200)
+
+    next_session = _handle_slash_command(
+        SlashCommand("exit"),
+        console,
+        tmp_path,
+        None,
+        settings=Settings(),
+    )
+
+    assert next_session == "__exit__"
+    assert "Goodbye!" in console.export_text()
