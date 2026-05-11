@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ class SessionEntry:
     active_tokens: int
     created_at: int
     updated_at: int
+    processes: dict[str, dict[str, str]] | None = None
 
 
 def project_code(project_root: Path) -> str:
@@ -206,8 +208,13 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
     index_path = project_sessions_dir(project_root, deepy_home) / "sessions-index.json"
     if not index_path.is_file():
         return []
-    raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
+    try:
+        raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
+    except json.JSONDecodeError:
+        return []
     sessions = raw.get("sessions")
+    if sessions is None:
+        sessions = raw.get("entries")
     if not isinstance(sessions, list):
         return []
 
@@ -216,16 +223,19 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
         if not isinstance(item, dict):
             continue
         session_id = item.get("id")
-        path = item.get("path")
-        if not isinstance(session_id, str) or not isinstance(path, str):
+        if not isinstance(session_id, str):
             continue
+        path = item.get("path")
+        if not isinstance(path, str):
+            path = f"{session_id}.jsonl"
         entries.append(
             SessionEntry(
                 id=session_id,
                 path=path,
                 active_tokens=_coerce_int(item.get("activeTokens"), 0),
-                created_at=_coerce_int(item.get("createdAt"), 0),
-                updated_at=_coerce_int(item.get("updatedAt"), 0),
+                created_at=_coerce_time_ms(item.get("createdAt", item.get("createTime"))),
+                updated_at=_coerce_time_ms(item.get("updatedAt", item.get("updateTime"))),
+                processes=_normalize_processes(item.get("processes")),
             )
         )
     return entries
@@ -235,6 +245,38 @@ def _coerce_int(value: Any, default: int) -> int:
     if isinstance(value, bool):
         return default
     return value if isinstance(value, int) else default
+
+
+def _coerce_time_ms(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _normalize_processes(value: Any) -> dict[str, dict[str, str]] | None:
+    if not isinstance(value, dict):
+        return None
+    processes: dict[str, dict[str, str]] = {}
+    for pid, entry in value.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if isinstance(entry, str):
+            processes[pid] = {"startTime": entry, "command": "Running process..."}
+        elif isinstance(entry, dict):
+            start_time = entry.get("startTime")
+            command = entry.get("command")
+            processes[pid] = {
+                "startTime": start_time if isinstance(start_time, str) else "",
+                "command": command if isinstance(command, str) else "Running process...",
+            }
+    return processes or None
 
 
 def _estimate_record_tokens(record: dict[str, Any]) -> int:
