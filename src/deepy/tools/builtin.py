@@ -18,6 +18,18 @@ from .result import ToolResult
 DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
 MAX_BASH_OUTPUT_CHARS = 30_000
+IGNORED_DIRECTORY_ENTRIES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "wheels",
+}
 
 
 def _resolve_in_cwd(cwd: Path, path: str) -> Path:
@@ -39,7 +51,7 @@ class ToolRuntime:
         if not target.exists():
             return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
         if target.is_dir():
-            entries = _format_directory_entries(target)
+            entries, visible_count, ignored_count = _format_directory_entries(target)
             return ToolResult.ok_result(
                 name,
                 entries,
@@ -47,6 +59,8 @@ class ToolRuntime:
                     "path": str(target),
                     "kind": "directory",
                     "entryCount": len(list(target.iterdir())),
+                    "visibleEntryCount": visible_count,
+                    "ignoredEntryCount": ignored_count,
                 },
             ).to_json()
 
@@ -251,6 +265,7 @@ class ToolRuntime:
             metadata={"query": query, "apiUrl": api_url},
         ).to_json()
 
+
 def _unified_diff(old: str, new: str, *, path: str) -> str:
     return "".join(
         unified_diff(
@@ -275,16 +290,20 @@ def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tup
     return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
 
 
-def _format_directory_entries(path: Path) -> str:
+def _format_directory_entries(path: Path) -> tuple[str, int, int]:
     lines: list[str] = []
+    ignored_count = 0
     for entry in sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+        if entry.name in IGNORED_DIRECTORY_ENTRIES:
+            ignored_count += 1
+            continue
         suffix = "/" if entry.is_dir() else ""
         try:
             size = entry.stat().st_size
         except OSError:
             size = 0
         lines.append(f"{entry.name}{suffix}\t{size}")
-    return "\n".join(lines)
+    return "\n".join(lines), len(lines), ignored_count
 
 
 def _extract_bash_sentinel(stdout: str, marker: str) -> tuple[str, Path | None, int | None]:

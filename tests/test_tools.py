@@ -50,6 +50,11 @@ def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
 
 def test_read_directory_lists_entries(tmp_path):
     (tmp_path / "dir").mkdir()
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "spec").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / "dist").mkdir()
     (tmp_path / "b.txt").write_text("b", encoding="utf-8")
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -59,7 +64,15 @@ def test_read_directory_lists_entries(tmp_path):
     assert payload["ok"] is True
     assert payload["metadata"]["kind"] == "directory"
     assert "dir/" in payload["output"]
+    assert "reference/" in payload["output"]
+    assert "spec/" in payload["output"]
     assert "a.txt" in payload["output"]
+    assert ".git/" not in payload["output"]
+    assert ".venv/" not in payload["output"]
+    assert "dist/" not in payload["output"]
+    assert payload["metadata"]["entryCount"] == 8
+    assert payload["metadata"]["visibleEntryCount"] == 5
+    assert payload["metadata"]["ignoredEntryCount"] == 3
 
 
 def test_read_limits_large_files_by_default(tmp_path):
