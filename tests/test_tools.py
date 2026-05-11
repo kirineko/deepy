@@ -409,6 +409,38 @@ def test_edit_candidate_snippet_can_scope_follow_up_edit(tmp_path):
     assert target.read_text(encoding="utf-8") == "city\nlocation\nsalary\n"
 
 
+def test_edit_uses_loose_escape_match_when_quotes_are_overescaped(tmp_path):
+    target = tmp_path / "quotes.py"
+    target.write_text('print("hello")\n', encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("quotes.py"))
+    payload = decode(runtime.edit("quotes.py", 'print(\\"hello\\")', 'print("hi")'))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["matched_via"] == "loose_escape"
+    assert target.read_text(encoding="utf-8") == 'print("hi")\n'
+
+
+def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path):
+    target = tmp_path / "near.txt"
+    target.write_text("alpha\nbeta = 1\ngamma\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("near.txt"))
+    payload = decode(runtime.edit("near.txt", "bet = 1", "beta = 2"))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "old_string not found in file."
+    closest = payload["metadata"]["closest_match"]
+    assert closest["snippet_id"] == "snippet_1"
+    assert closest["start_line"] == 2
+    assert closest["end_line"] == 2
+    assert closest["strategy"] == "fuzzy_window"
+    assert closest["similarity"] >= 0.45
+    assert "beta = 1" in closest["preview"]
+
+
 def test_edit_detects_mtime_change_after_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")

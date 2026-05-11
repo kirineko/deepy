@@ -15,4 +15,5 @@ Safety rules:
 - The file must be read before editing.
 - If the file changed since it was read, the edit is rejected.
 - Ambiguous repeated matches are rejected unless `replace_all` is true. The error metadata includes candidate snippets that can be used with `snippet_id`.
+- If exact text is missing, Deepy may match simple over-escaped quotes/backslashes or return closest-match metadata with a snippet for follow-up.
 - Successful edits include a diff in metadata.
