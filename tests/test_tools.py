@@ -216,6 +216,18 @@ def test_bash_truncates_large_output(tmp_path):
     assert payload["metadata"]["outputTruncated"] is True
 
 
+def test_bash_caps_captured_output_before_formatting(tmp_path, monkeypatch):
+    monkeypatch.setattr("deepy.tools.builtin.MAX_BASH_CAPTURE_CHARS", 10)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("printf 'x%.0s' {1..25}"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "x" * 10
+    assert payload["metadata"]["captureTruncated"] is True
+    assert payload["metadata"]["outputTruncated"] is False
+
+
 def test_bash_timeout_tracks_and_clears_process(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 

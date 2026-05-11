@@ -4,6 +4,7 @@ import os
 import signal
 import shlex
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ from .shell_utils import rewrite_windows_null_redirect
 DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
 MAX_BASH_OUTPUT_CHARS = 30_000
+MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
 IGNORED_DIRECTORY_ENTRIES = {
     ".git",
     ".mypy_cache",
@@ -163,40 +165,49 @@ class ToolRuntime:
         process: subprocess.Popen[str] | None = None
         process_id: str | None = None
         try:
-            process = subprocess.Popen(
-                [shell_path, *shell_args],
-                cwd=self.cwd,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                start_new_session=os.name != "nt",
-            )
-            process_id = str(process.pid)
-            self.running_processes[process_id] = {
-                "startTime": _now_iso(),
-                "command": command,
-            }
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            stdout = stderr = ""
-            if process is not None:
-                _terminate_process(process)
-                stdout, stderr = process.communicate()
-            output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
-            return ToolResult.error_result(
-                name,
-                f"Command timed out after {timeout_ms}ms.",
-                output=output,
-                metadata={
-                    "cwd": str(self.cwd),
-                    "timeoutMs": timeout_ms,
-                    "processId": process_id,
-                    "shellPath": shell_path,
-                    "interrupted": True,
-                    "outputTruncated": output_truncated,
-                },
-            ).to_json()
+            with (
+                tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stdout_file,
+                tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_file,
+            ):
+                process = subprocess.Popen(
+                    [shell_path, *shell_args],
+                    cwd=self.cwd,
+                    text=True,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=os.name != "nt",
+                )
+                process_id = str(process.pid)
+                self.running_processes[process_id] = {
+                    "startTime": _now_iso(),
+                    "command": command,
+                }
+                try:
+                    process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(process)
+                    process.wait()
+                    stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
+                    stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
+                    output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
+                    return ToolResult.error_result(
+                        name,
+                        f"Command timed out after {timeout_ms}ms.",
+                        output=output,
+                        metadata={
+                            "cwd": str(self.cwd),
+                            "timeoutMs": timeout_ms,
+                            "processId": process_id,
+                            "shellPath": shell_path,
+                            "interrupted": True,
+                            "outputTruncated": output_truncated,
+                            "captureTruncated": stdout_capture_truncated
+                            or stderr_capture_truncated,
+                        },
+                    ).to_json()
+                stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
+                stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
         finally:
             if process_id is not None:
                 self.running_processes.pop(process_id, None)
@@ -217,6 +228,7 @@ class ToolRuntime:
                     "processId": process_id,
                     "shellPath": shell_path,
                     "outputTruncated": output_truncated,
+                    "captureTruncated": stdout_capture_truncated or stderr_capture_truncated,
                 },
             ).to_json()
         return result(
@@ -229,6 +241,7 @@ class ToolRuntime:
                 "processId": process_id,
                 "shellPath": shell_path,
                 "outputTruncated": output_truncated,
+                "captureTruncated": stdout_capture_truncated or stderr_capture_truncated,
             },
         ).to_json()
 
@@ -321,6 +334,15 @@ def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tup
         return output, False
     omitted = len(output) - max_chars
     return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
+
+
+def _read_captured_output(stream) -> tuple[str, bool]:
+    stream.flush()
+    stream.seek(0)
+    text = stream.read(MAX_BASH_CAPTURE_CHARS + 1)
+    if len(text) <= MAX_BASH_CAPTURE_CHARS:
+        return text, False
+    return text[:MAX_BASH_CAPTURE_CHARS], True
 
 
 def _build_shell_command(command: str, marker: str) -> tuple[str, list[str]]:
