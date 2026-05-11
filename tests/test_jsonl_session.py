@@ -53,8 +53,10 @@ async def test_session_index_preserves_created_at_and_lists_sessions(tmp_path):
     second_entry = list_session_entries(project, deepy_home=home)[0]
 
     assert first_entry.id == "s1"
+    assert first_entry.active_tokens > 0
     assert second_entry.created_at == first_entry.created_at
     assert second_entry.updated_at >= first_entry.updated_at
+    assert second_entry.active_tokens >= first_entry.active_tokens
 
 
 @pytest.mark.asyncio
@@ -67,3 +69,15 @@ async def test_open_existing_session_reads_same_jsonl(tmp_path):
     opened = DeepyJsonlSession.open(project, "s1", deepy_home=home)
 
     assert await opened.get_items() == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_clear_session_resets_active_tokens(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+    await session.add_items([{"role": "user", "content": "hello world"}])
+
+    await session.clear_session()
+
+    assert list_session_entries(project, deepy_home=home)[0].active_tokens == 0

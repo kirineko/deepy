@@ -96,7 +96,7 @@ class DeepyJsonlSession:
                 fh.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
         if self._loaded_items is not None:
             self._loaded_items.extend(dict(item) for item in items)
-        self._touch_index()
+        self._touch_index(active_tokens=self._estimate_active_tokens())
 
     async def pop_item(self) -> dict[str, Any] | None:
         records = self._load_records()
@@ -108,14 +108,14 @@ class DeepyJsonlSession:
             for record in records:
                 fh.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
         self._loaded_items = [self._sdk_item_from_record(record) for record in records]
-        self._touch_index()
+        self._touch_index(active_tokens=self._estimate_active_tokens(records))
         return self._sdk_item_from_record(popped)
 
     async def clear_session(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("", encoding="utf-8")
         self._loaded_items = []
-        self._touch_index()
+        self._touch_index(active_tokens=0)
 
     def _record_from_sdk_item(self, item: dict[str, Any]) -> dict[str, Any]:
         now = _now_ms()
@@ -162,7 +162,11 @@ class DeepyJsonlSession:
             ]
         return list(self._loaded_items)
 
-    def _touch_index(self) -> None:
+    def _estimate_active_tokens(self, records: list[dict[str, Any]] | None = None) -> int:
+        source = records if records is not None else self._load_records()
+        return sum(_estimate_record_tokens(record) for record in source if record.get("visible", True))
+
+    def _touch_index(self, *, active_tokens: int | None = None) -> None:
         index_path = self.path.parent / "sessions-index.json"
         now = _now_ms()
         if index_path.exists():
@@ -179,7 +183,9 @@ class DeepyJsonlSession:
             {
                 "id": self.session_id,
                 "path": self.path.name,
-                "activeTokens": _coerce_int(previous.get("activeTokens"), 0),
+                "activeTokens": active_tokens
+                if active_tokens is not None
+                else _coerce_int(previous.get("activeTokens"), 0),
                 "createdAt": _coerce_int(previous.get("createdAt"), now),
                 "updatedAt": now,
             },
@@ -227,3 +233,10 @@ def _coerce_int(value: Any, default: int) -> int:
     if isinstance(value, bool):
         return default
     return value if isinstance(value, int) else default
+
+
+def _estimate_record_tokens(record: dict[str, Any]) -> int:
+    content = record.get("content", "")
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+    return max(1, (len(content) + 3) // 4)
