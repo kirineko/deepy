@@ -20,12 +20,27 @@ deepy = "deepy.cli:main"
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.407",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "ruff>=0.14",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+exclude = ["dist", "reference", "spec"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "off"
+include = ["src", "tests"]
+exclude = ["dist", "reference", "spec"]
+reportMissingTypeStubs = false
 
 [build-system]
 requires = ["uv_build>=0.11.10,<0.12.0"]
