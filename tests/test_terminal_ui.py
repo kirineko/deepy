@@ -94,3 +94,12 @@ def test_print_stream_event_shows_tool_call_and_output():
     rendered = console.export_text()
     assert "tool call: read" in rendered
     assert "tool output: read ok - /tmp/a" in rendered
+
+
+def test_status_slash_command_prints_status(tmp_path):
+    console = Console(record=True, width=200)
+
+    next_session = _handle_slash_command(SlashCommand("status"), console, tmp_path, "s1")
+
+    assert next_session == "s1"
+    assert f"Project: {tmp_path}" in console.export_text()

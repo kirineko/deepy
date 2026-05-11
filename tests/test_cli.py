@@ -111,6 +111,19 @@ def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out) == [{"role": "user", "content": "hello"}]
 
 
+def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--config", str(config), "status"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert f"Project: {tmp_path}" in out
+    assert "API key: configured" in out
+
+
 def test_doctor_checks_config_permissions(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")

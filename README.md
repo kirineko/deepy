@@ -23,6 +23,7 @@ deepy --version
 deepy config init --api-key sk-...
 deepy config show
 deepy doctor
+deepy status
 deepy skills list
 deepy skills show <skill-name>
 deepy sessions list
@@ -38,6 +39,7 @@ Interactive slash commands:
 /skills
 /skill <skill-name>
 /use <skill-name>
+/status
 /sessions
 /resume <session-id>
 /new

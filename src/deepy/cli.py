@@ -17,6 +17,7 @@ from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 from .sessions import DeepyJsonlSession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
+from .status import build_status_report, format_status_report
 from .ui import run_interactive
 
 
@@ -61,6 +62,8 @@ def _build_parser() -> argparse.ArgumentParser:
     skills_sub.add_parser("list", help="List user and project skills.")
     skills_show = skills_sub.add_parser("show", help="Print a skill document.")
     skills_show.add_argument("name", help="Skill name.")
+
+    subparsers.add_parser("status", help="Print current Deepy project status.")
 
     return parser
 
@@ -230,6 +233,12 @@ def _cmd_skills(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_status(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    print(format_status_report(build_status_report(Path.cwd(), settings)))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -247,6 +256,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_sessions(args)
     if args.command == "skills":
         return _cmd_skills(args)
+    if args.command == "status":
+        return _cmd_status(args)
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")

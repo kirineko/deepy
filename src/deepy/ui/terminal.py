@@ -14,6 +14,7 @@ from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
+from deepy.status import build_status_report, format_status_report
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
@@ -61,7 +62,14 @@ def run_interactive(
 
         slash = parse_slash_command(text)
         if slash is not None:
-            next_session = _handle_slash_command(slash, output, root, session_id, loaded_skill_names)
+            next_session = _handle_slash_command(
+                slash,
+                output,
+                root,
+                session_id,
+                loaded_skill_names,
+                settings=settings,
+            )
             if next_session == "__exit__":
                 return 0
             session_id = next_session
@@ -89,8 +97,10 @@ def _handle_slash_command(
     project_root: Path,
     current_session_id: str | None,
     loaded_skill_names: list[str] | None = None,
+    settings: Settings | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
+    settings = settings or Settings()
     if command.name in {"exit", "quit"}:
         return "__exit__"
     if command.name == "help":
@@ -98,6 +108,7 @@ def _handle_slash_command(
         console.print("/skills     List available skills")
         console.print("/skill NAME Show a skill document")
         console.print("/use NAME   Load a skill for subsequent prompts")
+        console.print("/status     Show project status")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
         console.print("/new        Start a new session")
@@ -120,6 +131,9 @@ def _handle_slash_command(
             return current_session_id
         for entry in entries:
             console.print(f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}")
+        return current_session_id
+    if command.name == "status":
+        console.print(format_status_report(build_status_report(project_root, settings)))
         return current_session_id
     if command.name == "skills":
         console.print(format_skills_for_terminal(discover_skills(project_root)))
