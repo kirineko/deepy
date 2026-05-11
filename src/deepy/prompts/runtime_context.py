@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import platform
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 IGNORED_TOP_LEVEL_ENTRIES = {
@@ -15,6 +19,15 @@ IGNORED_TOP_LEVEL_ENTRIES = {
 
 def build_runtime_context(project_root: Path) -> str:
     lines = [f"Project root: {project_root}"]
+    lines.append(f"Current working directory: {Path.cwd()}")
+    lines.append(f"Home directory: {Path.home()}")
+    lines.append(f"System: {platform.platform()}")
+    lines.append(f"Shell: {_shell_info()}")
+    lines.append(f"Python: {_python_info()}")
+    node = _command_output(project_root, ["node", "--version"])
+    lines.append(f"Node: {node or 'missing'}")
+    lines.append("Tool availability:")
+    lines.extend(f"- {tool}: {_tool_info(tool, project_root)}" for tool in ("rg", "jq", "ast-grep"))
     branch = _git_output(project_root, ["git", "branch", "--show-current"])
     if branch:
         lines.append(f"Git branch: {branch}")
@@ -27,7 +40,26 @@ def build_runtime_context(project_root: Path) -> str:
     return "\n".join(lines)
 
 
-def _git_output(project_root: Path, args: list[str]) -> str:
+def _shell_info() -> str:
+    shell = os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    return shell or "unknown"
+
+
+def _python_info() -> str:
+    version = ".".join(str(part) for part in sys.version_info[:3])
+    return f"{sys.executable} ({version})"
+
+
+def _tool_info(tool: str, cwd: Path) -> str:
+    path = shutil.which(tool)
+    if path is None:
+        return "missing"
+    version = _command_output(cwd, [path, "--version"])
+    first_line = version.splitlines()[0] if version else ""
+    return f"{path}" + (f" ({first_line})" if first_line else "")
+
+
+def _command_output(project_root: Path, args: list[str]) -> str:
     try:
         completed = subprocess.run(
             args,
@@ -41,6 +73,10 @@ def _git_output(project_root: Path, args: list[str]) -> str:
     if completed.returncode != 0:
         return ""
     return completed.stdout.strip()
+
+
+def _git_output(project_root: Path, args: list[str]) -> str:
+    return _command_output(project_root, args)
 
 
 def _top_level_entries(project_root: Path, limit: int = 30) -> list[str]:

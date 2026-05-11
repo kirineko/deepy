@@ -129,6 +129,16 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     context = build_runtime_context(tmp_path)
 
     assert f"Project root: {tmp_path}" in context
+    assert "Current working directory:" in context
+    assert "Home directory:" in context
+    assert "System:" in context
+    assert "Shell:" in context
+    assert "Python:" in context
+    assert "Node:" in context
+    assert "Tool availability:" in context
+    assert "- rg:" in context
+    assert "- jq:" in context
+    assert "- ast-grep:" in context
     assert "Git dirty:" in context
     assert "- src/" in context
     assert "- README.md" in context
