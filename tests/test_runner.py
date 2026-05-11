@@ -52,6 +52,7 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
             )
             assert run_config.trace_include_sensitive_data is False
             assert run_config.reasoning_item_id_policy == "omit"
+            assert callable(run_config.session_input_callback)
             return FakeStream()
 
     monkeypatch.setattr("agents.Runner", FakeRunner)

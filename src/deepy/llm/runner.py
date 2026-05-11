@@ -10,6 +10,7 @@ from deepy.sessions import DeepyJsonlSession
 from deepy.tools import ToolRuntime
 
 from .agent import build_deepy_agent
+from .context import build_session_input_callback
 from .provider import ProviderBundle, build_provider_bundle
 
 
@@ -54,6 +55,7 @@ async def run_prompt_once(
         workflow_name="Deepy",
         trace_include_sensitive_data=False,
         reasoning_item_id_policy="omit",
+        session_input_callback=build_session_input_callback(resolved_settings),
     )
 
     result = Runner.run_streamed(
