@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ import tomli_w
 
 from . import __version__
 from .config import load_settings, settings_to_toml_dict
+from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
 
 
@@ -31,6 +33,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate local Deepy setup.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
+
+    run_parser = subparsers.add_parser("run", help="Run a single non-interactive prompt.")
+    run_parser.add_argument("prompt", nargs="+", help="Prompt text to send to Deepy.")
+    run_parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent turns.")
 
     return parser
 
@@ -104,6 +110,26 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return code
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    prompt = " ".join(args.prompt)
+
+    def emit(delta: str) -> None:
+        print(delta, end="", flush=True)
+
+    summary = asyncio.run(
+        run_prompt_once(
+            prompt,
+            settings=settings,
+            emit=emit,
+            max_turns=args.max_turns,
+        )
+    )
+    if summary.output and not summary.output.endswith("\n"):
+        print()
+    return 0 if summary.complete else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -113,6 +139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_config_show(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == "run":
+        return _cmd_run(args)
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
