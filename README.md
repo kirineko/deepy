@@ -28,6 +28,7 @@ deepy skills show <skill-name>
 deepy sessions list
 deepy run --skill <skill-name> "say hello"
 deepy run --session <session-id> "continue"
+deepy sessions show <session-id>
 ```
 
 Interactive slash commands:
