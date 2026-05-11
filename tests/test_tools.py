@@ -76,6 +76,26 @@ def test_read_directory_lists_entries(tmp_path):
     assert payload["metadata"]["ignoredEntryCount"] == 3
 
 
+def test_read_directory_respects_gitignore(tmp_path):
+    (tmp_path / ".gitignore").write_text("ignored.log\nignored_dir/\nspec/\nreference/\n", encoding="utf-8")
+    (tmp_path / "ignored.log").write_text("secret", encoding="utf-8")
+    (tmp_path / "ignored_dir").mkdir()
+    (tmp_path / "visible.txt").write_text("ok", encoding="utf-8")
+    (tmp_path / "spec").mkdir()
+    (tmp_path / "reference").mkdir()
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("."))
+
+    assert payload["ok"] is True
+    assert "visible.txt" in payload["output"]
+    assert "spec/" not in payload["output"]
+    assert "reference/" not in payload["output"]
+    assert "ignored.log" not in payload["output"]
+    assert "ignored_dir/" not in payload["output"]
+    assert payload["metadata"]["ignoredEntryCount"] == 4
+
+
 def test_read_resolves_unique_relative_suffix(tmp_path):
     target_dir = tmp_path / "src" / "deepy"
     target_dir.mkdir(parents=True)
@@ -87,6 +107,23 @@ def test_read_resolves_unique_relative_suffix(tmp_path):
     assert payload["ok"] is True
     assert payload["metadata"]["path"] == str(target_dir / "settings.py")
     assert "1: value = 1" in payload["output"]
+
+
+def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path):
+    (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    source_dir = tmp_path / "src"
+    generated_dir = tmp_path / "generated"
+    source_dir.mkdir()
+    generated_dir.mkdir()
+    source_dir.joinpath("settings.py").write_text("value = 1\n", encoding="utf-8")
+    generated_dir.joinpath("settings.py").write_text("value = 2\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("settings.py"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["path"] == str(source_dir / "settings.py")
+    assert "value = 1" in payload["output"]
 
 
 def test_read_rejects_ambiguous_relative_suffix(tmp_path):

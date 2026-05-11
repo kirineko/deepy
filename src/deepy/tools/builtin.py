@@ -12,6 +12,7 @@ import urllib.request
 import uuid
 from difflib import unified_diff
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 
 from deepy.config import Settings
@@ -87,7 +88,7 @@ class ToolRuntime:
         if target is None or not target.exists():
             return ToolResult.error_result(name, f"File does not exist: {path}").to_json()
         if target.is_dir():
-            entries, visible_count, ignored_count = _format_directory_entries(target)
+            entries, visible_count, ignored_count = _format_directory_entries(target, self.cwd)
             return ToolResult.ok_result(
                 name,
                 entries,
@@ -454,11 +455,12 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
         return
 
 
-def _format_directory_entries(path: Path) -> tuple[str, int, int]:
+def _format_directory_entries(path: Path, project_root: Path) -> tuple[str, int, int]:
     lines: list[str] = []
     ignored_count = 0
+    gitignore = _load_gitignore_matcher(project_root)
     for entry in sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
-        if entry.name in IGNORED_DIRECTORY_ENTRIES:
+        if _is_ignored_entry(entry, project_root, gitignore):
             ignored_count += 1
             continue
         suffix = "/" if entry.is_dir() else ""
@@ -478,15 +480,18 @@ def _normalize_relative_suffix(path: str) -> str:
 
 def _find_suffix_matches(root: Path, suffix: str) -> list[Path]:
     matches: list[Path] = []
+    gitignore = _load_gitignore_matcher(root)
     for current, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             dirname
             for dirname in dirnames
-            if dirname not in IGNORED_DIRECTORY_ENTRIES
+            if not _is_ignored_entry(Path(current) / dirname, root, gitignore)
         ]
         current_path = Path(current)
         for filename in filenames:
             full_path = current_path / filename
+            if _is_ignored_entry(full_path, root, gitignore):
+                continue
             try:
                 relative = full_path.relative_to(root).as_posix()
             except ValueError:
@@ -494,6 +499,73 @@ def _find_suffix_matches(root: Path, suffix: str) -> list[Path]:
             if relative.endswith(suffix):
                 matches.append(full_path.resolve())
     return matches
+
+
+def _is_ignored_entry(
+    path: Path,
+    project_root: Path,
+    gitignore: "GitignoreMatcher",
+) -> bool:
+    if path.name in IGNORED_DIRECTORY_ENTRIES:
+        return True
+    try:
+        relative = path.relative_to(project_root).as_posix()
+    except ValueError:
+        return False
+    return gitignore.ignores(relative, path.is_dir())
+
+
+@dataclass(frozen=True)
+class GitignorePattern:
+    pattern: str
+    negated: bool = False
+
+
+@dataclass(frozen=True)
+class GitignoreMatcher:
+    patterns: tuple[GitignorePattern, ...]
+
+    def ignores(self, relative_path: str, is_dir: bool) -> bool:
+        normalized = relative_path.strip("/")
+        if not normalized:
+            return False
+        ignored = False
+        for item in self.patterns:
+            if _gitignore_pattern_matches(item.pattern, normalized, is_dir):
+                ignored = not item.negated
+        return ignored
+
+
+def _load_gitignore_matcher(project_root: Path) -> GitignoreMatcher:
+    gitignore = project_root / ".gitignore"
+    if not gitignore.is_file():
+        return GitignoreMatcher(())
+    patterns: list[GitignorePattern] = []
+    for raw_line in gitignore.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        if negated:
+            line = line[1:].strip()
+        if line:
+            patterns.append(GitignorePattern(line.replace("\\", "/"), negated))
+    return GitignoreMatcher(tuple(patterns))
+
+
+def _gitignore_pattern_matches(pattern: str, relative_path: str, is_dir: bool) -> bool:
+    directory_only = pattern.endswith("/")
+    normalized_pattern = pattern.strip("/")
+    if not normalized_pattern:
+        return False
+    if directory_only and not is_dir:
+        return relative_path.startswith(normalized_pattern + "/")
+    if "/" in normalized_pattern:
+        return fnmatch(relative_path, normalized_pattern) or relative_path.startswith(
+            normalized_pattern + "/"
+        )
+    parts = relative_path.split("/")
+    return any(fnmatch(part, normalized_pattern) for part in parts)
 
 
 def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], str | None]:
