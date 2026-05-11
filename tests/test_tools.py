@@ -376,6 +376,39 @@ def test_edit_rejects_unknown_snippet_id(tmp_path):
     assert "Unknown snippet_id" in payload["error"]
 
 
+def test_edit_returns_candidate_snippets_when_old_text_is_not_unique(tmp_path):
+    target = tmp_path / "duplicate.txt"
+    target.write_text("city\ncity\nsalary\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("duplicate.txt"))
+    payload = decode(runtime.edit("duplicate.txt", "city", "location"))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "old_string is not unique; use snippet_id, replace_all, or provide more context."
+    assert payload["metadata"]["match_count"] == 2
+    assert payload["metadata"]["scope"]["type"] == "full"
+    assert len(payload["metadata"]["candidates"]) == 2
+    assert payload["metadata"]["candidates"][0]["snippet_id"] == "snippet_1"
+    assert payload["metadata"]["candidates"][0]["start_line"] == 1
+    assert "city" in payload["metadata"]["candidates"][0]["preview"]
+
+
+def test_edit_candidate_snippet_can_scope_follow_up_edit(tmp_path):
+    target = tmp_path / "duplicate.txt"
+    target.write_text("city\ncity\nsalary\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("duplicate.txt"))
+    duplicate = decode(runtime.edit("duplicate.txt", "city", "location"))
+    snippet_id = duplicate["metadata"]["candidates"][1]["snippet_id"]
+    edited = decode(runtime.edit("duplicate.txt", "city", "location", snippet_id=snippet_id))
+
+    assert edited["ok"] is True
+    assert edited["metadata"]["read_scope_type"] == "snippet"
+    assert target.read_text(encoding="utf-8") == "city\nlocation\nsalary\n"
+
+
 def test_edit_detects_mtime_change_after_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")

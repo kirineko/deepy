@@ -33,6 +33,7 @@ MAX_BASH_OUTPUT_CHARS = 30_000
 MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
 PDF_LARGE_PAGE_THRESHOLD = 10
 PDF_MAX_PAGE_RANGE = 20
+MAX_CANDIDATE_COUNT = 5
 IGNORED_DIRECTORY_ENTRIES = {
     ".git",
     ".mypy_cache",
@@ -105,6 +106,117 @@ def _line_scope_offsets(text: str, start_line: int, end_line: int) -> tuple[int,
     start = sum(len(line) for line in lines[:start_idx])
     end = sum(len(line) for line in lines[:end_idx])
     return start, end
+
+
+@dataclass(frozen=True)
+class MatchOccurrence:
+    start_offset: int
+    end_offset: int
+    start_line: int
+    end_line: int
+
+
+def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
+    matches: list[MatchOccurrence] = []
+    scoped_text = text[scope[0] : scope[1]]
+    search_index = 0
+    while True:
+        found = scoped_text.find(needle, search_index)
+        if found == -1:
+            return matches
+        start_offset = scope[0] + found
+        end_offset = start_offset + len(needle)
+        matches.append(
+            MatchOccurrence(
+                start_offset=start_offset,
+                end_offset=end_offset,
+                start_line=_offset_to_line(text, start_offset),
+                end_line=_offset_to_line(text, max(start_offset, end_offset - 1)),
+            )
+        )
+        search_index = found + len(needle)
+
+
+def _offset_to_line(text: str, offset: int) -> int:
+    if offset <= 0:
+        return 1
+    return text.count("\n", 0, min(offset, len(text))) + 1
+
+
+def _build_candidate_metadata(
+    file_state: FileState,
+    path: Path,
+    text: str,
+    matches: list[MatchOccurrence],
+) -> list[dict[str, object]]:
+    candidates = []
+    for match in matches[:MAX_CANDIDATE_COUNT]:
+        preview = _build_candidate_preview(text, match.start_line, match.end_line)
+        snippet = file_state.create_snippet(
+            path,
+            start_line=match.start_line,
+            end_line=match.end_line,
+            text=preview,
+        )
+        candidates.append(
+            {
+                "snippet_id": snippet.id,
+                "start_line": match.start_line,
+                "end_line": match.end_line,
+                "preview": preview,
+            }
+        )
+    return candidates
+
+
+def _build_candidate_preview(text: str, start_line: int, end_line: int) -> str:
+    lines = text.splitlines()
+    selected = lines[start_line - 1 : end_line]
+    return "\n".join(
+        f"{str(start_line + index).rjust(6)}\t{line}"
+        for index, line in enumerate(selected)
+    )
+
+
+def _format_scope_metadata(
+    path: Path,
+    snippet: FileSnippet | None,
+    scope: tuple[int, int],
+    text: str,
+) -> dict[str, object]:
+    if snippet is not None:
+        return {
+            **_snippet_metadata(snippet),
+            "type": "snippet",
+            "snippet_id": snippet.id,
+        }
+    return {
+        "type": "full",
+        "filePath": str(path),
+        "file_path": str(path),
+        "startLine": 1,
+        "endLine": _offset_to_line(text, max(scope[0], scope[1] - 1)),
+        "start_line": 1,
+        "end_line": _offset_to_line(text, max(scope[0], scope[1] - 1)),
+        "snippet_id": None,
+    }
+
+
+def _apply_replacements(
+    text: str,
+    matches: list[MatchOccurrence],
+    replacement: str,
+    replace_all: bool,
+) -> str:
+    selected_matches = matches if replace_all else matches[:1]
+    result = []
+    cursor = 0
+    for match in selected_matches:
+        result.append(text[cursor : match.start_offset])
+        result.append(replacement)
+        cursor = match.end_offset
+    result.append(text[cursor:])
+    return "".join(result)
 
 
 @dataclass
@@ -282,24 +394,29 @@ class ToolRuntime:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
         text = _read_text_preserving_newlines(target)
         scope = _edit_scope(text, snippet)
-        scoped_text = text[scope[0] : scope[1]]
-        if old not in scoped_text:
+        matches = _find_occurrences(text, old, scope)
+        if not matches:
             return ToolResult.error_result(name, "Old text was not found in the file.").to_json()
-        occurrences = scoped_text.count(old)
+        occurrences = len(matches)
         if occurrences > 1 and not replace_all:
             return ToolResult.error_result(
                 name,
-                "Old text appears multiple times; set replace_all=true or provide a narrower snippet.",
-                metadata={"occurrences": occurrences},
+                "old_string is not unique; use snippet_id, replace_all, or provide more context.",
+                metadata={
+                    "occurrences": occurrences,
+                    "match_count": occurrences,
+                    "scope": _format_scope_metadata(target, snippet, scope, text),
+                    "candidates": _build_candidate_metadata(
+                        self.file_state,
+                        target,
+                        text,
+                        matches,
+                    ),
+                },
             ).to_json()
         line_endings = _detect_line_endings(text)
         normalized_new = _normalize_line_endings(new, line_endings)
-        updated_scope = (
-            scoped_text.replace(old, normalized_new)
-            if replace_all
-            else scoped_text.replace(old, normalized_new, 1)
-        )
-        updated = text[: scope[0]] + updated_scope + text[scope[1] :]
+        updated = _apply_replacements(text, matches, normalized_new, replace_all)
         target.write_text(updated, encoding="utf-8")
         self.file_state.mark_written(target)
         diff = _unified_diff(text, updated, path=str(target))
@@ -313,7 +430,7 @@ class ToolRuntime:
             "diff_preview": diff,
         }
         if snippet is not None:
-            metadata["scope"] = _snippet_metadata(snippet)
+            metadata["scope"] = _format_scope_metadata(target, snippet, scope, text)
         return ToolResult.ok_result(name, f"Edited {target}", metadata=metadata).to_json()
 
     def bash(self, command: str, timeout_ms: int = 120_000) -> str:
