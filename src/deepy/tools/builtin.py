@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import urllib.parse
 import urllib.request
+import uuid
 from difflib import unified_diff
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,15 +116,20 @@ class ToolRuntime:
     def bash(self, command: str, timeout_ms: int = 120_000) -> str:
         name = "bash"
         timeout = max(timeout_ms, 1) / 1000
+        marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
+        script = (
+            f"{command}\n"
+            "__deepy_exit=$?\n"
+            f"printf '\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n' \"$PWD\" \"$__deepy_exit\"\n"
+            "exit $__deepy_exit\n"
+        )
         try:
             completed = subprocess.run(
-                command,
-                shell=True,
+                ["/bin/zsh", "-lc", script],
                 cwd=self.cwd,
                 text=True,
                 capture_output=True,
                 timeout=timeout,
-                executable="/bin/zsh",
             )
         except subprocess.TimeoutExpired as exc:
             return ToolResult.error_result(
@@ -133,20 +139,23 @@ class ToolRuntime:
                 metadata={"cwd": str(self.cwd), "timeoutMs": timeout_ms},
             ).to_json()
 
-        output = (completed.stdout or "") + (completed.stderr or "")
-        self._update_cwd_from_cd(command)
-        result = ToolResult.ok_result if completed.returncode == 0 else ToolResult.error_result
-        if completed.returncode == 0:
+        stdout, final_cwd, exit_code = _extract_bash_sentinel(completed.stdout or "", marker)
+        if final_cwd is not None and final_cwd.is_dir():
+            self.cwd = final_cwd
+        returncode = exit_code if exit_code is not None else completed.returncode
+        output = stdout + (completed.stderr or "")
+        result = ToolResult.ok_result if returncode == 0 else ToolResult.error_result
+        if returncode == 0:
             return result(
                 name,
                 output,
-                metadata={"cwd": str(self.cwd), "exitCode": completed.returncode},
+                metadata={"cwd": str(self.cwd), "exitCode": returncode},
             ).to_json()
         return result(
             name,
-            f"Command exited with code {completed.returncode}.",
+            f"Command exited with code {returncode}.",
             output=output,
-            metadata={"cwd": str(self.cwd), "exitCode": completed.returncode},
+            metadata={"cwd": str(self.cwd), "exitCode": returncode},
         ).to_json()
 
     def ask_user_question(self, question: str) -> str:
@@ -208,14 +217,6 @@ class ToolRuntime:
             metadata={"query": query, "apiUrl": api_url},
         ).to_json()
 
-    def _update_cwd_from_cd(self, command: str) -> None:
-        parts = shlex.split(command)
-        if len(parts) >= 2 and parts[0] == "cd":
-            target = _resolve_in_cwd(self.cwd, parts[1])
-            if target.is_dir():
-                self.cwd = target
-
-
 def _unified_diff(old: str, new: str, *, path: str) -> str:
     return "".join(
         unified_diff(
@@ -237,3 +238,21 @@ def _format_directory_entries(path: Path) -> str:
             size = 0
         lines.append(f"{entry.name}{suffix}\t{size}")
     return "\n".join(lines)
+
+
+def _extract_bash_sentinel(stdout: str, marker: str) -> tuple[str, Path | None, int | None]:
+    start = stdout.rfind(f"\n{marker}CWD=")
+    if start == -1:
+        return stdout, None, None
+    visible = stdout[:start]
+    tail = stdout[start + 1 :].splitlines()
+    cwd: Path | None = None
+    exit_code: int | None = None
+    for line in tail:
+        if line.startswith(f"{marker}CWD="):
+            cwd = Path(line.removeprefix(f"{marker}CWD=")).resolve()
+        elif line.startswith(f"{marker}EXIT="):
+            raw = line.removeprefix(f"{marker}EXIT=")
+            if raw.isdigit():
+                exit_code = int(raw)
+    return visible, cwd, exit_code

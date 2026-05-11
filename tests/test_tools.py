@@ -100,6 +100,32 @@ def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path):
     assert runtime.cwd == subdir
 
 
+def test_bash_tracks_cwd_after_compound_cd_command(tmp_path):
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("cd sub && pwd"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["cwd"] == str(subdir)
+    assert payload["output"].strip() == str(subdir)
+    assert runtime.cwd == subdir
+
+
+def test_bash_tracks_cwd_even_when_command_fails(tmp_path):
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.bash("cd sub && false"))
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["exitCode"] == 1
+    assert payload["metadata"]["cwd"] == str(subdir)
+    assert runtime.cwd == subdir
+
+
 def test_ask_user_question_sets_wait_flag(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
