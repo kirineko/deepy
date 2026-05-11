@@ -26,7 +26,7 @@ deepy doctor
 deepy skills list
 deepy skills show <skill-name>
 deepy sessions list
-deepy run "say hello"
+deepy run --skill <skill-name> "say hello"
 deepy run --session <session-id> "continue"
 ```
 

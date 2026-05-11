@@ -48,6 +48,15 @@ def format_skills_for_terminal(skills: Iterable[SkillInfo]) -> str:
     return _format_skills(skills, include_paths=False)
 
 
+def format_loaded_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
+    blocks: list[str] = []
+    for skill in skills:
+        body = read_skill_body(skill)
+        if body:
+            blocks.append(f"<skill name=\"{skill.name}\">\n{body}\n</skill>")
+    return "\n\n".join(blocks) if blocks else "No skills loaded."
+
+
 def _format_skills(skills: Iterable[SkillInfo], *, include_paths: bool) -> str:
     grouped: dict[str, list[SkillInfo]] = {"project": [], "user": []}
     for skill in skills:

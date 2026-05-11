@@ -7,6 +7,7 @@ from typing import Any
 
 from deepy.config import Settings, load_settings
 from deepy.sessions import DeepyJsonlSession
+from deepy.skills import find_skill
 from deepy.tools import ToolRuntime
 
 from .agent import build_deepy_agent
@@ -32,6 +33,7 @@ async def run_prompt_once(
     emit_event: Callable[[DeepyStreamEvent], None] | None = None,
     max_turns: int = 10,
     session_id: str | None = None,
+    skill_names: list[str] | None = None,
 ) -> RunSummary:
     from agents import RunConfig, Runner
 
@@ -39,11 +41,18 @@ async def run_prompt_once(
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
     runtime = ToolRuntime(cwd=root, settings=resolved_settings)
+    loaded_skills = []
+    for skill_name in skill_names or []:
+        skill = find_skill(root, skill_name)
+        if skill is None:
+            raise ValueError(f"Skill not found: {skill_name}")
+        loaded_skills.append(skill)
     agent = build_deepy_agent(
         resolved_settings,
         runtime,
         project_root=root,
         provider=resolved_provider,
+        loaded_skills=loaded_skills,
     )
     session = (
         DeepyJsonlSession.open(root, session_id)

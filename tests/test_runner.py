@@ -42,6 +42,7 @@ class CapturedRun:
     input: str
     max_turns: int
     session_id: str
+    instructions: str = ""
 
 
 @pytest.mark.asyncio
@@ -57,6 +58,7 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
                     input=input,
                     max_turns=max_turns,
                     session_id=session.session_id,
+                    instructions=agent.instructions,
                 )
             )
             assert run_config.trace_include_sensitive_data is False
@@ -88,6 +90,7 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
             input="say hello",
             max_turns=3,
             session_id=summary.session_id,
+            instructions=captured[0].instructions,
         )
     ]
 
@@ -114,3 +117,33 @@ async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
 
     assert summary.session_id == "known-session"
     assert captured_session_ids == ["known-session"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_loads_requested_skill(monkeypatch, tmp_path):
+    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\nUse this skill.",
+        encoding="utf-8",
+    )
+    captured_instructions: list[str] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured_instructions.append(agent.instructions)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "use a skill",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        skill_names=["demo"],
+    )
+
+    assert "Loaded skills:" in captured_instructions[0]
+    assert "Use this skill." in captured_instructions[0]

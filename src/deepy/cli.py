@@ -48,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("prompt", nargs="+", help="Prompt text to send to Deepy.")
     run_parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent turns.")
     run_parser.add_argument("--session", help="Resume an existing session id.")
+    run_parser.add_argument("--skill", action="append", default=[], help="Load a skill by name.")
 
     sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
     sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
@@ -174,6 +175,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             emit=emit,
             max_turns=args.max_turns,
             session_id=args.session,
+            skill_names=args.skill,
         )
     )
     if summary.output and not summary.output.endswith("\n"):
