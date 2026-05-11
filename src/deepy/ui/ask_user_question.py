@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
+OTHER_VALUE = "__other__"
+
+
 @dataclass(frozen=True)
 class AskUserQuestionOption:
     label: str
@@ -23,6 +26,52 @@ class PendingAskUserQuestion:
     message_id: str
     session_id: str
     questions: list[AskUserQuestionItem]
+
+
+@dataclass(frozen=True)
+class AskUserQuestionOptionEntry:
+    label: str
+    value: str
+    description: str | None = None
+    is_other: bool = False
+
+
+def build_options(question: AskUserQuestionItem | None) -> list[AskUserQuestionOptionEntry]:
+    if question is None:
+        return []
+    return [
+        *[
+            AskUserQuestionOptionEntry(
+                label=option.label,
+                value=option.label,
+                description=option.description,
+            )
+            for option in question.options
+        ],
+        AskUserQuestionOptionEntry(label="Other", value=OTHER_VALUE, is_other=True),
+    ]
+
+
+def build_answer_for_question(
+    question: AskUserQuestionItem,
+    focused_option: AskUserQuestionOptionEntry | None,
+    selected_values: list[str],
+    other_text: str,
+) -> str | None:
+    trimmed_other = other_text.strip()
+    if question.multi_select:
+        labels = [value.strip() for value in selected_values if value != OTHER_VALUE and value.strip()]
+        if OTHER_VALUE in selected_values and not trimmed_other:
+            return None
+        if trimmed_other:
+            labels.append(trimmed_other)
+        return ", ".join(labels) if labels else None
+
+    if focused_option is None:
+        return None
+    if focused_option.is_other:
+        return trimmed_other or None
+    return focused_option.label
 
 
 def find_pending_ask_user_question(

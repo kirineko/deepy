@@ -5,6 +5,11 @@ import json
 from deepy.ui.ask_user_question import find_pending_ask_user_question
 from deepy.ui.ask_user_question import format_ask_user_question_answers
 from deepy.ui.ask_user_question import format_ask_user_question_decline
+from deepy.ui.ask_user_question import build_answer_for_question
+from deepy.ui.ask_user_question import build_options
+from deepy.ui.ask_user_question import OTHER_VALUE
+from deepy.ui.ask_user_question import AskUserQuestionItem
+from deepy.ui.ask_user_question import AskUserQuestionOption
 from deepy.ui.ask_user_question import normalize_questions
 
 
@@ -147,3 +152,45 @@ def test_format_ask_user_question_answers_creates_model_readable_text():
 
 def test_format_ask_user_question_decline_creates_decline_text():
     assert "declined to answer" in format_ask_user_question_decline()
+
+
+def test_build_options_appends_other_option():
+    question = AskUserQuestionItem(
+        question="Package manager?",
+        options=[AskUserQuestionOption(label="npm", description="Use package-lock.json.")],
+    )
+
+    options = build_options(question)
+
+    assert [(option.label, option.value, option.description, option.is_other) for option in options] == [
+        ("npm", "npm", "Use package-lock.json.", False),
+        ("Other", OTHER_VALUE, None, True),
+    ]
+
+
+def test_build_answer_for_question_handles_single_select_and_other():
+    question = AskUserQuestionItem(
+        question="Package manager?",
+        options=[AskUserQuestionOption(label="npm")],
+    )
+    options = build_options(question)
+
+    assert build_answer_for_question(question, options[0], [], "") == "npm"
+    assert build_answer_for_question(question, options[1], [], " yarn ") == "yarn"
+    assert build_answer_for_question(question, options[1], [], "   ") is None
+    assert build_answer_for_question(question, None, [], "") is None
+
+
+def test_build_answer_for_question_handles_multi_select():
+    question = AskUserQuestionItem(
+        question="Features?",
+        options=[AskUserQuestionOption(label="tests"), AskUserQuestionOption(label="docs")],
+        multi_select=True,
+    )
+
+    assert build_answer_for_question(question, None, ["tests", "docs"], "") == "tests, docs"
+    assert build_answer_for_question(question, None, ["tests", OTHER_VALUE], " lint ") == (
+        "tests, lint"
+    )
+    assert build_answer_for_question(question, None, [OTHER_VALUE], "   ") is None
+    assert build_answer_for_question(question, None, [], "") is None
