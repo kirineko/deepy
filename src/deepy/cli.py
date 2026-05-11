@@ -178,16 +178,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     def emit(delta: str) -> None:
         print(delta, end="", flush=True)
 
-    summary = asyncio.run(
-        run_prompt_once(
-            prompt,
-            settings=settings,
-            emit=emit,
-            max_turns=args.max_turns,
-            session_id=args.session,
-            skill_names=args.skill,
+    try:
+        summary = asyncio.run(
+            run_prompt_once(
+                prompt,
+                settings=settings,
+                emit=emit,
+                max_turns=args.max_turns,
+                session_id=args.session,
+                skill_names=args.skill,
+            )
         )
-    )
+    except Exception as exc:
+        print(f"deepy run failed: {exc}", file=sys.stderr)
+        return 1
     if summary.output and not summary.output.endswith("\n"):
         print()
     return 0 if summary.complete else 1

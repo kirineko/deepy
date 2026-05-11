@@ -87,6 +87,16 @@ def test_skills_show_prints_skill_body(tmp_path, capsys, monkeypatch):
     assert "description:" not in out
 
 
+def test_run_reports_missing_skill_without_traceback(tmp_path, capsys):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+
+    code = main(["--config", str(config), "run", "--skill", "missing", "hello"])
+
+    assert code == 1
+    assert "deepy run failed: Skill not found: missing" in capsys.readouterr().err
+
+
 def test_doctor_checks_config_permissions(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
