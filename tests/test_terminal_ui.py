@@ -4,9 +4,11 @@ from rich.console import Console
 
 from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
+from deepy.sessions import SessionEntry
+import deepy.ui.terminal as terminal
+from deepy.ui import SlashCommand, parse_slash_command
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_stream_event
-from deepy.ui import SlashCommand, parse_slash_command
 
 
 def test_parse_slash_command_handles_argument():
@@ -78,6 +80,46 @@ def test_new_slash_command_clears_loaded_skill_names(tmp_path):
 
     assert next_session is None
     assert loaded == []
+
+
+def test_resume_slash_command_selects_session_from_prompt(tmp_path, monkeypatch):
+    console = Console(record=True)
+    entries = [
+        SessionEntry("s1", "s1.jsonl", active_tokens=10, created_at=1, updated_at=2),
+        SessionEntry("s2", "s2.jsonl", active_tokens=20, created_at=3, updated_at=4),
+    ]
+    monkeypatch.setattr(terminal, "list_session_entries", lambda project_root: entries)
+
+    next_session = _handle_slash_command(
+        SlashCommand("resume"),
+        console,
+        tmp_path,
+        "old",
+        input_func=lambda prompt: "2",
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s2"
+    assert "1. s1" in rendered
+    assert "2. s2" in rendered
+    assert "Resuming session s2" in rendered
+
+
+def test_resume_slash_command_keeps_current_session_on_invalid_selection(tmp_path, monkeypatch):
+    console = Console(record=True)
+    entries = [SessionEntry("s1", "s1.jsonl", active_tokens=10, created_at=1, updated_at=2)]
+    monkeypatch.setattr(terminal, "list_session_entries", lambda project_root: entries)
+
+    next_session = _handle_slash_command(
+        SlashCommand("resume"),
+        console,
+        tmp_path,
+        "old",
+        input_func=lambda prompt: "missing",
+    )
+
+    assert next_session == "old"
+    assert "Invalid session selection." in console.export_text()
 
 
 def test_print_stream_event_shows_tool_call_and_output():

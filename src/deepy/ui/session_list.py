@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 
 T = TypeVar("T")
+
+
+class SessionChoice(Protocol):
+    id: str
+    updated_at: int
+    active_tokens: int
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,46 @@ def visible_sessions(
         rows=rows,
     )
     return sessions[window.scroll_offset : window.scroll_offset + window.max_visible]
+
+
+def format_session_choice(entry: SessionChoice, index: int) -> str:
+    return (
+        f"{index}. {entry.id}  updated={entry.updated_at}  "
+        f"tokens={entry.active_tokens}"
+    )
+
+
+def format_session_choices(entries: Sequence[SessionChoice], *, max_entries: int = 10) -> str:
+    if not entries:
+        return "No sessions found."
+    lines = [
+        format_session_choice(entry, index)
+        for index, entry in enumerate(entries[:max_entries], 1)
+    ]
+    remaining = len(entries) - len(lines)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more.")
+    return "\n".join(lines)
+
+
+def resolve_session_selection(
+    entries: Sequence[SessionChoice],
+    selection: str,
+) -> SessionChoice | None:
+    value = selection.strip()
+    if not value:
+        return None
+    if value.isdigit():
+        index = int(value) - 1
+        if 0 <= index < len(entries):
+            return entries[index]
+    exact = [entry for entry in entries if entry.id == value]
+    if len(exact) == 1:
+        return exact[0]
+    prefix = [entry for entry in entries if entry.id.startswith(value)]
+    if len(prefix) == 1:
+        return prefix[0]
+    return None
 
 
 def move_session_selection(

@@ -16,9 +16,11 @@ from deepy.skills import discover_skills, find_skill, format_skills_for_terminal
 from deepy.status import build_status_report, format_status_report
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import format_tool_output_summary, tool_diff_preview
+from deepy.ui.session_list import format_session_choices, resolve_session_selection
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
+InputFunc = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ def _handle_slash_command(
     current_session_id: str | None,
     loaded_skill_names: list[str] | None = None,
     settings: Settings | None = None,
+    input_func: InputFunc | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
@@ -121,11 +124,24 @@ def _handle_slash_command(
         console.print("Started a new session.")
         return None
     if command.name == "resume":
-        if not command.argument:
-            console.print("[red]Usage:[/red] /resume SESSION_ID")
+        entries = list_session_entries(project_root)
+        if command.argument:
+            selected = resolve_session_selection(entries, command.argument)
+            session_id = selected.id if selected is not None else command.argument
+            console.print(f"Resuming session {session_id}")
+            return session_id
+        if not entries:
+            console.print("No sessions found.")
             return current_session_id
-        console.print(f"Resuming session {command.argument}")
-        return command.argument
+        console.print(format_session_choices(entries))
+        chooser = input_func or (lambda prompt: Prompt.ask(prompt))
+        selection = chooser("Resume session number or id")
+        selected = resolve_session_selection(entries, selection)
+        if selected is None:
+            console.print("[red]Invalid session selection.[/red]")
+            return current_session_id
+        console.print(f"Resuming session {selected.id}")
+        return selected.id
     if command.name == "sessions":
         entries = list_session_entries(project_root)
         if not entries:

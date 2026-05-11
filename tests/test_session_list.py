@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from deepy.ui.session_list import format_session_choices
 from deepy.ui.session_list import format_session_title
 from deepy.ui.session_list import max_visible_sessions
 from deepy.ui.session_list import move_session_selection
+from deepy.ui.session_list import resolve_session_selection
 from deepy.ui.session_list import session_list_window
 from deepy.ui.session_list import visible_sessions
+
+
+@dataclass(frozen=True)
+class Entry:
+    id: str
+    updated_at: int = 100
+    active_tokens: int = 42
 
 
 def test_format_session_title_replaces_newlines_with_spaces():
@@ -44,6 +55,23 @@ def test_visible_sessions_returns_current_scroll_window():
     sessions = ["s0", "s1", "s2", "s3", "s4"]
 
     assert visible_sessions(sessions, selected_index=3, rows=14) == ["s2", "s3"]
+
+
+def test_format_session_choices_numbers_recent_entries():
+    rendered = format_session_choices([Entry("abc"), Entry("def")])
+
+    assert "1. abc  updated=100  tokens=42" in rendered
+    assert "2. def  updated=100  tokens=42" in rendered
+
+
+def test_resolve_session_selection_accepts_number_exact_id_and_unique_prefix():
+    entries = [Entry("abc123"), Entry("def456")]
+
+    assert resolve_session_selection(entries, "2") == entries[1]
+    assert resolve_session_selection(entries, "abc123") == entries[0]
+    assert resolve_session_selection(entries, "def") == entries[1]
+    assert resolve_session_selection(entries, "missing") is None
+    assert resolve_session_selection([Entry("abc1"), Entry("abc2")], "abc") is None
 
 
 def test_move_session_selection_handles_navigation_actions():
