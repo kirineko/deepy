@@ -144,12 +144,14 @@ class NotifyConfig:
 class WebSearchToolConfig:
     command: str | None = None
     api_url: str | None = None
+    machine_id: str | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
         return cls(
             command=_as_str(raw.get("command")) or None,
             api_url=_as_str(raw.get("api_url")) or None,
+            machine_id=_as_str(raw.get("machine_id")) or None,
         )
 
 

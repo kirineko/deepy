@@ -111,6 +111,7 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
             "web_search": {
                 "command": "",
                 "api_url": "",
+                "machine_id": "",
             },
         },
     }

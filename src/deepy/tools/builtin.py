@@ -133,6 +133,25 @@ class TextFileMetadata:
     line_endings: str
 
 
+@dataclass(frozen=True)
+class WebSearchPreparation:
+    original_query: str
+    resolved_query: str
+    dominant_language: str
+    language_reason: str
+    translated: bool = False
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "query": self.resolved_query,
+            "originalQuery": self.original_query,
+            "resolvedQuery": self.resolved_query,
+            "translated": self.translated,
+            "dominantLanguage": self.dominant_language,
+            "languageReason": self.language_reason,
+        }
+
+
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
     matches: list[MatchOccurrence] = []
     scoped_text = text[scope[0] : scope[1]]
@@ -405,6 +424,35 @@ def _to_bigrams(value: str) -> list[str]:
     if len(value) < 2:
         return [value]
     return [value[index : index + 2] for index in range(len(value) - 1)]
+
+
+def _prepare_web_search_query(query: str) -> WebSearchPreparation:
+    stripped = " ".join(query.split())
+    contains_chinese = _contains_chinese_char(stripped)
+    if contains_chinese:
+        return WebSearchPreparation(
+            original_query=query,
+            resolved_query=stripped,
+            dominant_language="zh",
+            language_reason="The query contains Chinese characters.",
+        )
+    return WebSearchPreparation(
+        original_query=query,
+        resolved_query=stripped,
+        dominant_language="en",
+        language_reason="The query does not contain Chinese characters.",
+    )
+
+
+def _contains_chinese_char(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+def _format_web_search_activity_label(query: str) -> str:
+    normalized = " ".join(query.split())
+    if len(normalized) > 180:
+        normalized = normalized[:177] + "..."
+    return f"WebSearch: {normalized}"
 
 
 @dataclass
@@ -749,6 +797,8 @@ class ToolRuntime:
 
     def web_search(self, query: str) -> str:
         name = "WebSearch"
+        if not query.strip():
+            return ToolResult.error_result(name, 'Missing required "query" string.').to_json()
         command = self.settings.tools.web_search.command
         api_url = self.settings.tools.web_search.api_url
         if not command and not api_url:
@@ -763,42 +813,93 @@ class ToolRuntime:
 
     def _web_search_command(self, query: str, command: str) -> str:
         name = "WebSearch"
-        completed = subprocess.run(
-            f"{command} {shlex.quote(query)}",
-            shell=True,
-            cwd=self.cwd,
-            text=True,
-            capture_output=True,
-            timeout=60,
-            executable="/bin/zsh",
-        )
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if completed.returncode != 0:
+        prepared = _prepare_web_search_query(query)
+        activity_label = _format_web_search_activity_label(query)
+        process: subprocess.Popen[str] | None = None
+        try:
+            process = subprocess.Popen(
+                f"{command} {shlex.quote(prepared.resolved_query)}",
+                shell=True,
+                cwd=self.cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                executable="/bin/zsh",
+            )
+            process_id = str(process.pid)
+            self.running_processes[process_id] = {
+                "startTime": _now_iso(),
+                "command": activity_label,
+            }
+            stdout, stderr = process.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            if process is not None:
+                _terminate_process(process)
+                stdout, stderr = process.communicate()
+                self.running_processes.pop(str(process.pid), None)
+            output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
             return ToolResult.error_result(
                 name,
-                f"WebSearch command exited with code {completed.returncode}.",
+                "WebSearch command timed out after 60000ms.",
                 output=output,
-                metadata={"query": query},
+                metadata={
+                    **prepared.metadata(),
+                    "activityLabel": activity_label,
+                    "outputTruncated": output_truncated,
+                    "interrupted": True,
+                },
             ).to_json()
-        return ToolResult.ok_result(name, output, metadata={"query": query}).to_json()
+        finally:
+            if process is not None:
+                self.running_processes.pop(str(process.pid), None)
+        output = (stdout or "") + (stderr or "")
+        output, output_truncated = _truncate_output(output)
+        if process.returncode != 0:
+            return ToolResult.error_result(
+                name,
+                f"WebSearch command exited with code {process.returncode}.",
+                output=output,
+                metadata={
+                    **prepared.metadata(),
+                    "exitCode": process.returncode,
+                    "activityLabel": activity_label,
+                    "outputTruncated": output_truncated,
+                },
+            ).to_json()
+        return ToolResult.ok_result(
+            name,
+            output,
+            metadata={
+                **prepared.metadata(),
+                "exitCode": process.returncode,
+                "activityLabel": activity_label,
+                "outputTruncated": output_truncated,
+            },
+        ).to_json()
 
     def _web_search_api(self, query: str, api_url: str) -> str:
         name = "WebSearch"
+        prepared = _prepare_web_search_query(query)
         separator = "&" if "?" in api_url else "?"
-        url = f"{api_url}{separator}{urllib.parse.urlencode({'q': query})}"
+        url = f"{api_url}{separator}{urllib.parse.urlencode({'q': prepared.resolved_query})}"
+        request = urllib.request.Request(url)
+        machine_id = self.settings.tools.web_search.machine_id
+        if machine_id:
+            request.add_header("Token", machine_id)
         try:
-            with urllib.request.urlopen(url, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:
                 body = response.read().decode("utf-8", errors="replace")
         except Exception as exc:
             return ToolResult.error_result(
                 name,
                 f"WebSearch API request failed: {exc}",
-                metadata={"query": query, "apiUrl": api_url},
+                metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
         return ToolResult.ok_result(
             name,
             body,
-            metadata={"query": query, "apiUrl": api_url},
+            metadata={**prepared.metadata(), "apiUrl": api_url, "usedMachineId": bool(machine_id)},
         ).to_json()
 
 

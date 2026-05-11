@@ -697,10 +697,15 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
 
 def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     settings = Settings(
-        tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+        tools=ToolsConfig(
+            web_search=WebSearchToolConfig(
+                api_url="https://search.example/api",
+                machine_id="machine-1",
+            )
+        )
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
-    requested: list[str] = []
+    requested: list[object] = []
 
     class FakeResponse:
         def __enter__(self):
@@ -712,8 +717,8 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
         def read(self):
             return b"results"
 
-    def fake_urlopen(url, timeout):
-        requested.append(url)
+    def fake_urlopen(request, timeout):
+        requested.append(request)
         assert timeout == 30
         return FakeResponse()
 
@@ -723,7 +728,10 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
 
     assert payload["ok"] is True
     assert payload["output"] == "results"
-    assert requested == ["https://search.example/api?q=deep+seek"]
+    assert requested[0].full_url == "https://search.example/api?q=deep+seek"
+    assert requested[0].get_header("Token") == "machine-1"
+    assert payload["metadata"]["dominantLanguage"] == "en"
+    assert payload["metadata"]["usedMachineId"] is True
 
 
 def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatch):
@@ -738,15 +746,37 @@ def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatc
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     commands: list[str] = []
 
-    def fake_run(command, **kwargs):
+    class FakeProcess:
+        pid = 123
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            commands.append(command)
+            assert kwargs["cwd"] == tmp_path
+
+        def communicate(self, timeout=None):
+            assert timeout == 60
+            assert runtime.running_processes == {
+                "123": {
+                    "startTime": runtime.running_processes["123"]["startTime"],
+                    "command": "WebSearch: deep seek",
+                }
+            }
+            return "local results", ""
+
+    def fake_popen(command, **kwargs):
         commands.append(command)
         assert kwargs["cwd"] == tmp_path
-        return SimpleNamespace(returncode=0, stdout="local results", stderr="")
+        return SimpleNamespace(
+            pid=123,
+            returncode=0,
+            communicate=lambda timeout=None: ("local results", ""),
+        )
 
     def fail_urlopen(*args, **kwargs):
         raise AssertionError("api_url should not be used when command is configured")
 
-    monkeypatch.setattr("deepy.tools.builtin.subprocess.run", fake_run)
+    monkeypatch.setattr("deepy.tools.builtin.subprocess.Popen", FakeProcess)
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
     payload = decode(runtime.web_search("deep seek"))
@@ -754,3 +784,31 @@ def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatc
     assert payload["ok"] is True
     assert payload["output"] == "local results"
     assert commands == ["search-tool 'deep seek'"]
+    assert runtime.running_processes == {}
+    assert payload["metadata"]["activityLabel"] == "WebSearch: deep seek"
+
+
+def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
+    settings = Settings(
+        tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return "中文结果".encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_search("DeepSeek 最新模型"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["dominantLanguage"] == "zh"
+    assert payload["metadata"]["translated"] is False
+    assert payload["metadata"]["resolvedQuery"] == "DeepSeek 最新模型"
