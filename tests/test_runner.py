@@ -6,6 +6,7 @@ import pytest
 from agents import ModelSettings
 
 from deepy.config import Settings
+from deepy.config.settings import LoggingConfig, NotifyConfig
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import run_prompt_once
 
@@ -34,6 +35,15 @@ class FakeStream:
             (),
             {"type": "raw_response_event", "data": type("Data", (), {"delta": "lo"})()},
         )()
+
+
+class FailingStream:
+    final_output = None
+    is_complete = False
+
+    async def stream_events(self):
+        raise RuntimeError("provider failed api_key=sk-secret")
+        yield
 
 
 @dataclass
@@ -147,3 +157,62 @@ async def test_run_prompt_once_loads_requested_skill(monkeypatch, tmp_path):
 
     assert "Loaded skills:" in captured_instructions[0]
     assert "Use this skill." in captured_instructions[0]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
+    debug_entries: list[dict] = []
+    notify_calls: list[tuple[str, int, Path]] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    monkeypatch.setattr("deepy.llm.runner.log_debug_event", debug_entries.append)
+    monkeypatch.setattr(
+        "deepy.llm.runner.launch_notify_script",
+        lambda command, duration_ms, root: notify_calls.append((command, duration_ms, root)),
+    )
+
+    summary = await run_prompt_once(
+        "say hello",
+        project_root=tmp_path,
+        settings=Settings(
+            logging=LoggingConfig(debug=True),
+            notify=NotifyConfig(enabled=True, command="/tmp/notify.sh"),
+        ),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.output == "hello"
+    assert debug_entries[0]["request"] == {"input": "say hello", "max_turns": 10}
+    assert debug_entries[0]["response"] == {"output": "hello"}
+    assert notify_calls and notify_calls[0][0] == "/tmp/notify.sh"
+    assert notify_calls[0][2] == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_path):
+    error_entries: list[dict] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return FailingStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    monkeypatch.setattr("deepy.llm.runner.log_api_error", error_entries.append)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await run_prompt_once(
+            "explode",
+            project_root=tmp_path,
+            settings=Settings(),
+            provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        )
+
+    assert error_entries[0]["location"] == "deepy.llm.runner.run_prompt_once"
+    assert error_entries[0]["request"] == {"input": "explode", "max_turns": 10}
+    assert isinstance(error_entries[0]["error"], RuntimeError)

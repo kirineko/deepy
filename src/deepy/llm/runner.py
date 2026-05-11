@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from deepy.config import Settings, load_settings
 from deepy.sessions import DeepyJsonlSession
 from deepy.skills import find_skill
 from deepy.tools import ToolRuntime
+from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
 from .agent import build_deepy_agent
 from .context import build_session_input_callback
@@ -66,28 +68,61 @@ async def run_prompt_once(
         session_input_callback=build_session_input_callback(resolved_settings),
     )
 
-    result = Runner.run_streamed(
-        agent,
-        input=prompt,
-        max_turns=max_turns,
-        run_config=run_config,
-        session=session,
-    )
+    started_at = time.time()
     chunks: list[str] = []
-    async for event in result.stream_events():
-        normalized = normalize_stream_event(event)
-        if normalized is None:
-            continue
-        if emit_event is not None:
-            emit_event(normalized)
-        if normalized.kind != "text_delta" or not normalized.text:
-            continue
-        chunks.append(normalized.text)
-        if emit is not None:
-            emit(normalized.text)
+    result: Any | None = None
+    try:
+        result = Runner.run_streamed(
+            agent,
+            input=prompt,
+            max_turns=max_turns,
+            run_config=run_config,
+            session=session,
+        )
+        async for event in result.stream_events():
+            normalized = normalize_stream_event(event)
+            if normalized is None:
+                continue
+            if emit_event is not None:
+                emit_event(normalized)
+            if normalized.kind != "text_delta" or not normalized.text:
+                continue
+            chunks.append(normalized.text)
+            if emit is not None:
+                emit(normalized.text)
+    except Exception as exc:
+        log_api_error(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "location": "deepy.llm.runner.run_prompt_once",
+                "requestId": session.session_id,
+                "sessionId": session.session_id,
+                "model": resolved_settings.model.name,
+                "baseURL": resolved_settings.model.base_url,
+                "error": exc,
+                "request": {"input": prompt, "max_turns": max_turns},
+            }
+        )
+        raise
 
     final_output = getattr(result, "final_output", None)
     output = final_output if isinstance(final_output, str) else "".join(chunks)
+    duration_ms = int((time.time() - started_at) * 1000)
+    if resolved_settings.logging.debug:
+        log_debug_event(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "location": "deepy.llm.runner.run_prompt_once",
+                "sessionId": session.session_id,
+                "model": resolved_settings.model.name,
+                "baseURL": resolved_settings.model.base_url,
+                "durationMs": duration_ms,
+                "request": {"input": prompt, "max_turns": max_turns},
+                "response": {"output": output},
+            }
+        )
+    if resolved_settings.notify.enabled and resolved_settings.notify.command:
+        launch_notify_script(resolved_settings.notify.command, duration_ms, root)
     return RunSummary(
         output=output,
         session_id=session.session_id,
