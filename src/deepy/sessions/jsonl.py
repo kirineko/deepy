@@ -11,6 +11,15 @@ SESSION_INDEX_VERSION = 1
 MAX_SESSION_INDEX_ENTRIES = 50
 
 
+@dataclass(frozen=True)
+class SessionEntry:
+    id: str
+    path: str
+    active_tokens: int
+    created_at: int
+    updated_at: int
+
+
 def project_code(project_root: Path) -> str:
     text = str(project_root.resolve())
     return text.replace("/", "-").replace("\\", "-").replace(":", "")
@@ -59,6 +68,17 @@ class DeepyJsonlSession:
         sid = session_id or uuid.uuid4().hex
         sessions_dir = project_sessions_dir(project_root, deepy_home)
         return cls(session_id=sid, path=sessions_dir / f"{sid}.jsonl")
+
+    @classmethod
+    def open(
+        cls,
+        project_root: Path,
+        session_id: str,
+        *,
+        deepy_home: Path | None = None,
+    ) -> "DeepyJsonlSession":
+        sessions_dir = project_sessions_dir(project_root, deepy_home)
+        return cls(session_id=session_id, path=sessions_dir / f"{session_id}.jsonl")
 
     async def get_items(self, limit: int | None = None) -> list[dict[str, Any]]:
         items = self._load_items()
@@ -152,14 +172,15 @@ class DeepyJsonlSession:
         sessions = raw.get("sessions")
         if not isinstance(sessions, list):
             sessions = []
+        previous = next((entry for entry in sessions if entry.get("id") == self.session_id), {})
         sessions = [entry for entry in sessions if entry.get("id") != self.session_id]
         sessions.insert(
             0,
             {
                 "id": self.session_id,
                 "path": self.path.name,
-                "activeTokens": 0,
-                "createdAt": now,
+                "activeTokens": _coerce_int(previous.get("activeTokens"), 0),
+                "createdAt": _coerce_int(previous.get("createdAt"), now),
                 "updatedAt": now,
             },
         )
@@ -171,3 +192,38 @@ class DeepyJsonlSession:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+
+def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> list[SessionEntry]:
+    index_path = project_sessions_dir(project_root, deepy_home) / "sessions-index.json"
+    if not index_path.is_file():
+        return []
+    raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
+    sessions = raw.get("sessions")
+    if not isinstance(sessions, list):
+        return []
+
+    entries: list[SessionEntry] = []
+    for item in sessions:
+        if not isinstance(item, dict):
+            continue
+        session_id = item.get("id")
+        path = item.get("path")
+        if not isinstance(session_id, str) or not isinstance(path, str):
+            continue
+        entries.append(
+            SessionEntry(
+                id=session_id,
+                path=path,
+                active_tokens=_coerce_int(item.get("activeTokens"), 0),
+                created_at=_coerce_int(item.get("createdAt"), 0),
+                updated_at=_coerce_int(item.get("updatedAt"), 0),
+            )
+        )
+    return entries
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    return value if isinstance(value, int) else default

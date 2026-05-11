@@ -37,6 +37,7 @@ async def run_prompt_once(
     provider: ProviderBundle | None = None,
     emit: Callable[[str], None] | None = None,
     max_turns: int = 10,
+    session_id: str | None = None,
 ) -> RunSummary:
     from agents import RunConfig, Runner
 
@@ -50,7 +51,11 @@ async def run_prompt_once(
         project_root=root,
         provider=resolved_provider,
     )
-    session = DeepyJsonlSession.create(root)
+    session = (
+        DeepyJsonlSession.open(root, session_id)
+        if session_id
+        else DeepyJsonlSession.create(root)
+    )
     run_config = RunConfig(
         workflow_name="Deepy",
         trace_include_sensitive_data=False,

@@ -78,3 +78,27 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
             session_id=summary.session_id,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
+    captured_session_ids: list[str] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured_session_ids.append(session.session_id)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "continue",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        session_id="known-session",
+    )
+
+    assert summary.session_id == "known-session"
+    assert captured_session_ids == ["known-session"]

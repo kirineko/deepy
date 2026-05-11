@@ -13,6 +13,7 @@ from . import __version__
 from .config import load_settings, settings_to_toml_dict
 from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
+from .sessions import list_session_entries
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="Run a single non-interactive prompt.")
     run_parser.add_argument("prompt", nargs="+", help="Prompt text to send to Deepy.")
     run_parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent turns.")
+    run_parser.add_argument("--session", help="Resume an existing session id.")
+
+    sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
+    sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
+    sessions_sub.add_parser("list", help="List sessions for the current project.")
 
     return parser
 
@@ -123,11 +129,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
             settings=settings,
             emit=emit,
             max_turns=args.max_turns,
+            session_id=args.session,
         )
     )
     if summary.output and not summary.output.endswith("\n"):
         print()
     return 0 if summary.complete else 1
+
+
+def _cmd_sessions(args: argparse.Namespace) -> int:
+    if args.sessions_command == "list":
+        entries = list_session_entries(Path.cwd())
+        if not entries:
+            print("No sessions found.")
+            return 0
+        for entry in entries:
+            print(f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}")
+        return 0
+    return 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -141,6 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_doctor(args)
     if args.command == "run":
         return _cmd_run(args)
+    if args.command == "sessions":
+        return _cmd_sessions(args)
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
