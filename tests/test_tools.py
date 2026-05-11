@@ -186,6 +186,32 @@ def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     assert "read before" in denied["error"]
 
 
+def test_write_preserves_existing_crlf_line_endings(tmp_path):
+    target = tmp_path / "windows.txt"
+    target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("windows.txt"))
+    payload = decode(runtime.write("windows.txt", "one\ntwo\n"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["line_endings"] == "CRLF"
+    assert target.read_bytes() == b"one\r\ntwo\r\n"
+
+
+def test_edit_preserves_existing_crlf_line_endings(tmp_path):
+    target = tmp_path / "windows.txt"
+    target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("windows.txt"))
+    payload = decode(runtime.edit("windows.txt", "beta", "gamma"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["line_endings"] == "CRLF"
+    assert target.read_bytes() == b"alpha\r\ngamma\r\n"
+
+
 def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path):
     subdir = tmp_path / "sub"
     subdir.mkdir()

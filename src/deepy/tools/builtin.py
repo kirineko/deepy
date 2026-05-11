@@ -99,7 +99,7 @@ class ToolRuntime:
                 },
             ).to_json()
 
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = _read_text_preserving_newlines(target)
         lines = text.splitlines()
         start = max(start_line, 1) - 1
         effective_limit = limit if limit and limit > 0 else DEFAULT_LINE_LIMIT
@@ -135,16 +135,19 @@ class ToolRuntime:
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
-        old_content = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+        old_content = _read_text_preserving_newlines(target) if target.exists() else ""
+        line_endings = _detect_line_endings(old_content or content)
+        normalized_content = _normalize_line_endings(content, line_endings)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_text(normalized_content, encoding="utf-8")
         self.file_state.mark_written(target)
-        diff = _unified_diff(old_content, content, path=str(target))
+        diff = _unified_diff(old_content, normalized_content, path=str(target))
         return ToolResult.ok_result(
             name,
             f"Wrote {target}",
             metadata={
                 "path": str(target),
+                "line_endings": line_endings,
                 "diff": diff,
                 "diff_preview": diff,
             },
@@ -158,7 +161,7 @@ class ToolRuntime:
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = _read_text_preserving_newlines(target)
         if old not in text:
             return ToolResult.error_result(name, "Old text was not found in the file.").to_json()
         occurrences = text.count(old)
@@ -168,7 +171,13 @@ class ToolRuntime:
                 "Old text appears multiple times; set replace_all=true or provide a narrower snippet.",
                 metadata={"occurrences": occurrences},
             ).to_json()
-        updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+        line_endings = _detect_line_endings(text)
+        normalized_new = _normalize_line_endings(new, line_endings)
+        updated = (
+            text.replace(old, normalized_new)
+            if replace_all
+            else text.replace(old, normalized_new, 1)
+        )
         target.write_text(updated, encoding="utf-8")
         self.file_state.mark_written(target)
         diff = _unified_diff(text, updated, path=str(target))
@@ -178,6 +187,7 @@ class ToolRuntime:
             metadata={
                 "path": str(target),
                 "occurrences": occurrences if replace_all else 1,
+                "line_endings": line_endings,
                 "diff": diff,
                 "diff_preview": diff,
             },
@@ -347,6 +357,20 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
             tofile=f"b/{path}",
         )
     )
+
+
+def _read_text_preserving_newlines(path: Path) -> str:
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+        return fh.read()
+
+
+def _detect_line_endings(text: str) -> str:
+    return "CRLF" if "\r\n" in text else "LF"
+
+
+def _normalize_line_endings(text: str, line_endings: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", "\r\n") if line_endings == "CRLF" else normalized
 
 
 def _truncate_line(line: str) -> str:
