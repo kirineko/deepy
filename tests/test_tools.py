@@ -5,6 +5,7 @@ import os
 
 from deepy.config import Settings
 from deepy.tools import ToolResult, ToolRuntime
+from deepy.tools.agents import build_function_tools
 
 
 def decode(payload: str) -> dict:
@@ -106,3 +107,19 @@ def test_ask_user_question_sets_wait_flag(tmp_path):
     assert payload["ok"] is True
     assert payload["name"] == "AskUserQuestion"
     assert payload["awaitUserResponse"] is True
+
+
+def test_function_tools_have_stable_names_and_descriptions(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    tools = build_function_tools(runtime)
+
+    assert [tool.name for tool in tools] == [
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "AskUserQuestion",
+        "WebSearch",
+    ]
+    assert all(tool.description for tool in tools)
