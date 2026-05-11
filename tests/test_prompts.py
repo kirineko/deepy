@@ -126,6 +126,7 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     (tmp_path / "reference").mkdir()
     (tmp_path / "spec").mkdir()
     (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / "dist").mkdir()
     (tmp_path / "README.md").write_text("hello", encoding="utf-8")
 
     context = build_runtime_context(tmp_path)
@@ -147,3 +148,4 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     assert "- reference/" in context
     assert "- spec/" in context
     assert ".pytest_cache/" not in context
+    assert "dist/" not in context
