@@ -13,9 +13,10 @@ class ToolResult:
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     awaitUserResponse: bool = False
+    followUpMessages: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ok": self.ok,
             "name": self.name,
             "output": self.output,
@@ -23,6 +24,9 @@ class ToolResult:
             "metadata": self.metadata,
             "awaitUserResponse": self.awaitUserResponse,
         }
+        if self.followUpMessages is not None:
+            payload["followUpMessages"] = self.followUpMessages
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))

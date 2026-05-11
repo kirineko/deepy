@@ -197,6 +197,30 @@ def test_read_invalid_notebook_returns_parse_error(tmp_path):
     assert "Failed to parse notebook JSON" in payload["error"]
 
 
+def test_read_image_returns_follow_up_message(tmp_path):
+    image = tmp_path / "pixel.png"
+    image.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da63fcff1f0003030200eed9d17f0000000049454e44ae426082"
+        )
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("pixel.png"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "File loaded."
+    assert payload["metadata"]["mime"] == "image/png"
+    assert payload["metadata"]["bytes"] == image.stat().st_size
+    assert len(payload["followUpMessages"]) == 1
+    follow_up = payload["followUpMessages"][0]
+    assert follow_up["role"] == "system"
+    assert "pixel.png" in follow_up["content"]
+    content_params = follow_up["contentParams"]
+    assert content_params[0]["type"] == "image_url"
+    assert content_params[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
 def test_read_limits_large_files_by_default(tmp_path):
     target = tmp_path / "large.txt"
     target.write_text(

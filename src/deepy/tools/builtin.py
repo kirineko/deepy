@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import signal
@@ -113,6 +114,17 @@ class ToolRuntime:
                     "kind": "notebook",
                     "trackedForWrite": False,
                 },
+            ).to_json()
+
+        mime = _image_mime_type(target.suffix.lower())
+        if mime is not None:
+            data = target.read_bytes()
+            return ToolResult(
+                ok=True,
+                name=name,
+                output="File loaded.",
+                metadata={"path": str(target), "mime": mime, "bytes": len(data)},
+                followUpMessages=[_build_image_follow_up_message(target, mime, data)],
             ).to_json()
 
         text = _read_text_preserving_newlines(target)
@@ -462,6 +474,42 @@ def _format_notebook_output(output: dict[str, object]) -> list[str]:
     if isinstance(traceback, list):
         lines.extend(str(item).removesuffix("\n").removesuffix("\r") for item in traceback)
     return lines or ["[output omitted]"]
+
+
+IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".avif": "image/avif",
+}
+
+
+def _image_mime_type(suffix: str) -> str | None:
+    return IMAGE_MIME_TYPES.get(suffix)
+
+
+def _build_image_follow_up_message(path: Path, mime: str, data: bytes) -> dict[str, object]:
+    encoded = base64.b64encode(data).decode("ascii")
+    return {
+        "role": "system",
+        "content": (
+            f"The read tool has loaded `{path.name}`. "
+            "Use the attached image content to answer the original request."
+        ),
+        "contentParams": [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{encoded}"},
+            }
+        ],
+    }
 
 
 def _detect_line_endings(text: str) -> str:
