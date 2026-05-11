@@ -83,6 +83,8 @@ class DeepyJsonlSession:
     async def get_items(self, limit: int | None = None) -> list[dict[str, Any]]:
         items = self._load_items()
         if limit is not None:
+            if limit <= 0:
+                return []
             return items[-limit:]
         return list(items)
 

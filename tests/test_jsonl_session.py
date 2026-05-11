@@ -24,6 +24,7 @@ async def test_jsonl_session_round_trips_sdk_items(tmp_path):
         {"role": "assistant", "content": "hi"},
     ]
     assert await session.get_items(limit=1) == [{"role": "assistant", "content": "hi"}]
+    assert await session.get_items(limit=0) == []
 
     records = [
         json.loads(line)
