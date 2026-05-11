@@ -45,6 +45,7 @@ def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     assert edited["ok"] is True
     assert "-one" in edited["metadata"]["diff"]
     assert "+ONE" in edited["metadata"]["diff"]
+    assert edited["metadata"]["diff_preview"] == edited["metadata"]["diff"]
     assert target.read_text(encoding="utf-8") == "ONE\ntwo\n"
 
 
@@ -148,6 +149,7 @@ def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     created = decode(runtime.write("new.txt", "hello"))
     assert created["ok"] is True
     assert "+hello" in created["metadata"]["diff"]
+    assert created["metadata"]["diff_preview"] == created["metadata"]["diff"]
 
     denied = decode(runtime.write("existing.txt", "changed"))
     assert denied["ok"] is False

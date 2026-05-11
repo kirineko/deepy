@@ -108,12 +108,14 @@ class ToolRuntime:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         self.file_state.mark_written(target)
+        diff = _unified_diff(old_content, content, path=str(target))
         return ToolResult.ok_result(
             name,
             f"Wrote {target}",
             metadata={
                 "path": str(target),
-                "diff": _unified_diff(old_content, content, path=str(target)),
+                "diff": diff,
+                "diff_preview": diff,
             },
         ).to_json()
 
@@ -138,13 +140,15 @@ class ToolRuntime:
         updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         target.write_text(updated, encoding="utf-8")
         self.file_state.mark_written(target)
+        diff = _unified_diff(text, updated, path=str(target))
         return ToolResult.ok_result(
             name,
             f"Edited {target}",
             metadata={
                 "path": str(target),
                 "occurrences": occurrences if replace_all else 1,
-                "diff": _unified_diff(text, updated, path=str(target)),
+                "diff": diff,
+                "diff_preview": diff,
             },
         ).to_json()
 
