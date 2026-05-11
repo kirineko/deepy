@@ -76,7 +76,10 @@ def test_log_api_error_masks_sensitive_values_and_trims_log(tmp_path):
                     "name": "HTTPError",
                     "message": "Authorization: Bearer sk-secret api_key=sk-value",
                 },
-                "request": {"messages": [{"content": "x" * 120}]},
+                "request": {
+                    "apiKey": "sk-request",
+                    "messages": [{"content": "x" * 120}],
+                },
                 "response": "secret=sk-response",
             },
             deepy_home=tmp_path,
@@ -90,5 +93,6 @@ def test_log_api_error_masks_sensitive_values_and_trims_log(tmp_path):
     assert latest["error"]["message"] == (
         "Authorization: Bearer ***MASKED*** api_key=***MASKED***"
     )
+    assert latest["request"]["apiKey"] == "***MASKED***"
     assert latest["request"]["messages"][0]["content"].endswith("(total 120 chars)")
     assert latest["response"] == "secret=***MASKED***"

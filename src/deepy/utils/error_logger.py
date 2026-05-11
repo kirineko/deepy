@@ -75,20 +75,26 @@ def _sanitize_error_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
 
 def _sanitize_request(value: Any) -> Any:
     if isinstance(value, str):
-        if len(value) <= CONTENT_PREVIEW_CHARS:
-            return value
-        return value[:CONTENT_PREVIEW_CHARS] + f"...(total {len(value)} chars)"
+        masked = mask_sensitive(value)
+        if len(masked) <= CONTENT_PREVIEW_CHARS:
+            return masked
+        return masked[:CONTENT_PREVIEW_CHARS] + f"...(total {len(masked)} chars)"
     if isinstance(value, list):
         return [_sanitize_request(item) for item in value]
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if key == "content" and isinstance(item, str):
-                result[key] = _sanitize_request(item)
+            if _is_sensitive_key(str(key)) and isinstance(item, str):
+                result[key] = "***MASKED***"
             else:
                 result[key] = _sanitize_request(item)
         return result
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.replace("-", "_").lower()
+    return normalized in {"apikey", "api_key", "secret", "authorization", "token"}
 
 
 def _trim_error_log(path: Path) -> None:
