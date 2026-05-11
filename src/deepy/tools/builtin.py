@@ -47,6 +47,30 @@ def _resolve_in_cwd(cwd: Path, path: str) -> Path:
     return candidate.resolve()
 
 
+def _resolve_read_target(cwd: Path, path: str) -> tuple[Path | None, str | None]:
+    candidate = Path(path).expanduser()
+    target = _resolve_in_cwd(cwd, path)
+    if target.exists() or candidate.is_absolute():
+        return target, None
+    if candidate.parts and candidate.parts[0] == "..":
+        return None, "Relative read paths must stay within the current project."
+
+    suffix = _normalize_relative_suffix(path)
+    if not suffix:
+        return target, None
+    matches = _find_suffix_matches(cwd, suffix)
+    if len(matches) > 1:
+        shown = "\n".join(str(match) for match in matches[:3])
+        more = f"\n...and {len(matches) - 3} more." if len(matches) > 3 else ""
+        return (
+            None,
+            "File path is ambiguous and may refer to multiple files:\n" + shown + more,
+        )
+    if len(matches) == 1:
+        return matches[0], None
+    return target, None
+
+
 @dataclass
 class ToolRuntime:
     cwd: Path
@@ -56,9 +80,11 @@ class ToolRuntime:
 
     def read(self, path: str, start_line: int = 1, limit: int | None = None) -> str:
         name = "read"
-        target = _resolve_in_cwd(self.cwd, path)
-        if not target.exists():
-            return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
+        target, error = _resolve_read_target(self.cwd, path)
+        if error is not None:
+            return ToolResult.error_result(name, error).to_json()
+        if target is None or not target.exists():
+            return ToolResult.error_result(name, f"File does not exist: {path}").to_json()
         if target.is_dir():
             entries, visible_count, ignored_count = _format_directory_entries(target)
             return ToolResult.ok_result(
@@ -398,6 +424,32 @@ def _format_directory_entries(path: Path) -> tuple[str, int, int]:
             size = 0
         lines.append(f"{entry.name}{suffix}\t{size}")
     return "\n".join(lines), len(lines), ignored_count
+
+
+def _normalize_relative_suffix(path: str) -> str:
+    suffix = path.replace("\\", "/").strip("/")
+    parts = [part for part in suffix.split("/") if part and part != "."]
+    return "/".join(parts)
+
+
+def _find_suffix_matches(root: Path, suffix: str) -> list[Path]:
+    matches: list[Path] = []
+    for current, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname not in IGNORED_DIRECTORY_ENTRIES
+        ]
+        current_path = Path(current)
+        for filename in filenames:
+            full_path = current_path / filename
+            try:
+                relative = full_path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if relative.endswith(suffix):
+                matches.append(full_path.resolve())
+    return matches
 
 
 def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], str | None]:

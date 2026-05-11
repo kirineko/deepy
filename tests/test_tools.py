@@ -76,6 +76,36 @@ def test_read_directory_lists_entries(tmp_path):
     assert payload["metadata"]["ignoredEntryCount"] == 3
 
 
+def test_read_resolves_unique_relative_suffix(tmp_path):
+    target_dir = tmp_path / "src" / "deepy"
+    target_dir.mkdir(parents=True)
+    target_dir.joinpath("settings.py").write_text("value = 1\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("settings.py"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["path"] == str(target_dir / "settings.py")
+    assert "1: value = 1" in payload["output"]
+
+
+def test_read_rejects_ambiguous_relative_suffix(tmp_path):
+    first = tmp_path / "src" / "a"
+    second = tmp_path / "tests" / "a"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    first.joinpath("settings.py").write_text("one\n", encoding="utf-8")
+    second.joinpath("settings.py").write_text("two\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("settings.py"))
+
+    assert payload["ok"] is False
+    assert "ambiguous" in payload["error"]
+    assert str(first / "settings.py") in payload["error"]
+    assert str(second / "settings.py") in payload["error"]
+
+
 def test_read_limits_large_files_by_default(tmp_path):
     target = tmp_path / "large.txt"
     target.write_text(
