@@ -29,9 +29,14 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         return runtime.bash(command, timeout_ms)
 
     @function_tool(name_override="read")
-    def read(path: str, start_line: int = 1, limit: int | None = None) -> str:
+    def read(
+        path: str,
+        start_line: int = 1,
+        limit: int | None = None,
+        pages: str | None = None,
+    ) -> str:
         """Read a text file with line numbers or list a directory."""
-        return runtime.read(path, start_line, limit)
+        return runtime.read(path, start_line, limit, pages)
 
     @function_tool(name_override="write")
     def write(path: str, content: object) -> str:

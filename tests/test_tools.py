@@ -221,6 +221,64 @@ def test_read_image_returns_follow_up_message(tmp_path):
     assert content_params[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
+def _write_fake_pdf(path, page_count: int):
+    pages = "\n".join(f"{idx} 0 obj << /Type /Page >> endobj" for idx in range(1, page_count + 1))
+    path.write_bytes(f"%PDF-1.4\n{pages}\ntrailer << /Type /Pages >>\n%%EOF".encode("latin1"))
+
+
+def test_read_pdf_returns_base64_with_metadata(tmp_path):
+    pdf = tmp_path / "small.pdf"
+    _write_fake_pdf(pdf, 2)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("small.pdf"))
+
+    assert payload["ok"] is True
+    assert payload["output"].startswith("data:application/pdf;base64,")
+    assert payload["metadata"]["mime"] == "application/pdf"
+    assert payload["metadata"]["encoding"] == "base64"
+    assert payload["metadata"]["pageCount"] == 2
+    assert payload["metadata"]["pages"] is None
+
+
+def test_read_large_pdf_requires_page_range(tmp_path):
+    pdf = tmp_path / "large.pdf"
+    _write_fake_pdf(pdf, 11)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("large.pdf"))
+
+    assert payload["ok"] is False
+    assert 'provide "pages" to read a range' in payload["error"]
+    assert payload["metadata"]["pageCount"] == 11
+
+
+def test_read_pdf_accepts_page_range_metadata(tmp_path):
+    pdf = tmp_path / "large.pdf"
+    _write_fake_pdf(pdf, 11)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("large.pdf", pages="2-3"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["pageCount"] == 11
+    assert payload["metadata"]["pages"] == "2-3"
+
+
+def test_read_pdf_rejects_invalid_page_range(tmp_path):
+    pdf = tmp_path / "small.pdf"
+    _write_fake_pdf(pdf, 2)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    too_many = decode(runtime.read("small.pdf", pages="1-21"))
+    assert too_many["ok"] is False
+    assert "exceeds 20 pages" in too_many["error"]
+
+    out_of_bounds = decode(runtime.read("small.pdf", pages="3"))
+    assert out_of_bounds["ok"] is False
+    assert "exceeds total page count" in out_of_bounds["error"]
+
+
 def test_read_limits_large_files_by_default(tmp_path):
     target = tmp_path / "large.txt"
     target.write_text(

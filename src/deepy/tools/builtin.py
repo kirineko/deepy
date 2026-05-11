@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
+import re
 import signal
 import shlex
 import subprocess
@@ -29,6 +31,8 @@ DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
 MAX_BASH_OUTPUT_CHARS = 30_000
 MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
+PDF_LARGE_PAGE_THRESHOLD = 10
+PDF_MAX_PAGE_RANGE = 20
 IGNORED_DIRECTORY_ENTRIES = {
     ".git",
     ".mypy_cache",
@@ -81,7 +85,13 @@ class ToolRuntime:
     file_state: FileState = field(default_factory=FileState)
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def read(self, path: str, start_line: int = 1, limit: int | None = None) -> str:
+    def read(
+        self,
+        path: str,
+        start_line: int = 1,
+        limit: int | None = None,
+        pages: str | None = None,
+    ) -> str:
         name = "read"
         target, error = _resolve_read_target(self.cwd, path)
         if error is not None:
@@ -115,6 +125,9 @@ class ToolRuntime:
                     "trackedForWrite": False,
                 },
             ).to_json()
+
+        if target.suffix.lower() == ".pdf":
+            return _read_pdf(target, pages)
 
         mime = _image_mime_type(target.suffix.lower())
         if mime is not None:
@@ -474,6 +487,104 @@ def _format_notebook_output(output: dict[str, object]) -> list[str]:
     if isinstance(traceback, list):
         lines.extend(str(item).removesuffix("\n").removesuffix("\r") for item in traceback)
     return lines or ["[output omitted]"]
+
+
+@dataclass(frozen=True)
+class PageRange:
+    start: int
+    end: int
+
+    @property
+    def count(self) -> int:
+        return self.end - self.start + 1
+
+    def label(self) -> str:
+        return f"{self.start}-{self.end}"
+
+
+def _read_pdf(path: Path, pages: str | None) -> str:
+    data = path.read_bytes()
+    page_count = _count_pdf_pages(data)
+    page_range, range_error = _parse_page_range(pages)
+    if range_error is not None:
+        return ToolResult.error_result("read", range_error, metadata={"path": str(path)}).to_json()
+
+    if page_range is None and page_count is not None and page_count > PDF_LARGE_PAGE_THRESHOLD:
+        return ToolResult.error_result(
+            "read",
+            f'PDF has {page_count} pages; provide "pages" to read a range.',
+            metadata={"path": str(path), "pageCount": page_count},
+        ).to_json()
+    if page_range is not None and page_range.count > PDF_MAX_PAGE_RANGE:
+        return ToolResult.error_result(
+            "read",
+            f"PDF page range exceeds {PDF_MAX_PAGE_RANGE} pages.",
+            metadata={"path": str(path), "pageCount": page_count},
+        ).to_json()
+    if page_range is not None and page_count is not None and page_range.end > page_count:
+        return ToolResult.error_result(
+            "read",
+            f"PDF page range exceeds total page count ({page_count}).",
+            metadata={"path": str(path), "pageCount": page_count},
+        ).to_json()
+
+    encoded = base64.b64encode(data).decode("ascii")
+    return ToolResult.ok_result(
+        "read",
+        f"data:application/pdf;base64,{encoded}",
+        metadata={
+            "path": str(path),
+            "mime": "application/pdf",
+            "encoding": "base64",
+            "bytes": len(data),
+            "pageCount": page_count,
+            "pages": page_range.label() if page_range is not None else None,
+        },
+    ).to_json()
+
+
+def _count_pdf_pages(data: bytes) -> int | None:
+    try:
+        text = data.decode("latin1", errors="ignore")
+    except Exception:
+        return None
+    return len(re.findall(r"/Type\s*/Page\b(?!s)", text))
+
+
+def _parse_page_range(value: str | None) -> tuple[PageRange | None, str | None]:
+    if value is None or not value.strip():
+        return None, None
+    trimmed = value.strip()
+    if "," in trimmed:
+        return None, 'pages must be a single range like "1-5" or "3".'
+    parts = [part.strip() for part in trimmed.split("-")]
+    if len(parts) == 1:
+        start, error = _parse_positive_int(parts[0], "pages")
+        return (PageRange(start, start), None) if error is None else (None, error)
+    if len(parts) == 2:
+        start, start_error = _parse_positive_int(parts[0], "pages")
+        if start_error is not None:
+            return None, start_error
+        end, end_error = _parse_positive_int(parts[1], "pages")
+        if end_error is not None:
+            return None, end_error
+        if end < start:
+            return None, "pages range end must be >= start."
+        return PageRange(start, end), None
+    return None, 'pages must be a single range like "1-5" or "3".'
+
+
+def _parse_positive_int(value: str, label: str) -> tuple[int, str | None]:
+    try:
+        numeric = float(value)
+    except ValueError:
+        return 0, f"{label} must be a number."
+    if not math.isfinite(numeric):
+        return 0, f"{label} must be a number."
+    integer = int(numeric)
+    if integer < 1:
+        return 0, f"{label} must be >= 1."
+    return integer, None
 
 
 IMAGE_MIME_TYPES = {
