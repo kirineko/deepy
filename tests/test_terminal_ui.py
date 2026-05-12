@@ -11,6 +11,7 @@ from deepy.sessions import DeepyJsonlSession, SessionEntry
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
+from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_assistant_output
@@ -450,12 +451,10 @@ def test_run_once_with_status_returns_summary(tmp_path):
 
 def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
-    calls = 0
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
 
     def fake_prompt_for_input(session):
-        nonlocal calls
-        calls += 1
-        raise EOFError
+        return next(events)
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
@@ -464,22 +463,25 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
 
     rendered = console.export_text()
     assert result == 0
-    assert calls == 2
     assert "Press Ctrl+D again to exit." in rendered
 
 
 def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
-    events = iter([EOFError, "", EOFError, EOFError])
+    events = iter(
+        [
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+            "",
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+        ]
+    )
     calls = 0
 
     def fake_prompt_for_input(session):
         nonlocal calls
         calls += 1
-        event = next(events)
-        if event is EOFError:
-            raise EOFError
-        return event
+        return next(events)
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)

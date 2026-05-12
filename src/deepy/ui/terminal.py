@@ -33,6 +33,7 @@ from deepy.ui.message_view import (
     render_tool_diff_preview,
 )
 from deepy.ui.markdown import render_markdown
+from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.prompt_input import create_prompt_session, prompt_for_input
 from deepy.ui.session_list import resolve_session_selection
 from deepy.ui.session_picker import ResumeSessionPreview
@@ -88,7 +89,7 @@ def run_interactive(
     session_id: str | None = None
 
     loaded_skill_names: list[str] = []
-    eof_exit_pending = False
+    ctrl_d_exit_pending = False
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
     )
@@ -106,17 +107,25 @@ def run_interactive(
         try:
             text = prompt_for_input(prompt_session)
         except EOFError:
-            if eof_exit_pending:
+            if ctrl_d_exit_pending:
                 output.print()
                 return 0
-            eof_exit_pending = True
+            ctrl_d_exit_pending = True
             output.print(f"[{STYLE_MUTED}]Press Ctrl+D again to exit.[/]")
             continue
         except KeyboardInterrupt:
             output.print()
             return 0
 
-        eof_exit_pending = False
+        if text == CTRL_D_EXIT_CONFIRM_SIGNAL:
+            if ctrl_d_exit_pending:
+                output.print()
+                return 0
+            ctrl_d_exit_pending = True
+            output.print(f"[{STYLE_MUTED}]Press Ctrl+D again to exit.[/]")
+            continue
+
+        ctrl_d_exit_pending = False
         if not text:
             continue
 

@@ -19,6 +19,7 @@ from deepy.ui.slash_commands import SlashCommandItem
 
 
 DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
+CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
 PROMPT_TOOLBAR_BACKGROUND = "#24283b"
 PROMPT_TOOLBAR_FOREGROUND = "#d7def8"
 PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
@@ -85,6 +86,13 @@ def build_prompt_key_bindings(
     @bindings.add("enter")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         event.current_buffer.validate_and_handle()
+
+    @bindings.add("c-d")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if event.current_buffer.text:
+            event.current_buffer.delete()
+            return
+        event.app.exit(result=CTRL_D_EXIT_CONFIRM_SIGNAL)
 
     @bindings.add("escape", "enter")
     @bindings.add("escape", "c-j")

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
+from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.prompt_input import PROMPT_MESSAGE
 from deepy.ui.prompt_input import PROMPT_PLACEHOLDER
 from deepy.ui.prompt_input import PROMPT_TOOLBAR
@@ -172,6 +173,62 @@ def test_prompt_key_bindings_enter_submits_and_escape_enter_inserts_newline():
     escape_enter.handler(Event())
 
     assert calls == ["submit", "\n"]
+
+
+def test_prompt_key_bindings_ctrl_d_returns_exit_confirmation_when_empty():
+    bindings = build_prompt_key_bindings()
+    results: list[str] = []
+
+    class Buffer:
+        text = ""
+
+        def delete(self):
+            results.append("delete")
+
+    class App:
+        def exit(self, *, result):
+            results.append(result)
+
+    class Event:
+        current_buffer = Buffer()
+        app = App()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    ctrl_d = next(binding for binding in bindings.bindings if key_values(binding) == ("c-d",))
+
+    ctrl_d.handler(Event())
+
+    assert results == [CTRL_D_EXIT_CONFIRM_SIGNAL]
+
+
+def test_prompt_key_bindings_ctrl_d_deletes_when_buffer_has_text():
+    bindings = build_prompt_key_bindings()
+    calls: list[str] = []
+
+    class Buffer:
+        text = "hello"
+
+        def delete(self):
+            calls.append("delete")
+
+    class App:
+        def exit(self, *, result):
+            calls.append(result)
+
+    class Event:
+        current_buffer = Buffer()
+        app = App()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    ctrl_d = next(binding for binding in bindings.bindings if key_values(binding) == ("c-d",))
+
+    ctrl_d.handler(Event())
+
+    assert calls == ["delete"]
 
 
 def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
