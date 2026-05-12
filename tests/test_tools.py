@@ -215,10 +215,10 @@ def test_read_image_returns_follow_up_message(tmp_path):
     assert len(payload["followUpMessages"]) == 1
     follow_up = payload["followUpMessages"][0]
     assert follow_up["role"] == "system"
-    assert "pixel.png" in follow_up["content"]
-    content_params = follow_up["contentParams"]
-    assert content_params[0]["type"] == "image_url"
-    assert content_params[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "pixel.png" in follow_up["content"][0]["text"]
+    assert "contentParams" not in follow_up
+    assert follow_up["content"][1]["type"] == "input_image"
+    assert follow_up["content"][1]["image_url"].startswith("data:image/png;base64,")
 
 
 def _write_fake_pdf(path, page_count: int):

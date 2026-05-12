@@ -11,6 +11,7 @@ from deepy.config import Settings, load_settings
 from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import discover_skills, find_skill, match_skills_for_prompt
 from deepy.tools import ToolRuntime
+from deepy.usage import TokenUsage, normalize_usage, usage_from_run_result
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
 from .agent import build_deepy_agent
@@ -27,6 +28,7 @@ class RunSummary:
     interrupted: bool = False
     status: str = "completed"
     pending_questions: list[dict[str, Any]] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 async def run_prompt_once(
@@ -76,6 +78,7 @@ async def run_prompt_once(
     interrupted = False
     waiting_for_user = False
     pending_questions: list[dict[str, Any]] = []
+    usage = TokenUsage()
     try:
         result = Runner.run_streamed(
             agent,
@@ -92,6 +95,8 @@ async def run_prompt_once(
             normalized = normalize_stream_event(event)
             if normalized is None:
                 continue
+            if normalized.kind == "usage":
+                usage = normalize_usage(normalized.payload.get("usage"))
             if emit_event is not None:
                 emit_event(normalized)
             if normalized.kind == "tool_output":
@@ -131,6 +136,10 @@ async def run_prompt_once(
 
     final_output = getattr(result, "final_output", None)
     output = final_output if isinstance(final_output, str) else "".join(chunks)
+    result_usage = usage_from_run_result(result)
+    if result_usage.known:
+        usage = result_usage
+    session.record_usage(usage)
     duration_ms = int((time.time() - started_at) * 1000)
     if resolved_settings.logging.debug:
         log_debug_event(
@@ -146,7 +155,7 @@ async def run_prompt_once(
                     "max_turns": max_turns,
                     "image_count": len(image_data_urls or []),
                 },
-                "response": {"output": output},
+                "response": {"output": output, "usage": usage.to_dict()},
             }
         )
     if resolved_settings.notify.enabled and resolved_settings.notify.command:
@@ -164,6 +173,7 @@ async def run_prompt_once(
             complete=bool(getattr(result, "is_complete", True)),
         ),
         pending_questions=pending_questions,
+        usage=usage,
     )
 
 

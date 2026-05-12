@@ -17,15 +17,11 @@ def _message(content: object, *, visible: bool = True) -> dict[str, object]:
     now = "2026-04-29T00:00:00.000Z"
     return {
         "id": "tool-message",
-        "sessionId": "session-id",
+        "session_id": "session-id",
         "role": "tool",
         "content": json.dumps(content),
-        "contentParams": None,
-        "messageParams": {"tool_call_id": "call-id"},
-        "compacted": False,
         "visible": visible,
-        "createTime": now,
-        "updateTime": now,
+        "created_at": now,
     }
 
 

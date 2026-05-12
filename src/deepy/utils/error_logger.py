@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .debug_logger import normalize_error
+from . import json as json_utils
 
 MAX_ERROR_LOG_ENTRIES = 20
 CONTENT_PREVIEW_CHARS = 100
@@ -38,7 +38,7 @@ def log_api_error(entry: Mapping[str, Any], *, deepy_home: Path | None = None) -
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = _sanitize_error_entry(entry)
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            fh.write(json_utils.dumps(payload))
             fh.write("\n")
         _trim_error_log(path)
     except Exception:

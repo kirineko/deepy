@@ -4,13 +4,16 @@ from rich.console import Console
 
 from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
+from deepy.llm.runner import RunSummary
 from deepy.sessions import SessionEntry
+from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
 from deepy.ui.clipboard import ClipboardImage
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_stream_event
+from deepy.ui.terminal import _print_usage_footer
 
 
 def test_parse_slash_command_handles_argument():
@@ -260,3 +263,19 @@ def test_exit_slash_command_prints_exit_summary(tmp_path):
 
     assert next_session == "__exit__"
     assert "Goodbye!" in console.export_text()
+
+
+def test_print_usage_footer_shows_known_usage():
+    console = Console(record=True)
+
+    _print_usage_footer(
+        console,
+        RunSummary(
+            output="ok",
+            session_id="s1",
+            complete=True,
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+    )
+
+    assert "prompt=10 completion=2 total=12" in console.export_text()

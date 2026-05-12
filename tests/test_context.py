@@ -50,9 +50,8 @@ def test_build_compact_prompt_serializes_session_messages_as_jsonl():
                 "id": "m1",
                 "role": "user",
                 "content": "请继续",
-                "contentParams": [{"type": "text", "text": "请继续"}],
-                "messageParams": {"reasoning_content": "hidden"},
-                "createTime": 123,
+                "tool_call_id": "call-1",
+                "created_at": 123,
                 "ignored": "not included",
             }
         ]
@@ -61,7 +60,6 @@ def test_build_compact_prompt_serializes_session_messages_as_jsonl():
     assert "Your task is to create a detailed summary" in prompt
     assert "conversation below:" in prompt
     assert '```jsonl\n{"id":"m1","role":"user","content":"请继续"' in prompt
-    assert '"contentParams":[{"type":"text","text":"请继续"}]' in prompt
-    assert '"messageParams":{"reasoning_content":"hidden"}' in prompt
-    assert '"createTime":123' in prompt
+    assert '"tool_call_id":"call-1"' in prompt
+    assert '"created_at":123' in prompt
     assert "ignored" not in prompt

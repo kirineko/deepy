@@ -29,6 +29,7 @@ from deepy.ui.prompt_input import create_prompt_session, prompt_for_input
 from deepy.ui.session_list import format_session_choices, resolve_session_selection
 from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.welcome import build_welcome_panel
+from deepy.usage import format_usage_line
 
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
@@ -132,6 +133,7 @@ def run_interactive(
                 session_id = summary.session_id
         if summary.output and not summary.output.endswith("\n"):
             output.print()
+        _print_usage_footer(output, summary)
 
 
 def _handle_slash_command(
@@ -209,7 +211,10 @@ def _handle_slash_command(
             console.print("No sessions found.")
             return current_session_id
         for entry in entries:
-            console.print(f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}")
+            console.print(
+                f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}\t"
+                f"{format_usage_line(entry.usage)}"
+            )
         return current_session_id
     if command.name == "status":
         console.print(format_status_report(build_status_report(project_root, settings)))
@@ -268,6 +273,12 @@ def _print_exit_summary(
             model=settings.model.name,
         )
     )
+
+
+def _print_usage_footer(console: Console, summary: RunSummary) -> None:
+    if not summary.usage.known:
+        return
+    console.print(f"[dim]{format_usage_line(summary.usage)}[/dim]")
 
 
 def _print_stream_event(console: Console, event: DeepyStreamEvent) -> None:

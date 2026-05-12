@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import traceback
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from . import json as json_utils
 
 
 def debug_log_path(deepy_home: Path | None = None) -> Path:
@@ -30,7 +31,7 @@ def log_debug_event(entry: Mapping[str, Any], *, deepy_home: Path | None = None)
         path = debug_log_path(deepy_home)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(_to_serializable(entry), ensure_ascii=False, separators=(",", ":")))
+            fh.write(json_utils.dumps(_to_serializable(entry)))
             fh.write("\n")
     except Exception:
         return
@@ -55,7 +56,7 @@ def _to_serializable(value: Any, seen: set[int] | None = None) -> Any:
         seen.add(marker)
         return [_to_serializable(item, seen) for item in value]
     try:
-        json.dumps(value)
+        json_utils.dumps(value)
     except TypeError:
         return str(value)
     return value

@@ -88,7 +88,7 @@ def find_pending_ask_user_question(
         if not questions:
             continue
         message_id = message.get("id")
-        session_id = message.get("sessionId")
+        session_id = message.get("session_id") or message.get("sessionId")
         if not isinstance(message_id, str) or not isinstance(session_id, str):
             continue
         return PendingAskUserQuestion(

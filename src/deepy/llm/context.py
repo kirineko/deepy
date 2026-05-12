@@ -1,16 +1,26 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from math import ceil
 from typing import Any
 
 from deepy.config import Settings
+from deepy.utils import json as json_utils
+
+try:
+    import tiktoken
+except Exception:  # pragma: no cover - optional dependency fallback.
+    tiktoken = None  # type: ignore[assignment]
+
+_ENCODING = None
 
 
 def estimate_tokens_for_text(text: str) -> int:
     if not text:
         return 0
+    encoding = _token_encoding()
+    if encoding is not None:
+        return max(1, len(encoding.encode(text)))
     return max(1, ceil(len(text) / 4))
 
 
@@ -24,7 +34,7 @@ def estimate_tokens_for_item(item: Any) -> int:
                 total += estimate_tokens_for_item(item[key])
         if total:
             return total
-        return estimate_tokens_for_text(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+        return estimate_tokens_for_text(json_utils.dumps(item))
     if isinstance(item, list):
         return sum(estimate_tokens_for_item(part) for part in item)
     return estimate_tokens_for_text(str(item))
@@ -90,3 +100,16 @@ def build_session_input_callback(settings: Settings) -> Callable[
 
 def _compact_notice_token_budget() -> int:
     return 80
+
+
+def _token_encoding() -> Any | None:
+    global _ENCODING
+    if _ENCODING is not None:
+        return _ENCODING
+    if tiktoken is None:
+        return None
+    try:
+        _ENCODING = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+    return _ENCODING

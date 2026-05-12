@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agents import ModelSettings
@@ -36,6 +37,32 @@ class FakeStream:
             "Event",
             (),
             {"type": "raw_response_event", "data": type("Data", (), {"delta": "lo"})()},
+        )()
+
+
+class UsageStream:
+    final_output = "ok"
+    is_complete = True
+
+    async def stream_events(self):
+        usage = SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            completion_tokens_details={"reasoning_tokens": 1},
+        )
+        response = SimpleNamespace(usage=usage)
+        yield type(
+            "Event",
+            (),
+            {
+                "type": "raw_response_event",
+                "data": type(
+                    "Data",
+                    (),
+                    {"type": "response.completed", "response": response},
+                )(),
+            },
         )()
 
 
@@ -209,6 +236,27 @@ async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_prompt_once_returns_and_records_usage(monkeypatch, tmp_path):
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return UsageStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "usage",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.usage.prompt_tokens == 10
+    assert summary.usage.completion_tokens == 2
+    assert summary.usage.reasoning_tokens == 1
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_once_sends_image_data_urls_as_multimodal_input(monkeypatch, tmp_path):
     captured_inputs: list[object] = []
 
@@ -332,7 +380,7 @@ async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
         "max_turns": 10,
         "image_count": 0,
     }
-    assert debug_entries[0]["response"] == {"output": "hello"}
+    assert debug_entries[0]["response"] == {"output": "hello", "usage": {}}
     assert notify_calls and notify_calls[0][0] == "/tmp/notify.sh"
     assert notify_calls[0][2] == tmp_path
 

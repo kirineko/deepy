@@ -11,13 +11,14 @@ from typing import Sequence
 import tomli_w
 
 from . import __version__
-from .config import load_settings, settings_to_toml_dict
+from .config import Settings, load_settings, settings_to_toml_dict
 from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
-from .llm.runner import run_prompt_once
 from .llm.provider import build_provider_bundle
+from .llm.runner import run_prompt_once
 from .sessions import DeepyJsonlSession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .status import build_status_report, format_status_report, status_report_to_dict
+from .usage import TokenUsage, format_usage_line, usage_from_run_result
 from .ui import run_interactive
 
 
@@ -41,9 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name.")
     init_parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible base URL.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
+    setup_parser = config_sub.add_parser("setup", help="Interactively configure Deepy.")
+    setup_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate local Deepy setup.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
+    doctor_parser.add_argument("--live", action="store_true", help="Send one minimal live DeepSeek request.")
 
     run_parser = subparsers.add_parser("run", help="Run a single non-interactive prompt.")
     run_parser.add_argument("prompt", nargs="+", help="Prompt text to send to Deepy.")
@@ -86,12 +90,52 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
     if config_path.exists() and not args.force:
         print(f"Config already exists: {config_path}", file=sys.stderr)
         return 1
+    _write_config(
+        config_path,
+        api_key=args.api_key or "",
+        model=args.model,
+        base_url=args.base_url,
+    )
+    print(f"Wrote {config_path}")
+    return 0
 
+
+def _cmd_config_setup(args: argparse.Namespace) -> int:
+    config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
+    if config_path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    if config_path.exists() and not args.force:
+        existing = load_settings(config_path)
+    else:
+        existing = Settings(path=config_path)
+
+    print("DeepSeek API keys: https://platform.deepseek.com/api_keys")
+    api_key = _prompt_config_value("API key", default=existing.model.api_key or "", is_password=True)
+    model = _prompt_config_value("Model", default=existing.model.name)
+    base_url = _prompt_config_value("Base URL", default=existing.model.base_url)
+    _write_config(config_path, api_key=api_key, model=model, base_url=base_url)
+    print(f"Wrote {config_path}")
+    return 0
+
+
+def _prompt_config_value(label: str, *, default: str, is_password: bool = False) -> str:
+    from prompt_toolkit import PromptSession
+
+    prompt = f"{label}"
+    if default and not is_password:
+        prompt += f" [{default}]"
+    prompt += ": "
+    value = PromptSession().prompt(prompt, default="" if is_password else default, is_password=is_password)
+    value = value.strip()
+    return value or default
+
+
+def _write_config(config_path: Path, *, api_key: str, model: str, base_url: str) -> None:
     payload = {
         "model": {
-            "name": args.model,
-            "base_url": args.base_url,
-            "api_key": args.api_key or "",
+            "name": model,
+            "base_url": base_url,
+            "api_key": api_key,
             "thinking": True,
             "reasoning_effort": "max",
         },
@@ -118,8 +162,6 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
     os.chmod(config_path, 0o600)
-    print(f"Wrote {config_path}")
-    return 0
 
 
 def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
@@ -134,7 +176,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
     check(
         "api_key",
         bool(settings.model.api_key),
-        "configured" if settings.model.api_key else "missing",
+        "configured" if settings.model.api_key else "missing; run `deepy config setup`",
     )
     check("model", bool(settings.model.name), settings.model.name)
     check("base_url", bool(settings.model.base_url), settings.model.base_url)
@@ -169,6 +211,39 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
     }
 
 
+async def _doctor_live(settings: Settings) -> dict[str, object]:
+    from agents import Agent, RunConfig, Runner
+
+    provider = build_provider_bundle(settings)
+    agent = Agent(
+        name="Deepy Doctor",
+        instructions="Reply with OK.",
+        model=provider.model,
+        model_settings=provider.model_settings,
+        tools=[],
+    )
+    result = await Runner.run(
+        agent,
+        "Reply with OK.",
+        max_turns=1,
+        run_config=RunConfig(
+            workflow_name="Deepy Doctor",
+            trace_include_sensitive_data=False,
+            reasoning_item_id_policy="omit",
+        ),
+    )
+    output = getattr(result, "final_output", "")
+    usage = usage_from_run_result(result)
+    return {
+        "ok": True,
+        "model": settings.model.name,
+        "base_url": settings.model.base_url,
+        "api_key": "configured",
+        "response_summary": str(output).strip()[:200],
+        "usage": usage.to_dict(),
+    }
+
+
 def _config_permissions_check(path: Path | None) -> tuple[bool, str]:
     if path is None or not path.exists():
         return False, "missing"
@@ -180,6 +255,16 @@ def _config_permissions_check(path: Path | None) -> tuple[bool, str]:
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
     code, report = _doctor(args)
+    if args.live:
+        settings = load_settings(args.config)
+        if code != 0:
+            report["live"] = {"ok": False, "error": "local doctor checks failed"}
+        else:
+            try:
+                report["live"] = asyncio.run(_doctor_live(settings))
+            except Exception as exc:
+                report["live"] = {"ok": False, "error": str(exc)}
+                code = 1
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return code
@@ -188,6 +273,18 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"{status:4} {item['name']}: {item['detail']}")
     thinking = report["thinking"]
     print(f"info thinking: enabled={thinking['enabled']} effort={thinking['reasoning_effort']}")
+    live = report.get("live")
+    if isinstance(live, dict):
+        if live.get("ok"):
+            usage = live.get("usage")
+            print(
+                "ok   live: "
+                f"model={live.get('model')} base_url={live.get('base_url')} "
+                f"response={live.get('response_summary')!r} "
+                f"{format_usage_line(usage if isinstance(usage, dict) else TokenUsage())}"
+            )
+        else:
+            print(f"fail live: {live.get('error')}")
     return code
 
 
@@ -224,12 +321,29 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             print("No sessions found.")
             return 0
         for entry in entries:
-            print(f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}")
+            print(
+                f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}\t"
+                f"{format_usage_line(entry.usage)}"
+            )
         return 0
     if args.sessions_command == "show":
         session = DeepyJsonlSession.open(Path.cwd(), args.session_id)
         items = asyncio.run(session.get_items())
-        print(json.dumps(items, ensure_ascii=False, indent=2))
+        entry = next(
+            (item for item in list_session_entries(Path.cwd()) if item.id == args.session_id),
+            None,
+        )
+        print(
+            json.dumps(
+                {
+                    "session_id": args.session_id,
+                    "usage": entry.usage if entry is not None else None,
+                    "items": items,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
     return 1
 
@@ -267,6 +381,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_config_show(args)
         if args.config_command == "init":
             return _cmd_config_init(args)
+        if args.config_command == "setup":
+            return _cmd_config_setup(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
     if args.command == "run":
@@ -280,7 +396,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
-    return run_interactive(load_settings(args.config))
+    settings = load_settings(args.config)
+    if not settings.model.api_key:
+        print("Deepy needs a DeepSeek API key before starting interactive mode.")
+        setup_args = argparse.Namespace(config=args.config, force=True)
+        _cmd_config_setup(setup_args)
+        settings = load_settings(args.config)
+    return run_interactive(settings)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,10 @@ async def test_jsonl_session_round_trips_sdk_items(tmp_path):
         for line in session.path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert records[0]["sessionId"] == "s1"
+    assert records[0]["session_id"] == "s1"
+    assert "contentParams" not in records[0]
+    assert "messageParams" not in records[0]
+    assert "createTime" not in records[0]
     assert records[0]["meta"]["sdk_item"] == {"role": "user", "content": "hello"}
 
     popped = await session.pop_item()
@@ -96,6 +99,31 @@ async def test_session_index_preserves_usage_and_processes_on_touch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_record_usage_accumulates_token_usage(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    session.record_usage(
+        {
+            "prompt_tokens": 3,
+            "completion_tokens": 4,
+            "total_tokens": 7,
+            "completion_tokens_details": {"reasoning_tokens": 2},
+        }
+    )
+
+    usage = list_session_entries(project, deepy_home=home)[0].usage
+    assert usage is not None
+    assert usage["prompt_tokens"] == 13
+    assert usage["completion_tokens"] == 6
+    assert usage["total_tokens"] == 19
+    assert usage["reasoning_tokens"] == 2
+
+
+@pytest.mark.asyncio
 async def test_open_existing_session_reads_same_jsonl(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"
@@ -142,7 +170,7 @@ async def test_session_index_recovers_from_invalid_json_and_trims_entries(tmp_pa
     assert entries[-1].id == "s5"
 
 
-def test_list_session_entries_reads_legacy_entries_shape(tmp_path):
+def test_list_session_entries_ignores_legacy_entries_shape(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"
     sessions_dir = project_sessions_dir(project, home)
@@ -174,26 +202,11 @@ def test_list_session_entries_reads_legacy_entries_shape(tmp_path):
 
     entries = list_session_entries(project, deepy_home=home)
 
-    assert len(entries) == 1
-    assert entries[0].id == "legacy-session"
-    assert entries[0].path == "legacy-session.jsonl"
-    assert entries[0].active_tokens == 0
-    assert entries[0].created_at == 1767225600000
-    assert entries[0].updated_at == 1767225601000
-    assert entries[0].processes == {
-        "123": {
-            "startTime": "2026-01-01T00:00:00.000Z",
-            "command": "Running process...",
-        },
-        "456": {
-            "startTime": "2026-01-01T00:00:00.000Z",
-            "command": "pytest",
-        },
-    }
+    assert entries == []
 
 
 @pytest.mark.asyncio
-async def test_jsonl_session_replays_legacy_message_params(tmp_path):
+async def test_jsonl_session_ignores_records_without_sdk_item(tmp_path):
     session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
     session.path.parent.mkdir(parents=True)
     records = [
@@ -251,34 +264,11 @@ async def test_jsonl_session_replays_legacy_message_params(tmp_path):
         encoding="utf-8",
     )
 
-    items = await session.get_items()
-
-    assert items == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "look"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}},
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {"name": "read", "arguments": "{}"},
-                }
-            ],
-            "reasoning_content": "",
-        },
-        {"role": "tool", "content": '{"ok":true}', "tool_call_id": "call-1"},
-    ]
+    assert await session.get_items() == []
 
 
 @pytest.mark.asyncio
-async def test_jsonl_session_inserts_interrupted_tool_result_for_missing_pair(tmp_path):
+async def test_jsonl_session_does_not_repair_legacy_missing_tool_pairs(tmp_path):
     session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
     session.path.parent.mkdir(parents=True)
     records = [
@@ -313,71 +303,32 @@ async def test_jsonl_session_inserts_interrupted_tool_result_for_missing_pair(tm
     ]
     session.path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
 
-    items = await session.get_items()
-
-    assert items[1]["role"] == "tool"
-    assert items[1]["tool_call_id"] == "call-1"
-    assert "Previous tool call did not complete" in items[1]["content"]
-    assert items[2] == {"role": "user", "content": "continue"}
+    assert await session.get_items() == []
 
 
 @pytest.mark.asyncio
-async def test_jsonl_session_prefers_real_tool_result_over_interrupted_placeholder(tmp_path):
+async def test_jsonl_session_round_trips_sdk_tool_items(tmp_path):
     session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
-    session.path.parent.mkdir(parents=True)
-    assistant = {
-        "id": "assistant-tool",
-        "sessionId": "s1",
-        "role": "assistant",
-        "content": "",
-        "contentParams": None,
-        "messageParams": {
+
+    sdk_items = [
+        {
+            "role": "assistant",
+            "content": "",
             "tool_calls": [
                 {
                     "id": "call-1",
                     "type": "function",
                     "function": {"name": "bash", "arguments": '{"command":"date"}'},
                 }
-            ]
+            ],
         },
-        "compacted": False,
-        "visible": False,
-    }
-    interrupted = {
-        "id": "tool-interrupted",
-        "sessionId": "s1",
-        "role": "tool",
-        "content": json.dumps(
-            {
-                "ok": False,
-                "name": "bash",
-                "error": "Previous tool call did not complete.",
-                "metadata": {"interrupted": True},
-            }
-        ),
-        "contentParams": None,
-        "messageParams": {"tool_call_id": "call-1"},
-        "compacted": False,
-        "visible": True,
-    }
-    real = {
-        "id": "tool-real",
-        "sessionId": "s1",
-        "role": "tool",
-        "content": json.dumps({"ok": True, "name": "bash", "output": "real result"}),
-        "contentParams": None,
-        "messageParams": {"tool_call_id": "call-1"},
-        "compacted": False,
-        "visible": True,
-    }
-    session.path.write_text(
-        "\n".join(json.dumps(record) for record in [assistant, interrupted, real]) + "\n",
-        encoding="utf-8",
-    )
+        {
+            "role": "tool",
+            "content": json.dumps({"ok": True, "name": "bash", "output": "real result"}),
+            "tool_call_id": "call-1",
+        },
+    ]
 
-    items = await session.get_items()
+    await session.add_items(sdk_items)
 
-    tool_items = [item for item in items if item.get("role") == "tool"]
-    assert len(tool_items) == 1
-    assert "real result" in tool_items[0]["content"]
-    assert "Previous tool call did not complete" not in tool_items[0]["content"]
+    assert await session.get_items() == sdk_items

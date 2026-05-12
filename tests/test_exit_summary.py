@@ -18,6 +18,7 @@ def test_extract_usage_fields_reads_cached_tokens_from_details():
     assert usage.prompt_tokens == 11_966
     assert usage.completion_tokens == 236
     assert usage.cached_tokens == 11_776
+    assert usage.reasoning_tokens == 144
 
 
 def test_extract_usage_fields_falls_back_to_prompt_cache_hit_tokens():
@@ -32,13 +33,14 @@ def test_extract_usage_fields_falls_back_to_prompt_cache_hit_tokens():
     assert usage.cached_tokens == 11
 
 
-def test_build_exit_summary_text_matches_deepcode_usage_table_shape():
+def test_build_exit_summary_text_shows_usage_and_reasoning_tokens():
     summary = build_exit_summary_text(
         session={
             "usage": {
                 "prompt_tokens": 11_966,
                 "completion_tokens": 236,
                 "prompt_tokens_details": {"cached_tokens": 11_776},
+                "completion_tokens_details": {"reasoning_tokens": 144},
             }
         },
         messages=[
@@ -54,12 +56,14 @@ def test_build_exit_summary_text_matches_deepcode_usage_table_shape():
     assert "╰" in summary
     assert "Model Usage" in summary
     assert "Cached Tokens" in summary
+    assert "Reasoning" in summary
     assert "mimo-v2.5-pro" in summary
-    assert "2          11,966             236            11,776" in summary
+    assert "11,966" in summary
+    assert "11,776" in summary
+    assert "144" in summary
     assert "Agent powering down" not in summary
     assert "Interaction Summary" not in summary
     assert "Context Window" not in summary
-    assert "Reasoning Tokens" not in summary
 
 
 def test_build_exit_summary_text_omits_usage_table_without_usage():

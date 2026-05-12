@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import signal
 from dataclasses import dataclass, field
@@ -10,6 +9,7 @@ from typing import Any
 from deepy.config import Settings, load_settings
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import RunSummary, run_prompt_once
+from deepy.utils import json as json_utils
 
 from .jsonl import DeepyJsonlSession, list_session_entries, project_sessions_dir
 
@@ -187,17 +187,16 @@ def _clear_session_processes(
     if not index_path.is_file():
         return
     try:
-        raw = json.loads(index_path.read_text(encoding="utf-8") or "{}")
-    except json.JSONDecodeError:
+        raw = json_utils.loads(index_path.read_text(encoding="utf-8") or "{}")
+    except Exception:
         return
     changed = False
-    for key in ("sessions", "entries"):
-        entries = raw.get(key)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if isinstance(entry, dict) and entry.get("id") == session_id:
-                entry["processes"] = None
-                changed = True
+    entries = raw.get("sessions")
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("id") == session_id:
+            entry["processes"] = None
+            changed = True
     if changed:
-        index_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        index_path.write_text(json_utils.dumps_pretty(raw) + "\n", encoding="utf-8")

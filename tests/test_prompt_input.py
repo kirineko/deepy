@@ -136,6 +136,34 @@ def test_build_prompt_key_bindings_registers_escape_interrupt():
     assert any("escape" in binding.keys for binding in bindings.bindings)
 
 
+def test_prompt_key_bindings_enter_submits_and_escape_enter_inserts_newline():
+    bindings = build_prompt_key_bindings()
+    calls: list[str] = []
+
+    class Buffer:
+        def validate_and_handle(self):
+            calls.append("submit")
+
+        def insert_text(self, text: str):
+            calls.append(text)
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
+    escape_enter = next(
+        binding for binding in bindings.bindings if key_values(binding) == ("escape", "c-m")
+    )
+
+    enter.handler(Event())
+    escape_enter.handler(Event())
+
+    assert calls == ["submit", "\n"]
+
+
 def test_text_width_counts_cjk_and_control_characters():
     assert text_width("hello") == 5
     assert text_width("你好") == 4

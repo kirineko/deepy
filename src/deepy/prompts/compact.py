@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from deepy.utils import json as json_utils
 
 
 COMPACT_PROMPT_BASE = """Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
@@ -80,9 +81,12 @@ COMPACT_MESSAGE_KEYS = (
     "id",
     "role",
     "content",
-    "contentParams",
-    "messageParams",
-    "createTime",
+    "type",
+    "name",
+    "tool_calls",
+    "tool_call_id",
+    "output",
+    "created_at",
 )
 
 
@@ -93,4 +97,4 @@ def build_compact_prompt(session_messages: list[dict[str, Any]]) -> str:
 
 def _compact_message_json(message: dict[str, Any]) -> str:
     payload = {key: message[key] for key in COMPACT_MESSAGE_KEYS if key in message}
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json_utils.dumps(payload)

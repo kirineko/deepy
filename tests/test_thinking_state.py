@@ -6,15 +6,11 @@ from deepy.ui.thinking_state import find_expanded_thinking_id
 def _message(message_id: str, role: str, *, as_thinking: bool = False) -> dict[str, object]:
     message: dict[str, object] = {
         "id": message_id,
-        "sessionId": "s",
+        "session_id": "s",
         "role": role,
         "content": "",
-        "contentParams": None,
-        "messageParams": None,
-        "compacted": False,
         "visible": True,
-        "createTime": "2026-04-28T00:00:00.000Z",
-        "updateTime": "2026-04-28T00:00:00.000Z",
+        "created_at": 1800000000000,
     }
     if as_thinking:
         message["meta"] = {"asThinking": True}

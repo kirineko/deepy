@@ -55,6 +55,15 @@ def build_prompt_key_bindings(
         if on_interrupt is not None:
             on_interrupt()
 
+    @bindings.add("enter")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        event.current_buffer.validate_and_handle()
+
+    @bindings.add("escape", "enter")
+    @bindings.add("escape", "c-j")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        event.current_buffer.insert_text("\n")
+
     return bindings
 
 

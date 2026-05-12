@@ -1413,15 +1413,18 @@ def _build_image_follow_up_message(path: Path, mime: str, data: bytes) -> dict[s
     encoded = base64.b64encode(data).decode("ascii")
     return {
         "role": "system",
-        "content": (
-            f"The read tool has loaded `{path.name}`. "
-            "Use the attached image content to answer the original request."
-        ),
-        "contentParams": [
+        "content": [
             {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{encoded}"},
-            }
+                "type": "input_text",
+                "text": (
+                    f"The read tool has loaded `{path.name}`. "
+                    "Use the attached image content to answer the original request."
+                ),
+            },
+            {
+                "type": "input_image",
+                "image_url": f"data:{mime};base64,{encoded}",
+            },
         ],
     }
 

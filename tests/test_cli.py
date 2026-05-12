@@ -51,6 +51,29 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert 'api_url = ""' in text
 
 
+def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    answers = iter(["sk-live", "deepseek-v4-flash", "https://api.deepseek.com"])
+    prompts: list[dict[str, object]] = []
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            prompts.append({"prompt": prompt, "default": default, "is_password": is_password})
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "setup"])
+
+    assert code == 0
+    assert "https://platform.deepseek.com/api_keys" in capsys.readouterr().out
+    assert prompts[0]["is_password"] is True
+    assert config.stat().st_mode & 0o777 == 0o600
+    text = config.read_text(encoding="utf-8")
+    assert 'api_key = "sk-live"' in text
+    assert 'name = "deepseek-v4-flash"' in text
+
+
 def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     config = tmp_path / "config.toml"
     config.write_text("existing", encoding="utf-8")
@@ -127,7 +150,12 @@ def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
     code = main(["sessions", "show", "s1"])
 
     assert code == 0
-    assert json.loads(capsys.readouterr().out) == [{"role": "user", "content": "hello"}]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "session_id": "s1",
+        "usage": None,
+        "items": [{"role": "user", "content": "hello"}],
+    }
 
 
 def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
@@ -167,3 +195,41 @@ def test_doctor_checks_config_permissions(tmp_path):
     permissions = next(item for item in report["checks"] if item["name"] == "config_permissions")
     assert permissions["ok"] is False
     assert "expected private permissions" in permissions["detail"]
+
+
+def test_doctor_json_without_key_fails_with_setup_hint(tmp_path, capsys):
+    config = tmp_path / "config.toml"
+    config.write_text("", encoding="utf-8")
+    config.chmod(0o600)
+
+    code = main(["--config", str(config), "doctor", "--json"])
+
+    assert code == 1
+    payload = json.loads(capsys.readouterr().out)
+    api_key = next(item for item in payload["checks"] if item["name"] == "api_key")
+    assert api_key["ok"] is False
+    assert api_key["detail"] == "missing; run `deepy config setup`"
+
+
+def test_doctor_live_json_reports_usage(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.chmod(0o600)
+
+    async def fake_live(settings):
+        return {
+            "ok": True,
+            "model": settings.model.name,
+            "base_url": settings.model.base_url,
+            "response_summary": "OK",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    monkeypatch.setattr("deepy.cli._doctor_live", fake_live)
+
+    code = main(["--config", str(config), "doctor", "--live", "--json"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["live"]["response_summary"] == "OK"
+    assert payload["live"]["usage"]["total_tokens"] == 2

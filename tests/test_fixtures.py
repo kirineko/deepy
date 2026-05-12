@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.mark.asyncio
-async def test_session_jsonl_fixture_replays_legacy_shapes(tmp_path):
+async def test_session_jsonl_fixture_replays_python_sdk_items(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     deepy_home = tmp_path / "home"
@@ -33,18 +33,10 @@ async def test_session_jsonl_fixture_replays_legacy_shapes(tmp_path):
     assert entries[0].processes == {
         "4242": {"command": "pytest", "startTime": "2026-05-11T00:00:00.000Z"}
     }
-    assert [item["role"] for item in items] == [
-        "user",
-        "assistant",
-        "assistant",
-        "tool",
-        "assistant",
-        "user",
-    ]
+    assert [item["role"] for item in items] == ["user", "assistant", "assistant", "tool", "user"]
     assert items[2]["tool_calls"][0]["id"] == "call-read"
     assert items[3]["tool_call_id"] == "call-read"
-    assert items[4]["reasoning_content"] == "Checked the file before answering."
-    assert isinstance(items[5]["content"], list)
+    assert isinstance(items[4]["content"], list)
 
 
 def test_tool_fixture_covers_planned_cases():
