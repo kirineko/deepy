@@ -34,7 +34,7 @@ from deepy.ui.message_view import (
 )
 from deepy.ui.markdown import render_markdown
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
-from deepy.ui.prompt_input import create_prompt_session, prompt_for_input
+from deepy.ui.prompt_input import build_prompt_toolbar, create_prompt_session, prompt_for_input
 from deepy.ui.session_list import resolve_session_selection
 from deepy.ui.session_picker import ResumeSessionPreview
 from deepy.ui.session_picker import format_resume_session_choices
@@ -49,7 +49,7 @@ from deepy.ui.styles import (
     status_style,
 )
 from deepy.ui.welcome import build_welcome_panel
-from deepy.usage import format_usage_line
+from deepy.usage import TokenUsage, format_usage_line
 from deepy.utils import json as json_utils
 
 
@@ -90,6 +90,7 @@ def run_interactive(
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
+    context_status = _format_context_footer(None, settings=settings)
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
     )
@@ -105,7 +106,10 @@ def run_interactive(
 
     while True:
         try:
-            text = prompt_for_input(prompt_session)
+            text = prompt_for_input(
+                prompt_session,
+                bottom_toolbar=build_prompt_toolbar(context_status),
+            )
         except EOFError:
             if ctrl_d_exit_pending:
                 output.print()
@@ -141,6 +145,8 @@ def run_interactive(
             )
             if next_session == "__exit__":
                 return 0
+            if slash.name in {"new", "resume"}:
+                context_status = _format_context_footer(None, settings=settings)
             session_id = next_session
             continue
 
@@ -171,6 +177,7 @@ def run_interactive(
                 session_id = summary.session_id
         _print_assistant_output(output, summary.output)
         _print_usage_footer(output, summary, settings=settings, project_root=root)
+        context_status = _format_context_footer(summary, settings=settings)
 
 
 def _run_once_with_status(
@@ -320,7 +327,7 @@ def _handle_slash_command(
             return current_session_id
         for entry in entries:
             console.print(
-                f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}\t"
+                f"{entry.id}\tupdated={entry.updated_at}\thistory_tokens={entry.active_tokens}\t"
                 f"{format_usage_line(entry.usage)}"
             )
         return current_session_id
@@ -644,49 +651,38 @@ def _print_usage_footer(
     project_root: Path | None = None,
 ) -> None:
     if summary.usage.known:
-        console.print(f"[{STYLE_MUTED}]usage[/] {format_usage_line(summary.usage)}")
-    context = _format_context_footer(summary, settings=settings, project_root=project_root)
-    if context:
-        console.print(f"[{STYLE_MUTED}]context[/] {context}")
+        console.print(f"[{STYLE_MUTED}]turn usage[/] {_format_turn_usage_line(summary.usage)}")
 
 
 def _format_context_footer(
-    summary: RunSummary,
+    summary: RunSummary | None,
     *,
     settings: Settings | None = None,
-    project_root: Path | None = None,
 ) -> str:
     if settings is None:
         return ""
 
-    parts: list[str] = []
-    if summary.usage.prompt_tokens > 0:
-        parts.append(f"current input {summary.usage.prompt_tokens:,}")
-
-    session_tokens = _session_active_tokens(project_root, summary.session_id)
     window_tokens = settings.context.window_tokens
-    if session_tokens is not None and window_tokens > 0:
-        percent = session_tokens / window_tokens * 100
-        parts.append(f"session {session_tokens:,} / {window_tokens:,} ({percent:.1f}%)")
-    elif window_tokens > 0:
-        parts.append(f"window {window_tokens:,}")
-
     compact_threshold = settings.context.resolved_compact_threshold
+    if window_tokens <= 0:
+        return ""
+
+    usage = summary.usage if summary is not None else None
+    used_tokens = usage.prompt_tokens if usage is not None and usage.known else 0
+    used_text = f"{used_tokens:,}" if used_tokens > 0 else "unknown"
+    used_ratio = f" ({used_tokens / window_tokens * 100:.1f}%)" if used_tokens > 0 else ""
+    parts = [f"context used {used_text} / {window_tokens:,}{used_ratio}"]
+
     if compact_threshold > 0:
-        parts.append(f"compact at {compact_threshold:,}")
+        compact_ratio = compact_threshold / window_tokens * 100
+        parts.append(f"compact at {compact_threshold:,} ({compact_ratio:.1f}%)")
 
     return " · ".join(parts)
 
 
-def _session_active_tokens(project_root: Path | None, session_id: str) -> int | None:
-    if project_root is None or not session_id:
-        return None
-    try:
-        entries = list_session_entries(project_root)
-    except Exception:
-        return None
-    entry = next((item for item in entries if item.id == session_id), None)
-    return entry.active_tokens if entry is not None else None
+def _format_turn_usage_line(usage: TokenUsage) -> str:
+    prefix = f"requests {usage.requests:,} · " if usage.requests > 0 else ""
+    return f"{prefix}{format_usage_line(usage)}"
 
 
 def _print_user_input(console: Console, text: str) -> None:

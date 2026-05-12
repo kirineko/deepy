@@ -59,7 +59,7 @@ def test_raw_tool_output_is_truncated():
     assert len(summary) <= 160
 
 
-def test_tool_diff_preview_only_for_successful_write_or_edit():
+def test_tool_diff_preview_only_for_successful_edit():
     diff = "--- a/file\n+++ b/file\n@@\n-old\n+new\n"
     output = json.dumps(
         {
@@ -75,7 +75,7 @@ def test_tool_diff_preview_only_for_successful_write_or_edit():
     assert tool_diff_preview(output) == diff
 
 
-def test_tool_diff_preview_prefers_metadata_diff_preview():
+def test_tool_diff_preview_prefers_write_metadata_diff_preview():
     output = json.dumps(
         {
             "ok": True,
@@ -114,7 +114,7 @@ def test_tool_diff_preview_ignores_failed_or_unrelated_tools():
 
 def test_render_tool_output_includes_summary_and_diff():
     output = (
-        '{"ok":true,"name":"write","output":"Wrote file","error":null,'
+        '{"ok":true,"name":"edit","output":"Edited file","error":null,'
         '"metadata":{"path":"file","diff":"--- a/file\\n+++ b/file\\n@@\\n+new\\n"},'
         '"awaitUserResponse":false}'
     )
@@ -123,7 +123,25 @@ def test_render_tool_output_includes_summary_and_diff():
     console.print(render_tool_output(output))
 
     rendered = console.export_text()
+    assert "edit ok - file" in rendered
+    assert "Edited file (+1 -0)" in rendered
+    assert "new" in rendered
+    assert "+new" not in rendered
+
+
+def test_render_tool_output_shows_write_preview_without_background():
+    output = (
+        '{"ok":true,"name":"write","output":"Wrote file","error":null,'
+        '"metadata":{"path":"file","diff":"--- /dev/null\\n+++ b/file\\n@@ -0,0 +1,1 @@\\n+new\\n"},'
+        '"awaitUserResponse":false}'
+    )
+    console = Console(record=True, width=120)
+
+    console.print(render_tool_output(output))
+
+    rendered = console.export_text()
     assert "write ok - file" in rendered
+    assert "Wrote file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+new" not in rendered
 
@@ -147,6 +165,7 @@ def test_render_tool_diff_preview_hides_headers_and_markers():
     console.print(render_tool_diff_preview(output))
 
     rendered = console.export_text()
+    assert "Edited file (+1 -1)" in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -158,13 +177,65 @@ def test_render_tool_diff_preview_hides_headers_and_markers():
 
 
 def test_render_diff_preview_line_uses_background_for_changes():
-    removed = render_diff_preview_line(DiffPreviewLine(marker="-", content="old", kind="removed"))
-    added = render_diff_preview_line(DiffPreviewLine(marker="+", content="new", kind="added"))
+    removed = render_diff_preview_line(
+        DiffPreviewLine(marker="-", content="old", kind="removed", old_lineno=12)
+    )
+    added = render_diff_preview_line(
+        DiffPreviewLine(marker="+", content="new", kind="added", new_lineno=13)
+    )
 
-    assert removed.plain == "old"
-    assert added.plain == "new"
-    assert "dark_red" in str(removed.style)
-    assert "dark_green" in str(added.style)
+    assert removed.plain == "  12      - old"
+    assert added.plain == "       13 + new"
+    assert "#7f1d1d" in str(removed.spans)
+    assert "#14532d" in str(added.spans)
+
+
+def test_render_write_preview_line_has_no_background_for_content():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "file",
+                "diff": "--- /dev/null\n+++ b/file\n@@ -0,0 +1,1 @@\n+let x = 1;\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    rendered = render_tool_diff_preview(output)
+    assert rendered is not None
+    lines = list(rendered.renderables)
+
+    assert "Wrote file (+1 -0)" in lines[0].plain
+    assert lines[1].plain == "   1   let x = 1;"
+    assert "#1f2937" in str(lines[1].spans)
+
+
+def test_render_write_preview_does_not_truncate_large_writes():
+    body = "\n".join(f"+line {index}" for index in range(1, 91))
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "file",
+                "diff": f"--- /dev/null\n+++ b/file\n@@ -0,0 +90,90 @@\n{body}\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    console = Console(record=True, width=120)
+
+    console.print(render_tool_diff_preview(output))
+
+    rendered = console.export_text()
+    assert "line 1" in rendered
+    assert "line 90" in rendered
+    assert "truncated" not in rendered
 
 
 def test_render_message_renders_user_and_assistant_panels():
@@ -210,9 +281,9 @@ def test_parse_diff_preview_removes_headers_and_classifies_lines():
     lines = parse_diff_preview("--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n context\n-old\n+new")
 
     assert lines == [
-        DiffPreviewLine(marker=" ", content="context", kind="context"),
-        DiffPreviewLine(marker="-", content="old", kind="removed"),
-        DiffPreviewLine(marker="+", content="new", kind="added"),
+        DiffPreviewLine(marker=" ", content="context", kind="context", old_lineno=1, new_lineno=1),
+        DiffPreviewLine(marker="-", content="old", kind="removed", old_lineno=2),
+        DiffPreviewLine(marker="+", content="new", kind="added", new_lineno=2),
     ]
 
 
@@ -271,6 +342,22 @@ def test_format_tool_call_summary_formats_read_arguments():
         )
         == "read README.md"
     )
+
+
+def test_format_tool_call_summary_formats_write_without_content_body():
+    summary = format_tool_call_summary(
+        "write",
+        json.dumps(
+            {
+                "file_path": "/repo/src/lib.rs",
+                "content": "fn main() {\n    println!(\"hi\");\n}\n",
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "write src/lib.rs (4 lines, 34 chars)"
+    assert "println" not in summary
 
 
 def test_format_tool_progress_summary_merges_call_and_output_status():

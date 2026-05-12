@@ -296,6 +296,83 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     assert "+new" not in rendered
 
 
+def test_print_stream_event_renders_write_preview_after_status():
+    console = Console(record=True, width=120)
+    output = {
+        "ok": True,
+        "name": "write",
+        "output": "Wrote file",
+        "error": None,
+        "metadata": {
+            "path": "/repo/src/lib.rs",
+            "diff": "--- /dev/null\n+++ b//repo/src/lib.rs\n@@ -0,0 +1,1 @@\n+new file body\n",
+        },
+        "awaitUserResponse": False,
+    }
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(kind="tool_output", text=json_utils.dumps(output)),
+    )
+
+    rendered = console.export_text()
+    assert "write  ok" in rendered
+    assert "Wrote /repo/src/lib.rs (+1 -0)" in rendered
+    assert "new file body" in rendered
+    assert "+new file body" not in rendered
+    assert "Edited" not in rendered
+
+
+def test_print_stream_event_write_call_summary_hides_content_argument():
+    console = Console(record=True, width=120)
+    pending = {}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="write",
+            payload={
+                "call_id": "call-1",
+                "arguments": json_utils.dumps(
+                    {
+                        "file_path": "/repo/src/lib.rs",
+                        "content": "fn main() {\n    println!(\"hi\");\n}\n",
+                    }
+                ),
+            },
+        ),
+        project_root="/repo",
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "write",
+                    "output": "Wrote file",
+                    "error": None,
+                    "metadata": {
+                        "path": "/repo/src/lib.rs",
+                        "diff": "--- /dev/null\n+++ b//repo/src/lib.rs\n@@ -0,0 +1,1 @@\n+fn main() {}\n",
+                    },
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "write src/lib.rs (4 lines, 34 chars)  ok" in rendered
+    assert "println" not in rendered
+    assert "fn main() {}" in rendered
+
+
 def test_print_user_input_uses_prompt_marker():
     console = Console(record=True)
 
@@ -370,13 +447,13 @@ def test_print_usage_footer_shows_known_usage():
     )
 
     rendered = console.export_text()
-    assert "usage input 10 · output 2 · total 12" in rendered
+    assert "turn usage input 10 · output 2 · total 12" in rendered
 
 
-def test_print_usage_footer_shows_context_status(tmp_path):
+def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     console = Console(record=True)
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
-    session._touch_index(active_tokens=250)
+    session._touch_index(active_tokens=900)
 
     _print_usage_footer(
         console,
@@ -384,17 +461,62 @@ def test_print_usage_footer_shows_context_status(tmp_path):
             output="ok",
             session_id="s1",
             complete=True,
-            usage=TokenUsage(prompt_tokens=100, completion_tokens=2, total_tokens=102),
+            usage=TokenUsage(
+                prompt_tokens=100,
+                completion_tokens=2,
+                total_tokens=102,
+                requests=2,
+            ),
         ),
         settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
     )
 
     rendered = console.export_text()
-    assert "usage input 100 · output 2 · total 102" in rendered
-    assert "context current input 100" in rendered
-    assert "session 250 / 1,000 (25.0%)" in rendered
-    assert "compact at 800" in rendered
+    assert "turn usage requests 2 · input 100 · output 2 · total 102" in rendered
+    assert "context used" not in rendered
+    assert "900" not in rendered
+    assert "session" not in rendered
+
+
+def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["first", "/new", "second", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    calls: list[dict[str, object]] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
+        session_id = "s1" if prompt == "first" else "s2"
+        usage = TokenUsage(prompt_tokens=200 if prompt == "first" else 50, total_tokens=200)
+        return RunSummary(output=f"answer {prompt}", session_id=session_id, complete=True, usage=usage)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    toolbars: list[object] = []
+
+    def fake_prompt_for_input(session, **kwargs):
+        toolbars.append(kwargs.get("bottom_toolbar"))
+        return next(prompts)
+
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert calls == [
+        {"prompt": "first", "session_id": None},
+        {"prompt": "second", "session_id": None},
+    ]
+    assert "Started a new session." in rendered
+    assert "context used" not in rendered
+    assert "context used 200 / 1,000 (20.0%)" in str(toolbars)
+    assert "context used 50 / 1,000 (5.0%)" in str(toolbars)
+    assert "context used unknown / 1,000" in str(toolbars)
 
 
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():
@@ -453,7 +575,7 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
     events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
 
-    def fake_prompt_for_input(session):
+    def fake_prompt_for_input(session, **kwargs):
         return next(events)
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
@@ -478,7 +600,7 @@ def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, m
     )
     calls = 0
 
-    def fake_prompt_for_input(session):
+    def fake_prompt_for_input(session, **kwargs):
         nonlocal calls
         calls += 1
         return next(events)

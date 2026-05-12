@@ -60,8 +60,8 @@ def test_visible_sessions_returns_current_scroll_window():
 def test_format_session_choices_numbers_recent_entries():
     rendered = format_session_choices([Entry("abc"), Entry("def")])
 
-    assert "1. abc  updated=100  tokens=42" in rendered
-    assert "2. def  updated=100  tokens=42" in rendered
+    assert "1. abc  updated=100  history_tokens=42" in rendered
+    assert "2. def  updated=100  history_tokens=42" in rendered
 
 
 def test_resolve_session_selection_accepts_number_exact_id_and_unique_prefix():

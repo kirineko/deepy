@@ -50,7 +50,7 @@ def format_resume_session_label(preview: ResumeSessionPreview) -> str:
     meta = (
         f"  {format_session_time(preview.updated_at)}"
         f" · {preview.status}"
-        f" · tokens {preview.active_tokens:,}"
+        f" · history {preview.active_tokens:,} est"
         f" · {preview.id[:8]}"
     )
     return f"{title}\n{meta}"

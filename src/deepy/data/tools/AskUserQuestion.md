@@ -1,16 +1,10 @@
 ## AskUserQuestion
 
-Use `AskUserQuestion` only when progress is blocked by missing user intent or a required decision.
+Ask the user only when progress is blocked by missing intent or a required decision.
 
-Parameters:
+Args: `questions` (non-empty array). Each question needs `question` and non-empty `options`;
+each option needs `label` and may include `description`. Use `multiSelect=true` only when
+multiple choices are allowed.
 
-- `questions`: A non-empty array of question objects.
-- Each question object must include `question` and a non-empty `options` array.
-- Each option must include `label`; `description` is optional.
-- Set `multiSelect` to `true` only when the user may choose more than one option.
-
-Result:
-
-- Returns the standard tool result JSON.
-- Sets `awaitUserResponse` to `true` so the UI can wait for the user's answer.
-- Includes `metadata.kind = "ask_user_question"` and normalized `metadata.questions`.
+Returns standard JSON with `awaitUserResponse=true`, `metadata.kind="ask_user_question"`,
+and normalized questions.

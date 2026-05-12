@@ -85,10 +85,13 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
         runtime_context="Runtime context here.",
     )
 
-    assert "Keep the user's current task" in prompt
+    assert "Keep the latest user task" in prompt
     assert "Follow local rules." in prompt
     assert "## WebSearch" in prompt
     assert "## bash" in prompt
+    assert "Existing targeted changes -> `edit`" in prompt
+    assert "new files or explicit whole-file replacement -> `write`" in prompt
+    assert "Prefer `edit` over `write` for existing files" in prompt
     assert "demo - Demo skill" in prompt
     assert "Runtime context here." in prompt
 

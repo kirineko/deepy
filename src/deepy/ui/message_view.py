@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,13 @@ MAX_SUMMARY_CHARS = 160
 MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
+STYLE_DIFF_ADDED = "#e5e7eb on #14532d"
+STYLE_DIFF_ADDED_GUTTER = "#cbd5e1 on #14532d"
+STYLE_DIFF_REMOVED = "#e5e7eb on #7f1d1d"
+STYLE_DIFF_REMOVED_GUTTER = "#cbd5e1 on #7f1d1d"
+STYLE_WRITE_PREVIEW_GUTTER = "#94a3b8 on #1f2937"
+STYLE_WRITE_PREVIEW_CONTENT = "#d7def8 on #1f2937"
+STYLE_WRITE_PREVIEW_REMOVED = "#fecaca on #7f1d1d"
 ROLE_TITLES = {
     "user": "You",
     "assistant": "Deepy",
@@ -35,6 +43,16 @@ class DiffPreviewLine:
     marker: str
     content: str
     kind: str
+    old_lineno: int | None = None
+    new_lineno: int | None = None
+
+
+@dataclass(frozen=True)
+class DiffPreview:
+    path: str | None
+    added: int
+    removed: int
+    lines: list[DiffPreviewLine]
 
 
 @dataclass(frozen=True)
@@ -134,41 +152,129 @@ def tool_diff_preview_lines(output: str) -> list[DiffPreviewLine]:
 
 
 def render_tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> Group | None:
-    diff = tool_diff_preview(output, max_lines=max_lines)
+    view = parse_tool_output(output)
+    raw_diff = _tool_diff_text(view)
+    if not raw_diff:
+        return None
+    diff = raw_diff if view.name.lower() == "write" else _limit_lines(raw_diff, max_lines=max_lines)
     if not diff:
         return None
-    lines = parse_diff_preview(diff)
-    if not lines:
+    preview = parse_diff_preview_view(diff, path=view.path)
+    if not preview.lines:
         return None
-    return Group(*(render_diff_preview_line(line) for line in lines))
+    if view.name.lower() == "write":
+        return Group(
+            render_diff_preview_header(preview, label="Wrote"),
+            *(render_write_preview_line(line) for line in preview.lines),
+        )
+    return Group(
+        render_diff_preview_header(preview, label="Edited"),
+        *(render_diff_preview_line(line) for line in preview.lines),
+    )
+
+
+def parse_diff_preview_view(diff_preview: str, *, path: str | None = None) -> DiffPreview:
+    lines = parse_diff_preview(diff_preview)
+    return DiffPreview(
+        path=path or _diff_path(diff_preview),
+        added=sum(1 for line in lines if line.kind == "added"),
+        removed=sum(1 for line in lines if line.kind == "removed"),
+        lines=lines,
+    )
+
+
+def render_diff_preview_header(preview: DiffPreview, *, label: str) -> Text:
+    if preview.path:
+        label = f"{label} {preview.path}"
+    label = f"{label} (+{preview.added} -{preview.removed})"
+    return Text(f"• {label}", style="bold bright_blue")
 
 
 def render_diff_preview_line(line: DiffPreviewLine) -> Text:
     content = line.content if line.content else " "
+    old_lineno = _line_number_text(line.old_lineno)
+    new_lineno = _line_number_text(line.new_lineno)
     if line.kind == "added":
-        return Text(content, style="white on dark_green")
+        return Text.assemble(
+            (f"{old_lineno} {new_lineno} + ", STYLE_DIFF_ADDED_GUTTER),
+            (content, STYLE_DIFF_ADDED),
+        )
     if line.kind == "removed":
-        return Text(content, style="white on dark_red")
-    return Text(content, style=STYLE_MUTED)
+        return Text.assemble(
+            (f"{old_lineno} {new_lineno} - ", STYLE_DIFF_REMOVED_GUTTER),
+            (content, STYLE_DIFF_REMOVED),
+        )
+    return Text.assemble(
+        (f"{old_lineno} {new_lineno}   ", STYLE_MUTED),
+        (content, STYLE_MUTED),
+    )
+
+
+def render_write_preview_line(line: DiffPreviewLine) -> Text:
+    content = line.content if line.content else " "
+    lineno = line.new_lineno if line.new_lineno is not None else line.old_lineno
+    marker = "-" if line.kind == "removed" else " "
+    gutter_style = (
+        STYLE_DIFF_REMOVED_GUTTER if line.kind == "removed" else STYLE_WRITE_PREVIEW_GUTTER
+    )
+    content_style = STYLE_WRITE_PREVIEW_REMOVED if line.kind == "removed" else STYLE_WRITE_PREVIEW_CONTENT
+    return Text.assemble(
+        (f"{_line_number_text(lineno)} {marker} ", gutter_style),
+        (content, content_style),
+    )
 
 
 def parse_diff_preview(diff_preview: str) -> list[DiffPreviewLine]:
     lines: list[DiffPreviewLine] = []
+    old_lineno: int | None = None
+    new_lineno: int | None = None
     for line in diff_preview.splitlines():
-        if not line or line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@ "):
+        if not line or line.startswith("--- ") or line.startswith("+++ "):
+            continue
+        hunk = _parse_hunk_header(line)
+        if hunk is not None:
+            old_lineno, new_lineno = hunk
+            continue
+        if line.startswith("@@"):
             continue
         if line.startswith("+"):
-            lines.append(DiffPreviewLine(marker="+", content=line[1:], kind="added"))
+            lines.append(
+                DiffPreviewLine(
+                    marker="+",
+                    content=line[1:],
+                    kind="added",
+                    old_lineno=None,
+                    new_lineno=new_lineno,
+                )
+            )
+            if new_lineno is not None:
+                new_lineno += 1
         elif line.startswith("-"):
-            lines.append(DiffPreviewLine(marker="-", content=line[1:], kind="removed"))
+            lines.append(
+                DiffPreviewLine(
+                    marker="-",
+                    content=line[1:],
+                    kind="removed",
+                    old_lineno=old_lineno,
+                    new_lineno=None,
+                )
+            )
+            if old_lineno is not None:
+                old_lineno += 1
         else:
             lines.append(
                 DiffPreviewLine(
                     marker=" ",
                     content=line[1:] if line.startswith(" ") else line,
                     kind="context",
+                    old_lineno=old_lineno,
+                    new_lineno=new_lineno,
                 )
             )
+            if old_lineno is not None:
+                old_lineno += 1
+            if new_lineno is not None:
+                new_lineno += 1
     return lines
 
 
@@ -271,6 +377,35 @@ def _tool_diff_text(view: ToolOutputView) -> str | None:
     return view.diff_preview or view.diff
 
 
+def _parse_hunk_header(line: str) -> tuple[int, int] | None:
+    match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _diff_path(diff_preview: str) -> str | None:
+    for line in diff_preview.splitlines():
+        if line.startswith("+++ "):
+            return _normalize_diff_path(line[4:].strip())
+    for line in diff_preview.splitlines():
+        if line.startswith("--- "):
+            return _normalize_diff_path(line[4:].strip())
+    return None
+
+
+def _normalize_diff_path(path: str) -> str | None:
+    if path == "/dev/null":
+        return None
+    if path.startswith("a/") or path.startswith("b/"):
+        path = path[2:]
+    return path or None
+
+
+def _line_number_text(value: int | None) -> str:
+    return f"{value:>4}" if value is not None else "    "
+
+
 def _tool_progress_detail(view: ToolOutputView) -> str:
     if view.error:
         return _truncate(view.error)
@@ -310,6 +445,9 @@ def _format_tool_params_snippet(
     *,
     project_root: str | None,
 ) -> str:
+    if tool_name == "write":
+        return _format_write_params_snippet(args, project_root=project_root)
+
     if tool_name == "bash":
         command = args.get("command")
         description = args.get("description")
@@ -324,9 +462,30 @@ def _format_tool_params_snippet(
         return ""
     value = args[first_key]
     text = value if isinstance(value, str) else json_utils.dumps(value)
-    if tool_name == "read" and project_root and text.startswith(project_root):
-        return text[len(project_root) :].lstrip("/\\")
+    if tool_name == "read":
+        return _shorten_project_path(text, project_root=project_root)
     return text
+
+
+def _format_write_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
+    path = _string_or_none(args.get("file_path")) or _string_or_none(args.get("path"))
+    content = args.get("content")
+    path_text = _shorten_project_path(path, project_root=project_root) if path else "file"
+    if not isinstance(content, str):
+        return path_text
+    return f"{path_text} ({_text_size_summary(content)})"
+
+
+def _text_size_summary(text: str) -> str:
+    line_count = 0 if not text else text.count("\n") + 1
+    line_label = "line" if line_count == 1 else "lines"
+    return f"{line_count:,} {line_label}, {len(text):,} chars"
+
+
+def _shorten_project_path(path: str, *, project_root: str | None) -> str:
+    if project_root and path.startswith(project_root):
+        return path[len(project_root) :].lstrip("/\\")
+    return path
 
 
 def _format_tool_result_snippet(value: str, *, max_chars: int) -> str:

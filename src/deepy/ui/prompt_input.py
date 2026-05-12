@@ -22,19 +22,18 @@ DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
 CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
 PROMPT_TOOLBAR_BACKGROUND = "#24283b"
 PROMPT_TOOLBAR_FOREGROUND = "#d7def8"
+PROMPT_TOOLBAR_HELP = "Enter send · Shift+Enter newline · / commands · Esc interrupt · Ctrl+D twice exit"
 PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
 PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
-PROMPT_TOOLBAR: AnyFormattedText = [
-    (
-        "class:toolbar",
-        "Enter send · Shift+Enter newline · / commands · Esc interrupt · Ctrl+D twice exit",
-    )
-]
+PROMPT_TOOLBAR: AnyFormattedText = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
 PROMPT_STYLE = Style.from_dict(
     {
         "prompt": "ansicyan bold",
         "placeholder": "#8a90aa",
-        "toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND} bold",
+        "toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
+        "toolbar.context": f"bg:{PROMPT_TOOLBAR_BACKGROUND} #8bd5ca bold",
+        "toolbar.separator": f"bg:{PROMPT_TOOLBAR_BACKGROUND} #6c7086",
+        "toolbar.help": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
         "bottom-toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
     }
 )
@@ -116,13 +115,24 @@ def install_shift_enter_key_sequence_overrides() -> None:
 def prompt_for_input(
     session: PromptSession[str],
     message: AnyFormattedText | None = None,
+    bottom_toolbar: AnyFormattedText | None = None,
 ) -> str:
     prompt_message = PROMPT_MESSAGE if message is None else message
     return session.prompt(
         prompt_message,
         placeholder=PROMPT_PLACEHOLDER,
-        bottom_toolbar=PROMPT_TOOLBAR,
+        bottom_toolbar=PROMPT_TOOLBAR if bottom_toolbar is None else bottom_toolbar,
     ).strip()
+
+
+def build_prompt_toolbar(context_status: str = "") -> AnyFormattedText:
+    if not context_status:
+        return PROMPT_TOOLBAR
+    return [
+        ("class:toolbar.context", context_status),
+        ("class:toolbar.separator", " · "),
+        ("class:toolbar.help", PROMPT_TOOLBAR_HELP),
+    ]
 
 
 def format_selected_skills_status(skills: list[SkillInfo]) -> str:

@@ -1,13 +1,8 @@
 ## WebSearch
 
-Use `WebSearch` when current or external information is required and the configured search backend is available.
+Search when current or external information is required.
 
-Parameters:
+Args: `query`.
 
-- `query`: The search query.
-
-Behavior:
-
-- A configured local command is preferred.
-- A configured API endpoint may be used when present.
-- If no backend is configured, the tool returns a clear failure result.
+Uses the configured local command first, then API endpoint if present. If no backend is
+configured, returns a clear failure result.

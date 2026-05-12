@@ -19,6 +19,8 @@ from .context import build_session_input_callback
 from .events import DeepyStreamEvent, normalize_stream_event
 from .provider import ProviderBundle, build_provider_bundle
 
+DEFAULT_MAX_TURNS = 100
+
 
 @dataclass(frozen=True)
 class RunSummary:
@@ -39,13 +41,14 @@ async def run_prompt_once(
     provider: ProviderBundle | None = None,
     emit: Callable[[str], None] | None = None,
     emit_event: Callable[[DeepyStreamEvent], None] | None = None,
-    max_turns: int = 10,
+    max_turns: int = DEFAULT_MAX_TURNS,
     session_id: str | None = None,
     skill_names: list[str] | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
     from agents import RunConfig, Runner
+    from agents.exceptions import MaxTurnsExceeded
 
     root = (project_root or Path.cwd()).resolve()
     resolved_settings = settings or load_settings()
@@ -114,6 +117,18 @@ async def run_prompt_once(
                 _cancel_stream_result(result, mode=cancel_mode)
                 interrupted = True
                 break
+    except MaxTurnsExceeded:
+        result_usage = usage_from_run_result(result)
+        if result_usage.known:
+            usage = result_usage
+        session.record_usage(usage)
+        return RunSummary(
+            output=_max_turns_output(chunks, max_turns=max_turns),
+            session_id=session.session_id,
+            complete=False,
+            status="max_turns_exceeded",
+            usage=usage,
+        )
     except Exception as exc:
         log_api_error(
             {
@@ -188,6 +203,16 @@ def _resolve_loaded_skills(
             loaded_skills.append(skill)
         return loaded_skills
     return match_skills_for_prompt(discover_skills(root), prompt)
+
+
+def _max_turns_output(chunks: list[str], *, max_turns: int) -> str:
+    message = (
+        f"Stopped after reaching the max turn limit ({max_turns}). "
+        "The session was preserved; review the tool output above and ask Deepy to continue, "
+        "or narrow the request if it keeps looping."
+    )
+    partial = "".join(chunks).strip()
+    return f"{partial}\n\n{message}" if partial else message
 
 
 def _cancel_stream_result(

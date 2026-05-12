@@ -753,7 +753,9 @@ def test_function_tool_schemas_match_legacy_names(tmp_path):
     ]
     assert tools["write"].params_json_schema["required"] == ["file_path", "content"]
     assert list(tools["write"].params_json_schema["properties"]) == ["file_path", "content"]
+    assert "prefer edit" in tools["write"].description
     assert tools["edit"].params_json_schema["required"] == ["old_string", "new_string"]
+    assert "Prefer this over write" in tools["edit"].description
     assert list(tools["edit"].params_json_schema["properties"]) == [
         "file_path",
         "snippet_id",

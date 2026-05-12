@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-AGENT_DRIFT_GUARD = """Keep the user's current task and latest instructions in focus.
-When the conversation is long, preserve explicit constraints, file paths, commands, test results,
-and decisions before compressing incidental discussion."""
+AGENT_DRIFT_GUARD = (
+    "Keep the latest user task in focus; preserve explicit constraints, paths, commands, "
+    "test results, and decisions when compressing context."
+)
 
 
 def load_project_rules(project_root: Path, *, home: Path | None = None) -> str:

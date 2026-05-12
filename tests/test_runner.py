@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 from agents import ModelSettings
+from agents.exceptions import MaxTurnsExceeded
 
-from deepy.config import Settings
+from deepy.config import ContextConfig, Settings
 from deepy.config.settings import LoggingConfig, NotifyConfig
 from deepy.llm.provider import ProviderBundle
-from deepy.llm.runner import run_prompt_once
+from deepy.llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
 
 
 class FakeStream:
@@ -90,6 +91,27 @@ class MultiUsageStream:
             )()
 
 
+class ContextUsageStream:
+    final_output = "ok"
+    is_complete = True
+    context_wrapper = SimpleNamespace(
+        usage=SimpleNamespace(
+            requests=2,
+            input_tokens=30,
+            output_tokens=7,
+            total_tokens=37,
+            request_usage_entries=[
+                SimpleNamespace(input_tokens=10, output_tokens=2, total_tokens=12),
+                SimpleNamespace(input_tokens=20, output_tokens=5, total_tokens=25),
+            ],
+        )
+    )
+
+    async def stream_events(self):
+        if False:
+            yield None
+
+
 class FailingStream:
     final_output = None
     is_complete = False
@@ -97,6 +119,19 @@ class FailingStream:
     async def stream_events(self):
         raise RuntimeError("provider failed api_key=sk-secret")
         yield
+
+
+class MaxTurnsStream:
+    final_output = None
+    is_complete = False
+
+    async def stream_events(self):
+        yield type(
+            "Event",
+            (),
+            {"type": "raw_response_event", "data": type("Data", (), {"delta": "partial"})()},
+        )()
+        raise MaxTurnsExceeded("Max turns exceeded")
 
 
 class CancellableStream:
@@ -233,6 +268,33 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_run_prompt_once_wires_compacting_session_input_callback(monkeypatch, tmp_path):
+    compacted_inputs: list[list[dict[str, object]]] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            history = [{"role": "user", "content": "old " * 1000}]
+            new_input = [{"role": "user", "content": "current"}]
+            compacted_inputs.append(run_config.session_input_callback(history, new_input))
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "say hello",
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=100, compact_trigger_ratio=0.5)),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    compacted = compacted_inputs[0]
+    assert compacted[0]["role"] == "system"
+    assert "compacted by Deepy" in str(compacted[0]["content"])
+    assert compacted[-1] == {"role": "user", "content": "current"}
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_once_uses_requested_session(monkeypatch, tmp_path):
     captured_session_ids: list[str] = []
     captured_inputs: list[object] = []
@@ -299,6 +361,32 @@ async def test_run_prompt_once_accumulates_multiple_stream_usage_events(monkeypa
     assert summary.usage.prompt_tokens == 10
     assert summary.usage.completion_tokens == 3
     assert summary.usage.total_tokens == 13
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_uses_sdk_accumulated_usage_for_multiple_requests(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return ContextUsageStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "usage",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.usage.requests == 2
+    assert summary.usage.prompt_tokens == 30
+    assert summary.usage.completion_tokens == 7
+    assert summary.usage.total_tokens == 37
+    assert len(summary.usage.request_usage_entries) == 2
 
 
 @pytest.mark.asyncio
@@ -389,7 +477,7 @@ async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
     assert summary.output == "hello"
     assert debug_entries[0]["request"] == {
         "input": "say hello",
-        "max_turns": 10,
+        "max_turns": DEFAULT_MAX_TURNS,
     }
     assert debug_entries[0]["response"] == {"output": "hello", "usage": {}}
     assert notify_calls and notify_calls[0][0] == "/tmp/notify.sh"
@@ -419,9 +507,37 @@ async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_
     assert error_entries[0]["location"] == "deepy.llm.runner.run_prompt_once"
     assert error_entries[0]["request"] == {
         "input": "explode",
-        "max_turns": 10,
+        "max_turns": DEFAULT_MAX_TURNS,
     }
     assert isinstance(error_entries[0]["error"], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_returns_summary_when_max_turns_exceeded(monkeypatch, tmp_path):
+    error_entries: list[dict] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return MaxTurnsStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    monkeypatch.setattr("deepy.llm.runner.log_api_error", error_entries.append)
+
+    summary = await run_prompt_once(
+        "keep going",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        max_turns=5,
+    )
+
+    assert summary.complete is False
+    assert summary.status == "max_turns_exceeded"
+    assert "partial" in summary.output
+    assert "max turn limit (5)" in summary.output
+    assert summary.session_id
+    assert error_entries == []
 
 
 @pytest.mark.asyncio

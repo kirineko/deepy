@@ -85,7 +85,7 @@ def _usage_rows(usage: UsageFields, *, assistant_count: int, model: str) -> list
     col_reasoning = 14
     table_width = col_model + col_reqs + col_input + col_output + col_cached + col_reasoning
     header = (
-        _pad_right("Model Usage", col_model)
+        _pad_right("Cumulative Model Usage", col_model)
         + _pad_left("Reqs", col_reqs)
         + _pad_left("Input Tokens", col_input)
         + _pad_left("Output Tokens", col_output)

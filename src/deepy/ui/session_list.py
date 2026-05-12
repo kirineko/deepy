@@ -68,7 +68,7 @@ def visible_sessions(
 def format_session_choice(entry: SessionChoice, index: int) -> str:
     return (
         f"{index}. {entry.id}  updated={entry.updated_at}  "
-        f"tokens={entry.active_tokens}"
+        f"history_tokens={entry.active_tokens}"
     )
 
 

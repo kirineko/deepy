@@ -74,8 +74,9 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         FunctionTool(
             name="write",
             description=(
-                "Create files or overwrite them with a complete string payload. "
-                "Prefer edit for existing files."
+                "Create new files or perform an intentional full-file replacement. "
+                "For existing files, prefer edit for functions, imports, tests, blocks, "
+                "or small sets of lines."
             ),
             params_json_schema=WRITE_SCHEMA,
             on_invoke_tool=invoke_write,
@@ -83,7 +84,10 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         ),
         FunctionTool(
             name="edit",
-            description="Perform scoped string replacements in files.",
+            description=(
+                "Perform scoped string replacements in existing files. Prefer this over write "
+                "for targeted code, import, test, comment, or block changes."
+            ),
             params_json_schema=EDIT_SCHEMA,
             on_invoke_tool=invoke_edit,
             strict_json_schema=False,

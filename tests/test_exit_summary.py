@@ -54,7 +54,7 @@ def test_build_exit_summary_text_shows_usage_and_reasoning_tokens():
     assert "Goodbye!" in summary
     assert "╭" in summary
     assert "╰" in summary
-    assert "Model Usage" in summary
+    assert "Cumulative Model Usage" in summary
     assert "Cached Tokens" in summary
     assert "Reasoning" in summary
     assert "mimo-v2.5-pro" in summary
@@ -70,4 +70,4 @@ def test_build_exit_summary_text_omits_usage_table_without_usage():
     summary = build_exit_summary_text(model="deepseek-v4-pro")
 
     assert "Goodbye!" in summary
-    assert "Model Usage" not in summary
+    assert "Cumulative Model Usage" not in summary

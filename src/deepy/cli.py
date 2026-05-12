@@ -14,7 +14,7 @@ from .config import Settings, load_settings, settings_to_toml_dict
 from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .errors import format_error_display
 from .llm.provider import build_provider_bundle
-from .llm.runner import run_prompt_once
+from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
 from .sessions import DeepyJsonlSession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .status import build_status_report, format_status_report, status_report_to_dict
@@ -52,7 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run a single non-interactive prompt.")
     run_parser.add_argument("prompt", nargs="+", help="Prompt text to send to Deepy.")
-    run_parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent turns.")
+    run_parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=DEFAULT_MAX_TURNS,
+        help="Maximum agent turns.",
+    )
     run_parser.add_argument("--session", help="Resume an existing session id.")
     run_parser.add_argument("--skill", action="append", default=[], help="Load a skill by name.")
 
@@ -323,7 +328,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             return 0
         for entry in entries:
             print(
-                f"{entry.id}\tupdated={entry.updated_at}\ttokens={entry.active_tokens}\t"
+                f"{entry.id}\tupdated={entry.updated_at}\thistory_tokens={entry.active_tokens}\t"
                 f"{format_usage_line(entry.usage)}"
             )
         return 0
