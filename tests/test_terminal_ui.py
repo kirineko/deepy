@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from rich.console import Console
 
@@ -18,7 +19,9 @@ from deepy.ui.terminal import _print_assistant_output
 from deepy.ui.terminal import _print_stream_event
 from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
+from deepy.ui.terminal import _format_duration_ms
 from deepy.ui.terminal import _run_once_with_status
+from deepy.ui.terminal import _working_status_text
 from deepy.utils import json as json_utils
 
 
@@ -450,6 +453,35 @@ def test_print_usage_footer_shows_known_usage():
     assert "turn usage input 10 · output 2 · total 12" in rendered
 
 
+def test_print_usage_footer_shows_turn_duration():
+    console = Console(record=True)
+
+    _print_usage_footer(
+        console,
+        RunSummary(
+            output="ok",
+            session_id="s1",
+            complete=True,
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            duration_ms=65_000,
+        ),
+    )
+
+    assert "turn usage time 1m 5s · input 10 · output 2 · total 12" in console.export_text()
+
+
+def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
+    rendered = _working_status_text(time.monotonic(), "Running read README.md").plain
+
+    assert "Working (0s · esc to interrupt)" in rendered
+    assert "Running read README.md" in rendered
+
+
+def test_format_duration_ms_formats_minutes_and_hours():
+    assert _format_duration_ms(352_000) == "5m 52s"
+    assert _format_duration_ms(3_660_000) == "1h 1m"
+
+
 def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     console = Console(record=True)
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
@@ -487,6 +519,9 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     async def fake_run_once(prompt, **kwargs):
         calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
         session_id = "s1" if prompt == "first" else "s2"
+        DeepyJsonlSession.create(tmp_path, session_id=session_id)._touch_index(
+            active_tokens=200 if prompt == "first" else 50
+        )
         usage = TokenUsage(prompt_tokens=200 if prompt == "first" else 50, total_tokens=200)
         return RunSummary(output=f"answer {prompt}", session_id=session_id, complete=True, usage=usage)
 
@@ -514,9 +549,9 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     ]
     assert "Started a new session." in rendered
     assert "context used" not in rendered
-    assert "context used 200 / 1,000 (20.0%)" in str(toolbars)
-    assert "context used 50 / 1,000 (5.0%)" in str(toolbars)
-    assert "context used unknown / 1,000" in str(toolbars)
+    assert "context used 0 / 800 to compact (0.0%)" in str(toolbars)
+    assert "context used 200 / 800 to compact (25.0%)" in str(toolbars)
+    assert "context used 50 / 800 to compact (6.2%)" in str(toolbars)
 
 
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():

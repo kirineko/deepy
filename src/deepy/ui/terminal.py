@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,7 +92,11 @@ def run_interactive(
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
-    context_status = _format_context_footer(None, settings=settings)
+    context_status = _format_context_footer(
+        session_id,
+        project_root=root,
+        settings=settings,
+    )
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
     )
@@ -145,9 +151,13 @@ def run_interactive(
             )
             if next_session == "__exit__":
                 return 0
-            if slash.name in {"new", "resume"}:
-                context_status = _format_context_footer(None, settings=settings)
             session_id = next_session
+            if slash.name in {"new", "resume"}:
+                context_status = _format_context_footer(
+                    session_id,
+                    project_root=root,
+                    settings=settings,
+                )
             continue
 
         _print_user_input(output, text)
@@ -177,7 +187,11 @@ def run_interactive(
                 session_id = summary.session_id
         _print_assistant_output(output, summary.output)
         _print_usage_footer(output, summary, settings=settings, project_root=root)
-        context_status = _format_context_footer(summary, settings=settings)
+        context_status = _format_context_footer(
+            summary.session_id,
+            project_root=root,
+            settings=settings,
+        )
 
 
 def _run_once_with_status(
@@ -190,20 +204,33 @@ def _run_once_with_status(
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
     renderer: TerminalStreamRenderer | None = None
+    started_at = time.monotonic()
 
-    with console.status(Text("Deepy is working...", style=STYLE_MUTED), spinner="dots") as status:
+    with console.status(_working_status_text(started_at), spinner="dots") as status:
         renderer = TerminalStreamRenderer(
             console,
             project_root=project_root_text,
             status=status,
+            status_started_at=started_at,
         )
+        stop_status_refresh = threading.Event()
+        status_thread = threading.Thread(
+            target=_refresh_working_status,
+            args=(renderer, stop_status_refresh),
+            daemon=True,
+        )
+        status_thread.start()
 
-        def emit_event(event: DeepyStreamEvent) -> None:
-            renderer(event)
-            if callable(original_emit_event):
-                original_emit_event(event)
+        try:
+            def emit_event(event: DeepyStreamEvent) -> None:
+                renderer(event)
+                if callable(original_emit_event):
+                    original_emit_event(event)
 
-        summary = asyncio.run(run_once(prompt, **kwargs, emit_event=emit_event))
+            summary = asyncio.run(run_once(prompt, **kwargs, emit_event=emit_event))
+        finally:
+            stop_status_refresh.set()
+            status_thread.join(timeout=0.2)
 
     renderer.flush()
     return summary
@@ -216,10 +243,15 @@ class TerminalStreamRenderer:
         *,
         project_root: str | None = None,
         status: Any | None = None,
+        status_started_at: float | None = None,
     ) -> None:
         self.console = console
         self.project_root = project_root
         self.status = status
+        self.status_started_at = (
+            status_started_at if status_started_at is not None else time.monotonic()
+        )
+        self.status_detail = ""
         self.pending_tool_calls: dict[str, ToolCallDisplay] = {}
         self.reasoning_text = ""
         self.reasoning_flushed = False
@@ -240,11 +272,17 @@ class TerminalStreamRenderer:
         self.reasoning_text += text
         summary = build_thinking_summary(self.reasoning_text)
         if self.status is not None and summary:
-            self.status.update(Text.assemble(("Thinking  ", STYLE_MUTED), (summary, STYLE_MUTED)))
+            self.update_status(f"Thinking {summary}")
 
     def set_tool_status(self, summary: str) -> None:
         if self.status is not None and summary:
-            self.status.update(Text.assemble(("Running  ", STYLE_MUTED), (summary, STYLE_MUTED)))
+            self.update_status(f"Running {summary}")
+
+    def update_status(self, detail: str | None = None) -> None:
+        if detail is not None:
+            self.status_detail = detail
+        if self.status is not None:
+            self.status.update(_working_status_text(self.status_started_at, self.status_detail))
 
     def flush(self) -> None:
         if self.reasoning_flushed:
@@ -651,12 +689,19 @@ def _print_usage_footer(
     project_root: Path | None = None,
 ) -> None:
     if summary.usage.known:
-        console.print(f"[{STYLE_MUTED}]turn usage[/] {_format_turn_usage_line(summary.usage)}")
+        duration = _format_duration_ms(summary.duration_ms) if summary.duration_ms > 0 else ""
+        prefix = f"time {duration} · " if duration else ""
+        console.print(
+            f"[{STYLE_MUTED}]turn usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
+        )
+    elif summary.duration_ms > 0:
+        console.print(f"[{STYLE_MUTED}]turn time[/] {_format_duration_ms(summary.duration_ms)}")
 
 
 def _format_context_footer(
-    summary: RunSummary | None,
+    session_id: str | None,
     *,
+    project_root: Path | None = None,
     settings: Settings | None = None,
 ) -> str:
     if settings is None:
@@ -667,22 +712,77 @@ def _format_context_footer(
     if window_tokens <= 0:
         return ""
 
-    usage = summary.usage if summary is not None else None
-    used_tokens = usage.prompt_tokens if usage is not None and usage.known else 0
-    used_text = f"{used_tokens:,}" if used_tokens > 0 else "unknown"
-    used_ratio = f" ({used_tokens / window_tokens * 100:.1f}%)" if used_tokens > 0 else ""
-    parts = [f"context used {used_text} / {window_tokens:,}{used_ratio}"]
-
+    used_tokens = _session_active_tokens(project_root, session_id)
+    used_text = f"{used_tokens:,}" if used_tokens is not None else "unknown"
+    used_ratio = (
+        f" ({used_tokens / window_tokens * 100:.1f}%)"
+        if used_tokens is not None
+        else ""
+    )
     if compact_threshold > 0:
-        compact_ratio = compact_threshold / window_tokens * 100
-        parts.append(f"compact at {compact_threshold:,} ({compact_ratio:.1f}%)")
+        compact_progress = (
+            f" ({used_tokens / compact_threshold * 100:.1f}%)"
+            if used_tokens is not None
+            else ""
+        )
+        parts = [f"context used {used_text} / {compact_threshold:,} to compact{compact_progress}"]
+        parts.append(f"window {window_tokens:,}")
+        if used_tokens is not None and used_tokens >= compact_threshold:
+            parts.append("compact next request")
+    else:
+        parts = [f"context used {used_text} / {window_tokens:,}{used_ratio}"]
 
     return " · ".join(parts)
+
+
+def _session_active_tokens(project_root: Path | None, session_id: str | None) -> int | None:
+    if not session_id:
+        return 0
+    if project_root is None:
+        return None
+    try:
+        entries = list_session_entries(project_root)
+    except Exception:
+        return None
+    entry = next((item for item in entries if item.id == session_id), None)
+    return entry.active_tokens if entry is not None else None
 
 
 def _format_turn_usage_line(usage: TokenUsage) -> str:
     prefix = f"requests {usage.requests:,} · " if usage.requests > 0 else ""
     return f"{prefix}{format_usage_line(usage)}"
+
+
+def _refresh_working_status(
+    renderer: TerminalStreamRenderer,
+    stop_event: threading.Event,
+) -> None:
+    while not stop_event.wait(1):
+        renderer.update_status()
+
+
+def _working_status_text(started_at: float, detail: str = "") -> Text:
+    elapsed = _format_duration_ms(int((time.monotonic() - started_at) * 1000)) or "0s"
+    text = Text.assemble(
+        ("Working ", f"bold {STYLE_MUTED}"),
+        (f"({elapsed} · esc to interrupt)", STYLE_MUTED),
+    )
+    if detail:
+        text.append(" · ", style=STYLE_MUTED)
+        text.append(detail, style=STYLE_MUTED)
+    return text
+
+
+def _format_duration_ms(duration_ms: int) -> str:
+    seconds = max(0, int(duration_ms // 1000))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    remaining_seconds = seconds % 60
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
 
 
 def _print_user_input(console: Console, text: str) -> None:

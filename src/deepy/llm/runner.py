@@ -31,6 +31,7 @@ class RunSummary:
     status: str = "completed"
     pending_questions: list[dict[str, Any]] = field(default_factory=list)
     usage: TokenUsage = field(default_factory=TokenUsage)
+    duration_ms: int = 0
 
 
 async def run_prompt_once(
@@ -121,6 +122,7 @@ async def run_prompt_once(
         result_usage = usage_from_run_result(result)
         if result_usage.known:
             usage = result_usage
+        duration_ms = int((time.time() - started_at) * 1000)
         session.record_usage(usage)
         return RunSummary(
             output=_max_turns_output(chunks, max_turns=max_turns),
@@ -128,6 +130,7 @@ async def run_prompt_once(
             complete=False,
             status="max_turns_exceeded",
             usage=usage,
+            duration_ms=duration_ms,
         )
     except Exception as exc:
         log_api_error(
@@ -186,6 +189,7 @@ async def run_prompt_once(
         ),
         pending_questions=pending_questions,
         usage=usage,
+        duration_ms=duration_ms,
     )
 
 

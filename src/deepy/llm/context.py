@@ -28,12 +28,6 @@ def estimate_tokens_for_item(item: Any) -> int:
     if isinstance(item, str):
         return estimate_tokens_for_text(item)
     if isinstance(item, dict):
-        total = 0
-        for key in ("role", "type", "name", "content", "output"):
-            if key in item:
-                total += estimate_tokens_for_item(item[key])
-        if total:
-            return total
         return estimate_tokens_for_text(json_utils.dumps(item))
     if isinstance(item, list):
         return sum(estimate_tokens_for_item(part) for part in item)

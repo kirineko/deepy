@@ -4,6 +4,7 @@ from deepy.config.settings import ContextConfig, Settings
 from deepy.llm.context import (
     build_session_input_callback,
     compact_items_for_context,
+    estimate_tokens_for_item,
     estimate_tokens_for_items,
 )
 from deepy.prompts import build_compact_prompt
@@ -41,6 +42,28 @@ def test_session_input_callback_uses_resolved_settings_threshold():
 
     assert compacted[0]["role"] == "system"
     assert compacted[-1] == new_input[0]
+
+
+def test_token_estimate_counts_tool_call_arguments():
+    with_arguments = estimate_tokens_for_item(
+        {
+            "type": "function_call",
+            "name": "write",
+            "call_id": "call-1",
+            "arguments": '{"file_path":"big.py","content":"' + ("x" * 2000) + '"}',
+        }
+    )
+    without_arguments = estimate_tokens_for_item(
+        {
+            "type": "function_call",
+            "name": "write",
+            "call_id": "call-1",
+            "arguments": "{}",
+        }
+    )
+
+    assert with_arguments > without_arguments
+    assert with_arguments > 100
 
 
 def test_build_compact_prompt_serializes_session_messages_as_jsonl():
