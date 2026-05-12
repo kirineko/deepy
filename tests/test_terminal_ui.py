@@ -4,7 +4,7 @@ import asyncio
 
 from rich.console import Console
 
-from deepy.config import Settings
+from deepy.config import ContextConfig, Settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.sessions import DeepyJsonlSession, SessionEntry
@@ -18,6 +18,7 @@ from deepy.ui.terminal import _print_stream_event
 from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
 from deepy.ui.terminal import _run_once_with_status
+from deepy.utils import json as json_utils
 
 
 def test_parse_slash_command_handles_argument():
@@ -263,6 +264,37 @@ def test_print_stream_event_merges_tool_call_and_output():
     assert "tool output:" not in rendered
 
 
+def test_print_stream_event_renders_diff_without_headers_or_markers():
+    console = Console(record=True, width=120)
+    output = {
+        "ok": True,
+        "name": "edit",
+        "output": "Edited file",
+        "error": None,
+        "metadata": {
+            "path": "/repo/src/lib.rs",
+            "diff": "--- a//repo/src/lib.rs\n+++ b//repo/src/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n same\n",
+        },
+        "awaitUserResponse": False,
+    }
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(kind="tool_output", text=json_utils.dumps(output)),
+    )
+
+    rendered = console.export_text()
+    assert "edit  ok" in rendered
+    assert "old" in rendered
+    assert "new" in rendered
+    assert "same" in rendered
+    assert "---" not in rendered
+    assert "+++" not in rendered
+    assert "@@" not in rendered
+    assert "-old" not in rendered
+    assert "+new" not in rendered
+
+
 def test_print_user_input_uses_prompt_marker():
     console = Console(record=True)
 
@@ -340,6 +372,30 @@ def test_print_usage_footer_shows_known_usage():
     assert "usage input 10 · output 2 · total 12" in rendered
 
 
+def test_print_usage_footer_shows_context_status(tmp_path):
+    console = Console(record=True)
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session._touch_index(active_tokens=250)
+
+    _print_usage_footer(
+        console,
+        RunSummary(
+            output="ok",
+            session_id="s1",
+            complete=True,
+            usage=TokenUsage(prompt_tokens=100, completion_tokens=2, total_tokens=102),
+        ),
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        project_root=tmp_path,
+    )
+
+    rendered = console.export_text()
+    assert "usage input 100 · output 2 · total 102" in rendered
+    assert "context current input 100" in rendered
+    assert "session 250 / 1,000 (25.0%)" in rendered
+    assert "compact at 800" in rendered
+
+
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():
     console = Console(record=True)
 
@@ -390,3 +446,47 @@ def test_run_once_with_status_returns_summary(tmp_path):
     )
 
     assert summary.output == "answer: hello"
+
+
+def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    calls = 0
+
+    def fake_prompt_for_input(session):
+        nonlocal calls
+        calls += 1
+        raise EOFError
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(Settings(), project_root=tmp_path, console=console)
+
+    rendered = console.export_text()
+    assert result == 0
+    assert calls == 2
+    assert "Press Ctrl+D again to exit." in rendered
+
+
+def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events = iter([EOFError, "", EOFError, EOFError])
+    calls = 0
+
+    def fake_prompt_for_input(session):
+        nonlocal calls
+        calls += 1
+        event = next(events)
+        if event is EOFError:
+            raise EOFError
+        return event
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(Settings(), project_root=tmp_path, console=console)
+
+    rendered = console.export_text()
+    assert result == 0
+    assert calls == 4
+    assert rendered.count("Press Ctrl+D again to exit.") == 2

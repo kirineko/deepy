@@ -26,7 +26,7 @@ PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message
 PROMPT_TOOLBAR: AnyFormattedText = [
     (
         "class:toolbar",
-        "Enter send · Shift+Enter newline · / commands · Esc interrupt",
+        "Enter send · Shift+Enter newline · / commands · Esc interrupt · Ctrl+D twice exit",
     )
 ]
 PROMPT_STYLE = Style.from_dict(

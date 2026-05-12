@@ -5,12 +5,12 @@ from typing import Any
 
 from rich.console import Group
 from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.text import Text
 
 from deepy.utils import json as json_utils
 from deepy.ui.styles import (
     STYLE_ASSISTANT,
+    STYLE_MUTED,
     STYLE_SYSTEM,
     STYLE_TOOL,
     STYLE_USER,
@@ -133,6 +133,25 @@ def tool_diff_preview_lines(output: str) -> list[DiffPreviewLine]:
     return parse_diff_preview(diff) if diff else []
 
 
+def render_tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> Group | None:
+    diff = tool_diff_preview(output, max_lines=max_lines)
+    if not diff:
+        return None
+    lines = parse_diff_preview(diff)
+    if not lines:
+        return None
+    return Group(*(render_diff_preview_line(line) for line in lines))
+
+
+def render_diff_preview_line(line: DiffPreviewLine) -> Text:
+    content = line.content if line.content else " "
+    if line.kind == "added":
+        return Text(content, style="white on dark_green")
+    if line.kind == "removed":
+        return Text(content, style="white on dark_red")
+    return Text(content, style=STYLE_MUTED)
+
+
 def parse_diff_preview(diff_preview: str) -> list[DiffPreviewLine]:
     lines: list[DiffPreviewLine] = []
     for line in diff_preview.splitlines():
@@ -216,9 +235,9 @@ def is_invisible_execution(content: str) -> bool:
 def render_tool_output(output: str) -> Group:
     view = parse_tool_output(output)
     parts: list[Any] = [Text(view.summary, style=status_style(view.ok))]
-    diff = tool_diff_preview(output)
+    diff = render_tool_diff_preview(output)
     if diff:
-        parts.append(Syntax(diff.rstrip(), "diff", theme="ansi_dark", word_wrap=False))
+        parts.append(diff)
     return Group(*parts)
 
 

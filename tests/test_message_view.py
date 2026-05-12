@@ -14,7 +14,9 @@ from deepy.ui.message_view import DiffPreviewLine
 from deepy.ui.message_view import is_invisible_execution
 from deepy.ui.message_view import parse_diff_preview
 from deepy.ui.message_view import parse_tool_output
+from deepy.ui.message_view import render_diff_preview_line
 from deepy.ui.message_view import render_message
+from deepy.ui.message_view import render_tool_diff_preview
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
 from deepy.ui.message_view import tool_diff_preview_lines
@@ -122,7 +124,47 @@ def test_render_tool_output_includes_summary_and_diff():
 
     rendered = console.export_text()
     assert "write ok - file" in rendered
-    assert "+new" in rendered
+    assert "new" in rendered
+    assert "+new" not in rendered
+
+
+def test_render_tool_diff_preview_hides_headers_and_markers():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "edit",
+            "output": "Edited file",
+            "error": None,
+            "metadata": {
+                "path": "file",
+                "diff": "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    console = Console(record=True, width=120)
+
+    console.print(render_tool_diff_preview(output))
+
+    rendered = console.export_text()
+    assert "old" in rendered
+    assert "new" in rendered
+    assert "same" in rendered
+    assert "---" not in rendered
+    assert "+++" not in rendered
+    assert "@@" not in rendered
+    assert "-old" not in rendered
+    assert "+new" not in rendered
+
+
+def test_render_diff_preview_line_uses_background_for_changes():
+    removed = render_diff_preview_line(DiffPreviewLine(marker="-", content="old", kind="removed"))
+    added = render_diff_preview_line(DiffPreviewLine(marker="+", content="new", kind="added"))
+
+    assert removed.plain == "old"
+    assert added.plain == "new"
+    assert "dark_red" in str(removed.style)
+    assert "dark_green" in str(added.style)
 
 
 def test_render_message_renders_user_and_assistant_panels():

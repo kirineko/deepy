@@ -30,7 +30,7 @@ from deepy.ui.message_view import (
     format_tool_call_summary,
     format_tool_progress_summary,
     parse_tool_output,
-    tool_diff_preview,
+    render_tool_diff_preview,
 )
 from deepy.ui.markdown import render_markdown
 from deepy.ui.prompt_input import create_prompt_session, prompt_for_input
@@ -88,6 +88,7 @@ def run_interactive(
     session_id: str | None = None
 
     loaded_skill_names: list[str] = []
+    eof_exit_pending = False
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
     )
@@ -104,10 +105,18 @@ def run_interactive(
     while True:
         try:
             text = prompt_for_input(prompt_session)
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
+            if eof_exit_pending:
+                output.print()
+                return 0
+            eof_exit_pending = True
+            output.print(f"[{STYLE_MUTED}]Press Ctrl+D again to exit.[/]")
+            continue
+        except KeyboardInterrupt:
             output.print()
             return 0
 
+        eof_exit_pending = False
         if not text:
             continue
 
@@ -152,7 +161,7 @@ def run_interactive(
                 )
                 session_id = summary.session_id
         _print_assistant_output(output, summary.output)
-        _print_usage_footer(output, summary)
+        _print_usage_footer(output, summary, settings=settings, project_root=root)
 
 
 def _run_once_with_status(
@@ -618,10 +627,57 @@ def _print_exit_summary(
     )
 
 
-def _print_usage_footer(console: Console, summary: RunSummary) -> None:
-    if not summary.usage.known:
-        return
-    console.print(f"[{STYLE_MUTED}]usage[/] {format_usage_line(summary.usage)}")
+def _print_usage_footer(
+    console: Console,
+    summary: RunSummary,
+    *,
+    settings: Settings | None = None,
+    project_root: Path | None = None,
+) -> None:
+    if summary.usage.known:
+        console.print(f"[{STYLE_MUTED}]usage[/] {format_usage_line(summary.usage)}")
+    context = _format_context_footer(summary, settings=settings, project_root=project_root)
+    if context:
+        console.print(f"[{STYLE_MUTED}]context[/] {context}")
+
+
+def _format_context_footer(
+    summary: RunSummary,
+    *,
+    settings: Settings | None = None,
+    project_root: Path | None = None,
+) -> str:
+    if settings is None:
+        return ""
+
+    parts: list[str] = []
+    if summary.usage.prompt_tokens > 0:
+        parts.append(f"current input {summary.usage.prompt_tokens:,}")
+
+    session_tokens = _session_active_tokens(project_root, summary.session_id)
+    window_tokens = settings.context.window_tokens
+    if session_tokens is not None and window_tokens > 0:
+        percent = session_tokens / window_tokens * 100
+        parts.append(f"session {session_tokens:,} / {window_tokens:,} ({percent:.1f}%)")
+    elif window_tokens > 0:
+        parts.append(f"window {window_tokens:,}")
+
+    compact_threshold = settings.context.resolved_compact_threshold
+    if compact_threshold > 0:
+        parts.append(f"compact at {compact_threshold:,}")
+
+    return " · ".join(parts)
+
+
+def _session_active_tokens(project_root: Path | None, session_id: str) -> int | None:
+    if project_root is None or not session_id:
+        return None
+    try:
+        entries = list_session_entries(project_root)
+    except Exception:
+        return None
+    entry = next((item for item in entries if item.id == session_id), None)
+    return entry.active_tokens if entry is not None else None
 
 
 def _print_user_input(console: Console, text: str) -> None:
@@ -688,9 +744,9 @@ def _print_stream_event(
         call_summary = call.summary if call is not None else view.name
         summary = format_tool_progress_summary(call_summary, event.text)
         console.print(_status_line(summary, status_style(view.ok)))
-        diff = tool_diff_preview(event.text)
+        diff = render_tool_diff_preview(event.text)
         if diff:
-            console.print(diff.rstrip())
+            console.print(diff)
         return
     if event.kind == "agent_updated":
         return
