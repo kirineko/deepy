@@ -9,6 +9,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
@@ -17,6 +18,10 @@ from deepy.ui.slash_commands import SlashCommandItem
 
 IMAGE_ATTACHMENT_CLEAR_HINT = "ctrl+x clear images"
 DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
+SHIFT_ENTER_SEQUENCES = (
+    "\x1b[27;2;13~",  # xterm modified-key format.
+    "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,7 @@ def create_prompt_session(
     history_path: Path | None = None,
     on_interrupt: Callable[[], None] | None = None,
 ) -> PromptSession[str]:
+    install_shift_enter_key_sequence_overrides()
     path = history_path or DEFAULT_PROMPT_HISTORY
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
@@ -48,6 +54,7 @@ def build_prompt_key_bindings(
     *,
     on_interrupt: Callable[[], None] | None = None,
 ) -> KeyBindings:
+    install_shift_enter_key_sequence_overrides()
     bindings = KeyBindings()
 
     @bindings.add("escape")
@@ -65,6 +72,17 @@ def build_prompt_key_bindings(
         event.current_buffer.insert_text("\n")
 
     return bindings
+
+
+def install_shift_enter_key_sequence_overrides() -> None:
+    from prompt_toolkit.input import vt100_parser
+    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+
+    for sequence in SHIFT_ENTER_SEQUENCES:
+        ANSI_SEQUENCES[sequence] = (Keys.Escape, Keys.ControlM)
+    prefix_cache = getattr(vt100_parser, "_IS_PREFIX_OF_LONGER_MATCH_CACHE", None)
+    if hasattr(prefix_cache, "clear"):
+        prefix_cache.clear()
 
 
 def prompt_for_input(session: PromptSession[str], message: str = "deepy> ") -> str:

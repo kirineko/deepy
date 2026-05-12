@@ -14,11 +14,13 @@ from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_image_attachment_status
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
+from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
 from deepy.ui.prompt_input import is_clear_image_attachments_shortcut
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
+from deepy.ui.prompt_input import SHIFT_ENTER_SEQUENCES
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
 from deepy.ui.slash_commands import SlashCommandItem
@@ -162,6 +164,19 @@ def test_prompt_key_bindings_enter_submits_and_escape_enter_inserts_newline():
     escape_enter.handler(Event())
 
     assert calls == ["submit", "\n"]
+
+
+def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
+    from prompt_toolkit.input.vt100_parser import Vt100Parser
+
+    install_shift_enter_key_sequence_overrides()
+    keys: list[tuple[str, str]] = []
+    parser = Vt100Parser(lambda key_press: keys.append((str(key_press.key), key_press.data)))
+
+    parser.feed(SHIFT_ENTER_SEQUENCES[0])
+    parser.flush()
+
+    assert keys == [("Keys.Escape", SHIFT_ENTER_SEQUENCES[0]), ("Keys.ControlM", "")]
 
 
 def test_text_width_counts_cjk_and_control_characters():
