@@ -20,7 +20,7 @@ IGNORED_TOP_LEVEL_ENTRIES = {
 }
 
 
-def build_runtime_context(project_root: Path) -> str:
+def build_runtime_context(project_root: Path, *, include_git_dirty: bool = True) -> str:
     lines = [f"Project root: {project_root}"]
     lines.append(f"Current working directory: {Path.cwd()}")
     lines.append(f"Home directory: {Path.home()}")
@@ -34,8 +34,9 @@ def build_runtime_context(project_root: Path) -> str:
     branch = _git_output(project_root, ["git", "branch", "--show-current"])
     if branch:
         lines.append(f"Git branch: {branch}")
-    status = _git_output(project_root, ["git", "status", "--short"])
-    lines.append(f"Git dirty: {'yes' if status else 'no'}")
+    if include_git_dirty:
+        status = _git_output(project_root, ["git", "status", "--short"])
+        lines.append(f"Git dirty: {'yes' if status else 'no'}")
     top_level = _top_level_entries(project_root)
     if top_level:
         lines.append("Top-level entries:")

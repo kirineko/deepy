@@ -96,6 +96,21 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Runtime context here." in prompt
 
 
+def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path):
+    prompt = build_system_prompt(
+        tmp_path,
+        Settings(),
+        project_rules="Dynamic project rule.",
+        skills=[],
+        runtime_context="Dynamic runtime context.",
+    )
+
+    assert prompt.index("Tool documentation:") < prompt.index("Project rules:")
+    assert prompt.index("Default skill:") < prompt.index("Project rules:")
+    assert prompt.index("Project rules:") < prompt.index("Runtime context:")
+    assert "Dynamic runtime context." in prompt
+
+
 def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
     skill_dir = tmp_path / ".deepy" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
@@ -141,11 +156,35 @@ def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):
         encoding="utf-8",
     )
     skill = find_skill(tmp_path, "demo", home=tmp_path / "home")
+    assert skill is not None
 
     rendered = format_loaded_skills_for_prompt([skill])
 
     assert '<skill name="demo">' in rendered
     assert "Use this skill." in rendered
+
+
+def test_format_loaded_skills_for_prompt_is_deterministic(tmp_path):
+    alpha_dir = tmp_path / ".deepy" / "skills" / "alpha"
+    beta_dir = tmp_path / ".deepy" / "skills" / "beta"
+    alpha_dir.mkdir(parents=True)
+    beta_dir.mkdir(parents=True)
+    alpha_dir.joinpath("SKILL.md").write_text(
+        "---\nname: alpha\ndescription: Alpha\n---\nAlpha body.",
+        encoding="utf-8",
+    )
+    beta_dir.joinpath("SKILL.md").write_text(
+        "---\nname: beta\ndescription: Beta\n---\nBeta body.",
+        encoding="utf-8",
+    )
+    alpha = find_skill(tmp_path, "alpha", home=tmp_path / "home")
+    beta = find_skill(tmp_path, "beta", home=tmp_path / "home")
+    assert alpha is not None
+    assert beta is not None
+
+    rendered = format_loaded_skills_for_prompt([beta, alpha])
+
+    assert rendered.index('<skill name="alpha">') < rendered.index('<skill name="beta">')
 
 
 def test_build_runtime_context_includes_top_level_entries(tmp_path):
@@ -176,3 +215,9 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     assert "- spec/" in context
     assert ".pytest_cache/" not in context
     assert "dist/" not in context
+
+
+def test_build_runtime_context_can_omit_git_dirty_for_prompt_cache(tmp_path):
+    context = build_runtime_context(tmp_path, include_git_dirty=False)
+
+    assert "Git dirty:" not in context

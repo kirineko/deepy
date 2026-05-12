@@ -56,6 +56,23 @@ def test_merge_usage_and_format_line():
     assert format_usage_line(usage) == "input 9 · output 14 · total 23"
 
 
+def test_format_usage_line_shows_cache_hit_rate():
+    usage = normalize_usage(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+        }
+    )
+
+    assert (
+        format_usage_line(usage)
+        == "input 100 · cache 80 hit / 20 miss (80.0% hit) · output 25 · total 125"
+    )
+
+
 def test_normalize_usage_infers_cache_miss_and_request_entries():
     usage = normalize_usage(
         {

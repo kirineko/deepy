@@ -31,8 +31,13 @@ def build_system_prompt(
     project_rules_block = resolved_project_rules or "No project rules found."
     skills_block = format_skills_for_prompt(resolved_skills)
     loaded_skills_block = format_loaded_skills_for_prompt(loaded_skills or [])
-    runtime_context_block = runtime_context or build_runtime_context(project_root)
+    runtime_context_block = runtime_context or build_runtime_context(
+        project_root,
+        include_git_dirty=False,
+    )
     tool_docs_block = load_tool_docs()
+    # Keep stable instructions before project/runtime blocks so DeepSeek can reuse
+    # a longer request prefix through its context cache.
     return f"""You are Deepy, a terminal coding agent in the user's project.
 
 Core rules:
@@ -42,11 +47,6 @@ Core rules:
 - Existing targeted changes -> `edit`; new files or explicit whole-file replacement -> `write`.
 - If `write` on an existing file is rejected for unread state, read it and usually use `edit`.
 - Ask only when blocked by missing intent or required approval.
-
-Runtime: root={project_root}; model={settings.model.name}; thinking={settings.model.thinking_enabled}; reasoning={settings.model.reasoning_effort}
-
-Project context:
-{runtime_context_block}
 
 Tool protocol:
 Tool results are JSON strings: ok, name, output, error, metadata, awaitUserResponse.
@@ -65,4 +65,8 @@ Available skills:
 
 Loaded skills:
 {loaded_skills_block}
+
+Runtime context:
+Runtime: root={project_root}; model={settings.model.name}; thinking={settings.model.thinking_enabled}; reasoning={settings.model.reasoning_effort}
+{runtime_context_block}
 """

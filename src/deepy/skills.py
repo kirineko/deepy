@@ -85,7 +85,7 @@ def format_skills_for_terminal(skills: Iterable[SkillInfo]) -> str:
 
 def format_loaded_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
     blocks: list[str] = []
-    for skill in skills:
+    for skill in sorted(skills, key=lambda item: item.name):
         body = read_skill_body(skill)
         if body:
             blocks.append(f"<skill name=\"{skill.name}\">\n{body}\n</skill>")
