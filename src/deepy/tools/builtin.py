@@ -9,11 +9,13 @@ import shlex
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import uuid
-from difflib import unified_diff
 from dataclasses import dataclass, field
+from difflib import unified_diff
 from fnmatch import fnmatch
+from html.parser import HTMLParser
 from pathlib import Path
 
 from deepy.config import Settings
@@ -30,6 +32,8 @@ DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
 MAX_BASH_OUTPUT_CHARS = 30_000
 MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
+DEFAULT_WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
+DEFAULT_WEB_SEARCH_RESULTS = 8
 PDF_LARGE_PAGE_THRESHOLD = 10
 PDF_MAX_PAGE_RANGE = 20
 MAX_CANDIDATE_COUNT = 5
@@ -149,6 +153,13 @@ class WebSearchPreparation:
             "dominantLanguage": self.dominant_language,
             "languageReason": self.language_reason,
         }
+
+
+@dataclass(frozen=True)
+class WebSearchResult:
+    title: str
+    url: str
+    snippet: str = ""
 
 
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
@@ -678,6 +689,88 @@ def _format_web_search_activity_label(query: str) -> str:
     return f"WebSearch: {normalized}"
 
 
+class _SearchResultParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[WebSearchResult] = []
+        self._current_title: list[str] | None = None
+        self._current_url: str = ""
+        self._snippet_index: int | None = None
+        self._snippet_chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key: value or "" for key, value in attrs}
+        classes = set(values.get("class", "").split())
+        if tag == "a" and "result__a" in classes:
+            self._current_title = []
+            self._current_url = _decode_search_result_url(values.get("href", ""))
+            return
+        if "result__snippet" in classes and self.results:
+            self._snippet_index = len(self.results) - 1
+            self._snippet_chunks = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_title is not None:
+            self._current_title.append(data)
+        elif self._snippet_index is not None:
+            self._snippet_chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._current_title is not None:
+            title = " ".join("".join(self._current_title).split())
+            if title and self._current_url:
+                self.results.append(WebSearchResult(title=title, url=self._current_url))
+            self._current_title = None
+            self._current_url = ""
+            return
+        if self._snippet_index is not None and tag in {"a", "div", "td"}:
+            snippet = " ".join("".join(self._snippet_chunks).split())
+            if snippet:
+                result = self.results[self._snippet_index]
+                self.results[self._snippet_index] = WebSearchResult(
+                    title=result.title,
+                    url=result.url,
+                    snippet=snippet,
+                )
+            self._snippet_index = None
+            self._snippet_chunks = []
+
+
+def _decode_search_result_url(href: str) -> str:
+    parsed = urllib.parse.urlparse(href)
+    query = urllib.parse.parse_qs(parsed.query)
+    target = query.get("uddg", [""])[0]
+    if target:
+        return target
+    if parsed.scheme and parsed.netloc:
+        return href
+    return urllib.parse.urljoin("https://duckduckgo.com", href)
+
+
+def _parse_search_results(html: str) -> list[WebSearchResult]:
+    parser = _SearchResultParser()
+    parser.feed(html)
+    unique: list[WebSearchResult] = []
+    seen_urls: set[str] = set()
+    for result in parser.results:
+        if result.url in seen_urls:
+            continue
+        seen_urls.add(result.url)
+        unique.append(result)
+    return unique
+
+
+def _format_search_results(query: str, results: list[WebSearchResult]) -> str:
+    lines = [f"Web search results for: {query}", ""]
+    for index, result in enumerate(results[:DEFAULT_WEB_SEARCH_RESULTS], start=1):
+        lines.append(f"{index}. {result.title}")
+        lines.append(f"   {result.url}")
+        if result.snippet:
+            lines.append(f"   {result.snippet}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 @dataclass
 class ToolRuntime:
     cwd: Path
@@ -1074,16 +1167,12 @@ class ToolRuntime:
         if not query.strip():
             return ToolResult.error_result(name, 'Missing required "query" string.').to_json()
         command = self.settings.tools.web_search.command
-        api_url = self.settings.tools.web_search.api_url
-        if not command and not api_url:
-            return ToolResult.error_result(
-                name,
-                "WebSearch command or api_url is not configured.",
-                metadata={"query": query},
-            ).to_json()
         if command:
             return self._web_search_command(query, command)
-        return self._web_search_api(query, api_url)
+        api_url = self.settings.tools.web_search.api_url
+        if api_url:
+            return self._web_search_api(query, api_url)
+        return self._web_search_builtin(query)
 
     def _web_search_command(self, query: str, command: str) -> str:
         name = "WebSearch"
@@ -1152,20 +1241,88 @@ class ToolRuntime:
             },
         ).to_json()
 
+    def _web_search_builtin(self, query: str) -> str:
+        name = "WebSearch"
+        prepared, prepare_error = _prepare_web_search_query_with_llm(query, self.settings)
+        search_url = (
+            DEFAULT_WEB_SEARCH_URL
+            + "?"
+            + urllib.parse.urlencode({"q": prepared.resolved_query}, doseq=False)
+        )
+        activity_label = _format_web_search_activity_label(prepared.resolved_query)
+        activity_id = f"web-search-{uuid.uuid4().hex}"
+        self.running_processes[activity_id] = {
+            "startTime": _now_iso(),
+            "command": activity_label,
+        }
+        request = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Deepy/0.1"
+                )
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            return ToolResult.error_result(
+                name,
+                f"WebSearch request failed: {exc}",
+                metadata={
+                    **prepared.metadata(),
+                    "backend": "duckduckgo_html",
+                    "searchUrl": search_url,
+                    "activityLabel": activity_label,
+                    **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
+                },
+            ).to_json()
+        finally:
+            self.running_processes.pop(activity_id, None)
+
+        results = _parse_search_results(body)
+        if not results:
+            return ToolResult.error_result(
+                name,
+                "WebSearch returned no parseable results.",
+                metadata={
+                    **prepared.metadata(),
+                    "backend": "duckduckgo_html",
+                    "searchUrl": search_url,
+                    "activityLabel": activity_label,
+                    **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
+                },
+            ).to_json()
+        return ToolResult.ok_result(
+            name,
+            _format_search_results(prepared.resolved_query, results),
+            metadata={
+                **prepared.metadata(),
+                "backend": "duckduckgo_html",
+                "searchUrl": search_url,
+                "activityLabel": activity_label,
+                "resultCount": min(len(results), DEFAULT_WEB_SEARCH_RESULTS),
+                **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
+            },
+        ).to_json()
+
     def _web_search_api(self, query: str, api_url: str) -> str:
         name = "WebSearch"
         prepared, prepare_error = _prepare_web_search_query_with_llm(query, self.settings)
         if prepare_error is not None:
             return ToolResult.error_result(
                 name,
-                f"WebSearch default mode failed: {prepare_error}",
+                f"WebSearch custom API mode failed: {prepare_error}",
                 metadata={"query": query, "apiUrl": api_url},
             ).to_json()
         machine_id = self.settings.tools.web_search.machine_id
         if not machine_id:
             return ToolResult.error_result(
                 name,
-                "WebSearch default mode requires machine_id in the TOML tools.web_search config.",
+                "WebSearch custom API mode requires machine_id in the TOML tools.web_search config.",
                 metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
         body = json_utils.dumps({"query": prepared.resolved_query}).encode("utf-8")
@@ -1199,7 +1356,7 @@ class ToolRuntime:
         if not output:
             return ToolResult.error_result(
                 name,
-                "WebSearch default mode failed: The web search response was empty.",
+                "WebSearch custom API mode failed: The web search response was empty.",
                 metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
         return ToolResult.ok_result(

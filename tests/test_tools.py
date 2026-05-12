@@ -939,15 +939,104 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     assert len(chat_prompts) == 2
 
 
-def test_web_search_default_api_requires_llm_config_and_machine_id(tmp_path):
+def test_web_search_uses_builtin_duckduckgo_backend(tmp_path, monkeypatch):
+    settings = Settings(
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    requested: list[object] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return (
+                b'<html><body><a class="result__a" '
+                b'href="/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen%2Fabout%2Fprevious-releases">'
+                b"Node.js Releases</a>"
+                b'<div class="result__snippet">Previous and current Node.js releases.</div>'
+                b"</body></html>"
+            )
+
+    def fake_urlopen(request, timeout):
+        requested.append(request)
+        assert timeout == 30
+        assert request.get_method() == "GET"
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "deepy.tools.builtin._web_search_chat",
+        lambda settings, prompt: (
+            '{"dominant_language":"en","reason":"English results are richer."}'
+        ),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = decode(runtime.web_search("latest node release"))
+
+    assert payload["ok"] is True
+    assert "Node.js Releases" in payload["output"]
+    assert "https://nodejs.org/en/about/previous-releases" in payload["output"]
+    assert "Previous and current Node.js releases." in payload["output"]
+    assert requested[0].full_url.startswith("https://html.duckduckgo.com/html/?")
+    assert "q=latest+node+release" in requested[0].full_url
+    assert requested[0].get_header("Token") is None
+    assert payload["metadata"]["backend"] == "duckduckgo_html"
+
+
+def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypatch):
+    runtime = ToolRuntime(
+        cwd=tmp_path,
+        settings=Settings(),
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return (
+                b'<html><body><a class="result__a" href="https://example.com">'
+                b"Example Result</a></body></html>"
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_search("latest node release"))
+
+    assert payload["ok"] is True
+    assert "Example Result" in payload["output"]
+    assert payload["metadata"]["backend"] == "duckduckgo_html"
+    assert "valid LLM configuration" in payload["metadata"]["queryPreparationWarning"]
+
+
+def test_web_search_custom_api_requires_machine_id(tmp_path, monkeypatch):
     runtime = ToolRuntime(
         cwd=tmp_path,
         settings=Settings(
-            tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api"))
+            model=ModelConfig(
+                api_key="sk-test",
+                base_url="https://api.deepseek.com",
+                name="deepseek-chat",
+            ),
+            tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api")),
+        ),
+    )
+    monkeypatch.setattr(
+        "deepy.tools.builtin._web_search_chat",
+        lambda settings, prompt: (
+            '{"dominant_language":"en","reason":"English results are richer."}'
         ),
     )
 
     payload = decode(runtime.web_search("latest node release"))
 
     assert payload["ok"] is False
-    assert "valid LLM configuration" in payload["error"]
+    assert "custom API mode requires machine_id" in payload["error"]
