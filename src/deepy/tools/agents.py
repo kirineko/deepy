@@ -43,6 +43,10 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         args = _tool_args(raw_input)
         return runtime.web_search(_string_arg(args, "query"))
 
+    async def invoke_web_fetch(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return runtime.web_fetch(_string_arg(args, "url"))
+
     return [
         FunctionTool(
             name="bash",
@@ -83,6 +87,13 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
             description="Perform web searching using a natural language query.",
             params_json_schema=WEB_SEARCH_SCHEMA,
             on_invoke_tool=invoke_web_search,
+            strict_json_schema=False,
+        ),
+        FunctionTool(
+            name="WebFetch",
+            description="Fetch and extract readable content from a complete http or https URL.",
+            params_json_schema=WEB_FETCH_SCHEMA,
+            on_invoke_tool=invoke_web_fetch,
             strict_json_schema=False,
         ),
     ]
@@ -316,5 +327,17 @@ WEB_SEARCH_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["query"],
+    "additionalProperties": False,
+}
+
+WEB_FETCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "A complete http or https URL to fetch.",
+        },
+    },
+    "required": ["url"],
     "additionalProperties": False,
 }

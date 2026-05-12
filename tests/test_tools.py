@@ -751,6 +751,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "read",
         "modify",
         "WebSearch",
+        "WebFetch",
     ]
     assert all(tool.description for tool in tools)
 
@@ -783,6 +784,98 @@ def test_function_tool_schemas_match_legacy_names(tmp_path):
     ]
     assert tools["WebSearch"].params_json_schema["required"] == ["query"]
     assert list(tools["WebSearch"].params_json_schema["properties"]) == ["query"]
+    assert tools["WebFetch"].params_json_schema["required"] == ["url"]
+    assert list(tools["WebFetch"].params_json_schema["properties"]) == ["url"]
+
+
+def test_web_fetch_requires_complete_http_url(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    missing_scheme = decode(runtime.web_fetch("www.example.com/page"))
+    unsupported_scheme = decode(runtime.web_fetch("ftp://example.com/page"))
+
+    assert missing_scheme["ok"] is False
+    assert "complete http or https URL" in missing_scheme["error"]
+    assert unsupported_scheme["ok"] is False
+    assert "complete http or https URL" in unsupported_scheme["error"]
+
+
+def test_web_fetch_extracts_readable_html_page(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    requested: list[object] = []
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/final"
+
+        def read(self, size=-1):
+            assert size > 0
+            return (
+                b"<html><head><title>Demo Title</title>"
+                b"<script>ignored()</script></head>"
+                b"<body><h1>Heading</h1><p>First paragraph.</p>"
+                b"<a href='/next'>Link text</a></body></html>"
+            )
+
+    def fake_urlopen(request, timeout):
+        requested.append(request)
+        assert timeout == 30
+        assert request.get_method() == "GET"
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = decode(runtime.web_fetch("https://example.com/page"))
+
+    assert payload["ok"] is True
+    assert requested[0].full_url == "https://example.com/page"
+    assert "URL: https://example.com/page" in payload["output"]
+    assert "Final URL: https://example.com/final" in payload["output"]
+    assert "Title: Demo Title" in payload["output"]
+    assert "Heading" in payload["output"]
+    assert "First paragraph." in payload["output"]
+    assert "Link text" in payload["output"]
+    assert "ignored()" not in payload["output"]
+    assert payload["metadata"]["url"] == "https://example.com/page"
+    assert payload["metadata"]["finalUrl"] == "https://example.com/final"
+    assert payload["metadata"]["contentType"] == "text/html; charset=utf-8"
+    assert payload["metadata"]["bodyTruncated"] is False
+
+
+def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/plain; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/robots.txt"
+
+        def read(self, size=-1):
+            return b"User-agent: *\nDisallow: /private\n"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_fetch("https://example.com/robots.txt"))
+
+    assert payload["ok"] is True
+    assert "User-agent: *" in payload["output"]
+    assert "Disallow: /private" in payload["output"]
+    assert payload["metadata"]["charset"] == "utf-8"
 
 
 def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):

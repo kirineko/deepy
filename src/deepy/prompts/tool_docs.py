@@ -9,6 +9,7 @@ TOOL_DOC_FILES = (
     "modify.md",
     "AskUserQuestion.md",
     "WebSearch.md",
+    "WebFetch.md",
 )
 
 

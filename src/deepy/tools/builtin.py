@@ -32,6 +32,8 @@ DEFAULT_LINE_LIMIT = 2_000
 MAX_LINE_LENGTH = 2_000
 MAX_BASH_OUTPUT_CHARS = 30_000
 MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
+MAX_WEB_FETCH_BYTES = 2 * 1024 * 1024
+MAX_WEB_FETCH_OUTPUT_CHARS = 30_000
 DEFAULT_WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 DEFAULT_WEB_SEARCH_RESULTS = 8
 PDF_LARGE_PAGE_THRESHOLD = 10
@@ -771,6 +773,155 @@ def _format_search_results(query: str, results: list[WebSearchResult]) -> str:
     return "\n".join(lines).strip()
 
 
+class _ReadableHtmlParser(HTMLParser):
+    BLOCK_TAGS = {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+    SKIP_TAGS = {"script", "style", "noscript", "svg"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title_parts: list[str] = []
+        self.text_parts: list[str] = []
+        self._in_title = False
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in self.SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if normalized == "title":
+            self._in_title = True
+            return
+        if normalized in self.BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if normalized in self.SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+            return
+        if normalized == "title":
+            self._in_title = False
+            return
+        if normalized in self.BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._in_title:
+            self.title_parts.append(text)
+            return
+        if self._skip_depth:
+            return
+        self.text_parts.append(text)
+
+    def _append_newline(self) -> None:
+        if self.text_parts and self.text_parts[-1] != "\n":
+            self.text_parts.append("\n")
+
+    @property
+    def title(self) -> str:
+        return " ".join(self.title_parts).strip()
+
+    @property
+    def readable_text(self) -> str:
+        raw = " ".join(self.text_parts)
+        raw = re.sub(r"[ \t]*\n[ \t]*", "\n", raw)
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        return "\n".join(line.strip() for line in raw.splitlines()).strip()
+
+
+def _validate_web_fetch_url(url: str) -> tuple[str | None, str | None]:
+    stripped = url.strip()
+    parsed = urllib.parse.urlparse(stripped)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, "WebFetch requires a complete http or https URL."
+    return stripped, None
+
+
+def _charset_from_content_type(content_type: str) -> str:
+    match = re.search(r"charset=([^\s;]+)", content_type, flags=re.IGNORECASE)
+    return match.group(1).strip("\"'") if match else "utf-8"
+
+
+def _is_html_response(content_type: str, text: str) -> bool:
+    lowered = content_type.lower()
+    if "html" in lowered:
+        return True
+    prefix = text[:500].lower()
+    return "<html" in prefix or "<!doctype html" in prefix
+
+
+def _extract_readable_html(html: str) -> tuple[str, str]:
+    parser = _ReadableHtmlParser()
+    parser.feed(html)
+    parser.close()
+    return parser.title, parser.readable_text
+
+
+def _format_web_fetch_output(
+    *,
+    url: str,
+    final_url: str,
+    content_type: str,
+    title: str,
+    text: str,
+    bytes_truncated: bool,
+) -> str:
+    lines = [
+        f"URL: {url}",
+        f"Final URL: {final_url}",
+    ]
+    if title:
+        lines.append(f"Title: {title}")
+    if content_type:
+        lines.append(f"Content-Type: {content_type}")
+    if bytes_truncated:
+        lines.append(f"Note: response body was truncated at {MAX_WEB_FETCH_BYTES:,} bytes.")
+    lines.append("")
+    lines.append(text.strip() if text.strip() else "[No readable text extracted.]")
+    return "\n".join(lines).strip()
+
+
 @dataclass
 class ToolRuntime:
     cwd: Path
@@ -1173,6 +1324,79 @@ class ToolRuntime:
         if api_url:
             return self._web_search_api(query, api_url)
         return self._web_search_builtin(query)
+
+    def web_fetch(self, url: str) -> str:
+        name = "WebFetch"
+        target_url, validation_error = _validate_web_fetch_url(url)
+        if validation_error is not None or target_url is None:
+            return ToolResult.error_result(name, validation_error or 'Missing required "url" string.').to_json()
+
+        activity_label = f"WebFetch: {target_url}"
+        activity_id = f"web-fetch-{uuid.uuid4().hex}"
+        self.running_processes[activity_id] = {
+            "startTime": _now_iso(),
+            "command": activity_label,
+        }
+        request = urllib.request.Request(
+            target_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Deepy/0.1"
+                ),
+                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                final_url = response.geturl()
+                content_type = response.headers.get("Content-Type", "")
+                body = response.read(MAX_WEB_FETCH_BYTES + 1)
+        except Exception as exc:
+            return ToolResult.error_result(
+                name,
+                f"WebFetch request failed: {exc}",
+                metadata={
+                    "url": target_url,
+                    "activityLabel": activity_label,
+                },
+            ).to_json()
+        finally:
+            self.running_processes.pop(activity_id, None)
+
+        bytes_truncated = len(body) > MAX_WEB_FETCH_BYTES
+        body = body[:MAX_WEB_FETCH_BYTES]
+        charset = _charset_from_content_type(content_type)
+        decoded = body.decode(charset, errors="replace")
+        if _is_html_response(content_type, decoded):
+            title, readable_text = _extract_readable_html(decoded)
+        else:
+            title = ""
+            readable_text = decoded.strip()
+        output = _format_web_fetch_output(
+            url=target_url,
+            final_url=final_url,
+            content_type=content_type,
+            title=title,
+            text=readable_text,
+            bytes_truncated=bytes_truncated,
+        )
+        output, output_truncated = _truncate_output(output, MAX_WEB_FETCH_OUTPUT_CHARS)
+        return ToolResult.ok_result(
+            name,
+            output,
+            metadata={
+                "url": target_url,
+                "finalUrl": final_url,
+                "contentType": content_type,
+                "charset": charset,
+                "byteCount": len(body),
+                "bodyTruncated": bytes_truncated,
+                "outputTruncated": output_truncated,
+                "activityLabel": activity_label,
+            },
+        ).to_json()
 
     def _web_search_command(self, query: str, command: str) -> str:
         name = "WebSearch"
