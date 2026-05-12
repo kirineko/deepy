@@ -10,10 +10,10 @@ from rich.table import Table
 from rich.text import Text
 
 from deepy.skills import SkillInfo
-from deepy.ui.styles import STYLE_ACCENT, STYLE_INFO, STYLE_MUTED
+from deepy.update_check import VersionUpdate
+from deepy.ui.styles import STYLE_ACCENT, STYLE_ASSISTANT, STYLE_INFO, STYLE_MUTED
 from deepy.ui.slash_commands import (
     BUILTIN_SLASH_COMMANDS,
-    build_slash_commands,
     format_slash_command_description,
 )
 
@@ -30,12 +30,33 @@ class WelcomeSetting:
     value: str
 
 
-SHORTCUT_TIPS = (
-    WelcomeTip("Enter", "Send the prompt"),
-    WelcomeTip("Shift+Enter", "Insert a newline"),
-    WelcomeTip("Esc", "Interrupt the current model turn"),
-    WelcomeTip("/", "Open the skills and commands menu"),
-    WelcomeTip("Ctrl+D twice", "Quit Deepy"),
+CORE_WELCOME_COMMANDS = (
+    "/resume",
+    "/new",
+    "/skills",
+)
+
+CORE_SHORTCUT_TIPS = (
+    WelcomeTip("/", "Command menu"),
+    WelcomeTip("Esc", "Interrupt turn"),
+    WelcomeTip("Ctrl+D twice", "Quit"),
+)
+
+COMPACT_COMMAND_DESCRIPTIONS = {
+    "/skills": "List skills",
+    "/new": "New session",
+    "/resume": "Resume session",
+    "/exit": "Quit",
+}
+
+DEEPY_ASCII_LOGO = (
+    "      .-''''-.",
+    "   .-'  >_   '-.",
+    "  /   .----.    \\",
+    " |   | >_ |  o   |",
+    " |    '----'     |",
+    "  \\    Deepy    /",
+    "   '-.______.--'",
 )
 
 
@@ -51,17 +72,19 @@ def format_home_relative_path(value: str | Path, home: str | Path | None = None)
 
 
 def build_welcome_tips(skills: list[SkillInfo]) -> list[WelcomeTip]:
+    del skills
     slash_tips = [
         WelcomeTip(
             label=item.label,
-            description=format_slash_command_description(item.description),
+            description=COMPACT_COMMAND_DESCRIPTIONS.get(
+                item.label,
+                format_slash_command_description(item.description),
+            ),
         )
-        for item in build_slash_commands(skills)
-        if item.kind != "skill" or bool(item.skill and item.skill.is_loaded)
+        for item in BUILTIN_SLASH_COMMANDS
+        if item.label in CORE_WELCOME_COMMANDS
     ]
-    builtin_labels = {command.label for command in BUILTIN_SLASH_COMMANDS}
-    shortcut_tips = [tip for tip in SHORTCUT_TIPS if tip.label not in builtin_labels]
-    return [*slash_tips, *shortcut_tips]
+    return [*slash_tips, *CORE_SHORTCUT_TIPS]
 
 
 def build_welcome_settings(
@@ -70,14 +93,53 @@ def build_welcome_settings(
     thinking_enabled: bool,
     reasoning_effort: str,
     project_root: str | Path,
+    current_version: str,
+    version_update: VersionUpdate | None = None,
     home: str | Path | None = None,
 ) -> list[WelcomeSetting]:
-    return [
+    settings = [
+        WelcomeSetting("Version", _format_version_value(current_version, version_update)),
         WelcomeSetting("Model", model),
-        WelcomeSetting("Thinking Enabled", str(thinking_enabled)),
-        WelcomeSetting("Reasoning Effort", reasoning_effort),
+        WelcomeSetting("Thinking", "on" if thinking_enabled else "off"),
+        WelcomeSetting("Reasoning", reasoning_effort),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
+    if version_update is not None:
+        settings.append(WelcomeSetting("Update", version_update.install_hint))
+    return settings
+
+
+def _format_version_value(current_version: str, version_update: VersionUpdate | None) -> str:
+    if version_update is None:
+        return current_version
+    return (
+        f"{current_version} -> {version_update.latest_version} available "
+        f"from {version_update.source}"
+    )
+
+
+def build_deepy_ascii_logo() -> Text:
+    logo = Text()
+    for index, line in enumerate(DEEPY_ASCII_LOGO):
+        if index:
+            logo.append("\n")
+        logo.append(line, style=f"bold {STYLE_ACCENT}" if "Deepy" in line else STYLE_INFO)
+    return logo
+
+
+def _build_section(title: str, rows: list[WelcomeSetting | WelcomeTip]) -> Table:
+    section = Table.grid()
+    section.add_column()
+    section.add_row(Text(title, style="bold bright_white"))
+    section.add_row(Text(""))
+
+    body = Table.grid(padding=(0, 2))
+    body.add_column(style=STYLE_ACCENT, no_wrap=True)
+    body.add_column(style="bright_white")
+    for row in rows:
+        body.add_row(row.label, row.description if isinstance(row, WelcomeTip) else row.value)
+    section.add_row(body)
+    return section
 
 
 def build_welcome_panel(
@@ -87,6 +149,8 @@ def build_welcome_panel(
     reasoning_effort: str,
     project_root: str | Path,
     skills: list[SkillInfo],
+    current_version: str,
+    version_update: VersionUpdate | None = None,
     home: str | Path | None = None,
 ) -> Panel:
     settings = build_welcome_settings(
@@ -94,31 +158,38 @@ def build_welcome_panel(
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
         project_root=project_root,
+        current_version=current_version,
+        version_update=version_update,
         home=home,
     )
     tips = build_welcome_tips(skills)
-    settings_table = Table.grid(padding=(0, 2))
-    settings_table.add_column(style="bold")
-    settings_table.add_column(style="bright_white")
-    for item in settings:
-        settings_table.add_row(item.label, item.value)
 
-    tips_table = Table.grid(padding=(0, 2))
-    tips_table.add_column(style=STYLE_ACCENT)
-    tips_table.add_column()
-    for tip in tips[:10]:
-        tips_table.add_row(tip.label, tip.description)
+    hero = Table.grid(padding=(0, 3), expand=False)
+    hero.add_column()
+    hero.add_column(ratio=1)
+
+    intro = Text()
+    intro.append("Deepy\n", style=f"bold {STYLE_ASSISTANT}")
+    intro.append("Terminal coding agent for DeepSeek.\n", style="bright_white")
+    intro.append("Read, edit, run tools, and keep project context.", style=STYLE_MUTED)
+
+    hero.add_row(build_deepy_ascii_logo(), intro)
+
+    body = Table.grid(padding=(0, 4), expand=False)
+    body.add_column()
+    body.add_column()
+    body.add_row(
+        _build_section("Session", settings),
+        _build_section("Commands", tips[:10]),
+    )
 
     return Panel(
         Group(
-            Text("Vibe coding for DeepSeek models in your terminal.", style=STYLE_MUTED),
+            hero,
             Text(""),
-            settings_table,
-            Text(""),
-            Text("Shortcuts and commands", style="bold"),
-            tips_table,
+            body,
         ),
-        title="Deepy",
+        title="Deepy is ready",
         border_style=STYLE_INFO,
         expand=False,
     )

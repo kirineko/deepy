@@ -12,12 +12,15 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.text import Text
 
+from deepy import __version__
 from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import build_status_report, format_status_report
+from deepy.update_check import VersionUpdate
+from deepy.update_check import check_for_version_update
 from deepy.ui.ask_user_question import OTHER_VALUE
 from deepy.ui.ask_user_question import AskUserQuestionItem
 from deepy.ui.ask_user_question import AskUserQuestionOptionEntry
@@ -57,6 +60,7 @@ from deepy.utils import json as json_utils
 
 RunOnce = Callable[..., Awaitable[RunSummary]]
 InputFunc = Callable[[str], str]
+VersionUpdateChecker = Callable[[str], VersionUpdate | None]
 
 
 @dataclass(frozen=True)
@@ -85,10 +89,12 @@ def run_interactive(
     project_root: Path | None = None,
     console: Console | None = None,
     run_once: RunOnce = run_prompt_once,
+    version_update_checker: VersionUpdateChecker | None = check_for_version_update,
 ) -> int:
     root = (project_root or Path.cwd()).resolve()
     output = console or Console()
     session_id: str | None = None
+    version_update = _check_startup_version_update(version_update_checker)
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
@@ -107,6 +113,8 @@ def run_interactive(
             reasoning_effort=settings.model.reasoning_effort,
             project_root=root,
             skills=discover_skills(root),
+            current_version=__version__,
+            version_update=version_update,
         )
     )
 
@@ -192,6 +200,17 @@ def run_interactive(
             project_root=root,
             settings=settings,
         )
+
+
+def _check_startup_version_update(
+    version_update_checker: VersionUpdateChecker | None,
+) -> VersionUpdate | None:
+    if version_update_checker is None:
+        return None
+    try:
+        return version_update_checker(__version__)
+    except Exception:
+        return None
 
 
 def _run_once_with_status(

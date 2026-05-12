@@ -542,6 +542,7 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
+        version_update_checker=None,
     )
 
     rendered = console.export_text()
@@ -619,7 +620,12 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
-    result = terminal.run_interactive(Settings(), project_root=tmp_path, console=console)
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
 
     rendered = console.export_text()
     assert result == 0
@@ -646,7 +652,12 @@ def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, m
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
-    result = terminal.run_interactive(Settings(), project_root=tmp_path, console=console)
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
 
     rendered = console.export_text()
     assert result == 0
