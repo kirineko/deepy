@@ -10,6 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 from deepy.skills import SkillInfo
+from deepy.ui.styles import STYLE_ACCENT, STYLE_INFO, STYLE_MUTED
 from deepy.ui.slash_commands import (
     BUILTIN_SLASH_COMMANDS,
     build_slash_commands,
@@ -32,7 +33,6 @@ class WelcomeSetting:
 SHORTCUT_TIPS = (
     WelcomeTip("Enter", "Send the prompt"),
     WelcomeTip("Shift+Enter", "Insert a newline"),
-    WelcomeTip("Ctrl+V", "Paste an image from the clipboard"),
     WelcomeTip("Esc", "Interrupt the current model turn"),
     WelcomeTip("/", "Open the skills and commands menu"),
     WelcomeTip("Ctrl+D twice", "Quit Deepy"),
@@ -99,19 +99,19 @@ def build_welcome_panel(
     tips = build_welcome_tips(skills)
     settings_table = Table.grid(padding=(0, 2))
     settings_table.add_column(style="bold")
-    settings_table.add_column()
+    settings_table.add_column(style="bright_white")
     for item in settings:
         settings_table.add_row(item.label, item.value)
 
     tips_table = Table.grid(padding=(0, 2))
-    tips_table.add_column(style="cyan")
+    tips_table.add_column(style=STYLE_ACCENT)
     tips_table.add_column()
     for tip in tips[:10]:
         tips_table.add_row(tip.label, tip.description)
 
     return Panel(
         Group(
-            Text("Vibe coding for DeepSeek models in your terminal.", style="dim"),
+            Text("Vibe coding for DeepSeek models in your terminal.", style=STYLE_MUTED),
             Text(""),
             settings_table,
             Text(""),
@@ -119,5 +119,6 @@ def build_welcome_panel(
             tips_table,
         ),
         title="Deepy",
+        border_style=STYLE_INFO,
         expand=False,
     )

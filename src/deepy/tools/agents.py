@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from deepy.utils import json as json_utils
 
 from .builtin import ToolRuntime
 
@@ -99,8 +100,8 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
 
 def _tool_args(raw_input: str) -> dict[str, Any]:
     try:
-        parsed = json.loads(raw_input or "{}")
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(raw_input or "{}")
+    except json_utils.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

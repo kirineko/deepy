@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from deepy.llm.context import estimate_tokens_for_text
 from deepy.sessions import SessionEntry
 from deepy.skills import SkillInfo
 from deepy.ui.ask_user_question import AskUserQuestionItem
@@ -114,6 +115,4 @@ def clear_for_new_session(state: DeepyAppState) -> DeepyAppState:
 
 
 def _estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, (len(text) + 3) // 4)
+    return estimate_tokens_for_text(text)

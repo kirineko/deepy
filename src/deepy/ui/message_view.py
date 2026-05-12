@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,8 +8,18 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
+from deepy.utils import json as json_utils
+from deepy.ui.styles import (
+    STYLE_ASSISTANT,
+    STYLE_SYSTEM,
+    STYLE_TOOL,
+    STYLE_USER,
+    status_style,
+)
+
 
 MAX_SUMMARY_CHARS = 160
+MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
 ROLE_TITLES = {
@@ -45,8 +54,8 @@ class ToolOutputView:
 
 def parse_tool_output(output: str) -> ToolOutputView:
     try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
+        payload = json_utils.loads(output)
+    except json_utils.JSONDecodeError:
         return _raw_tool_output(output)
 
     if not isinstance(payload, dict):
@@ -86,6 +95,30 @@ def format_tool_output_summary(output: str) -> str:
     return parse_tool_output(output).summary
 
 
+def format_tool_call_summary(
+    name: str,
+    arguments: str | None,
+    *,
+    project_root: str | None = None,
+) -> str:
+    tool_name = name or "tool"
+    snippet = build_tool_params_snippet(
+        {"name": tool_name, "arguments": arguments or ""},
+        project_root=project_root,
+    )
+    return f"{tool_name} {snippet}".strip()
+
+
+def format_tool_progress_summary(
+    call_summary: str,
+    output: str,
+) -> str:
+    view = parse_tool_output(output)
+    base = call_summary.strip() or view.name
+    detail = _tool_progress_detail(view)
+    return f"{base}  {view.status}" + (f" - {detail}" if detail else "")
+
+
 def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | None:
     view = parse_tool_output(output)
     diff = _tool_diff_text(view)
@@ -123,7 +156,7 @@ def parse_diff_preview(diff_preview: str) -> list[DiffPreviewLine]:
 def build_thinking_summary(content: str, message_params: object | None = None) -> str:
     if content:
         normalized = " ".join(content.split())
-        result = _truncate(normalized, max_chars=100)
+        result = _truncate(normalized, max_chars=MAX_THINKING_SUMMARY_CHARS)
         if result.endswith((":", "：")):
             result = result[:-1]
         return result
@@ -143,8 +176,8 @@ def build_tool_params_snippet(tool_function: object | None, *, project_root: str
     if not isinstance(args, str) or not args.strip():
         return ""
     try:
-        parsed = json.loads(args)
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(args)
+    except json_utils.JSONDecodeError:
         return args.strip()
     if not isinstance(parsed, dict):
         return args.strip()
@@ -160,12 +193,12 @@ def build_tool_result_snippet(content: str, *, max_chars: int = 2_000) -> str:
     if not trimmed:
         return ""
     try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(content)
+    except json_utils.JSONDecodeError:
         return _format_tool_result_snippet(content, max_chars=max_chars)
     if isinstance(parsed, dict) and "output" in parsed:
         output = parsed["output"]
-        value = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
+        value = output if isinstance(output, str) else json_utils.dumps(output)
         return _format_tool_result_snippet(value, max_chars=max_chars)
     return _format_tool_result_snippet(content, max_chars=max_chars)
 
@@ -174,15 +207,15 @@ def is_invisible_execution(content: str) -> bool:
     if not content.strip():
         return False
     try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(content)
+    except json_utils.JSONDecodeError:
         return False
     return isinstance(parsed, dict) and parsed.get("name") == "bash" and parsed.get("ok") is not True
 
 
 def render_tool_output(output: str) -> Group:
     view = parse_tool_output(output)
-    parts: list[Any] = [Text(view.summary)]
+    parts: list[Any] = [Text(view.summary, style=status_style(view.ok))]
     diff = tool_diff_preview(output)
     if diff:
         parts.append(Syntax(diff.rstrip(), "diff", theme="ansi_dark", word_wrap=False))
@@ -201,15 +234,15 @@ def render_message(
 
     title = ROLE_TITLES.get(role, role.title())
     if role == "assistant":
-        return Panel(Text(content), title=title, border_style="green", expand=False)
+        return Panel(Text(content), title=title, border_style=STYLE_ASSISTANT, expand=False)
     if role == "user":
-        return Panel(Text(content), title=title, border_style="cyan", expand=False)
+        return Panel(Text(content), title=title, border_style=STYLE_USER, expand=False)
     if role == "system":
         label = _system_message_label(content)
-        return Panel(Text(content), title=label, border_style="magenta", expand=False)
+        return Panel(Text(content), title=label, border_style=STYLE_SYSTEM, expand=False)
     params_snippet = build_tool_params_snippet(message.get("function"), project_root=project_root)
     if params_snippet:
-        return Panel(Text(params_snippet), title=title, border_style="yellow", expand=False)
+        return Panel(Text(params_snippet), title=title, border_style=STYLE_TOOL, expand=False)
     return Panel(Text(content), title=title, border_style="dim", expand=False)
 
 
@@ -217,6 +250,14 @@ def _tool_diff_text(view: ToolOutputView) -> str | None:
     if view.ok is not True or view.name.lower() not in DIFF_PREVIEW_TOOLS:
         return None
     return view.diff_preview or view.diff
+
+
+def _tool_progress_detail(view: ToolOutputView) -> str:
+    if view.error:
+        return _truncate(view.error)
+    if view.await_user_response:
+        return _truncate(_first_nonempty_line(view.output))
+    return ""
 
 
 def _message_content_text(content: Any) -> str:
@@ -232,7 +273,7 @@ def _message_content_text(content: Any) -> str:
         return "".join(parts)
     if content is None:
         return ""
-    return json.dumps(content, ensure_ascii=False)
+    return json_utils.dumps(content)
 
 
 def _system_message_label(content: str) -> str:
@@ -263,7 +304,7 @@ def _format_tool_params_snippet(
     if not first_key:
         return ""
     value = args[first_key]
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = value if isinstance(value, str) else json_utils.dumps(value)
     if tool_name == "read" and project_root and text.startswith(project_root):
         return text[len(project_root) :].lstrip("/\\")
     return text

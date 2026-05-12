@@ -53,4 +53,60 @@ def test_merge_usage_and_format_line():
     assert usage.prompt_tokens == 9
     assert usage.completion_tokens == 14
     assert usage.total_tokens == 23
-    assert format_usage_line(usage) == "prompt=9 completion=14 total=23"
+    assert format_usage_line(usage) == "input 9 · output 14 · total 23"
+
+
+def test_normalize_usage_infers_cache_miss_and_request_entries():
+    usage = normalize_usage(
+        {
+            "input_tokens": 100,
+            "output_tokens": 25,
+            "input_tokens_details": {"cached_tokens": 80},
+            "output_tokens_details": {"reasoning_tokens": 9},
+        }
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 25
+    assert usage.total_tokens == 125
+    assert usage.prompt_cache_hit_tokens == 80
+    assert usage.prompt_cache_miss_tokens == 20
+    assert usage.reasoning_tokens == 9
+    assert usage.requests == 1
+    assert usage.request_usage_entries == [
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+            "reasoning_tokens": 9,
+        }
+    ]
+
+
+def test_merge_usage_preserves_request_entries_and_counts():
+    usage = merge_usage(
+        {
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "request_usage_entries": [{"prompt_tokens": 10, "completion_tokens": 4}],
+        },
+        {
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5,
+            "requests": 2,
+            "request_usage_entries": [
+                {"prompt_tokens": 1, "completion_tokens": 1},
+                {"prompt_tokens": 2, "completion_tokens": 1},
+            ],
+        },
+    )
+
+    assert usage.prompt_tokens == 13
+    assert usage.completion_tokens == 6
+    assert usage.total_tokens == 19
+    assert usage.requests == 3
+    assert len(usage.request_usage_entries) == 3

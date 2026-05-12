@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -11,7 +10,8 @@ from deepy.config import Settings, load_settings
 from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import discover_skills, find_skill, match_skills_for_prompt
 from deepy.tools import ToolRuntime
-from deepy.usage import TokenUsage, normalize_usage, usage_from_run_result
+from deepy.usage import TokenUsage, merge_usage, normalize_usage, usage_from_run_result
+from deepy.utils import json as json_utils
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
 from .agent import build_deepy_agent
@@ -42,7 +42,6 @@ async def run_prompt_once(
     max_turns: int = 10,
     session_id: str | None = None,
     skill_names: list[str] | None = None,
-    image_data_urls: list[str] | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
@@ -82,7 +81,7 @@ async def run_prompt_once(
     try:
         result = Runner.run_streamed(
             agent,
-            input=_build_runner_input(prompt, image_data_urls or []),
+            input=prompt,
             max_turns=max_turns,
             run_config=run_config,
             session=session,
@@ -96,7 +95,7 @@ async def run_prompt_once(
             if normalized is None:
                 continue
             if normalized.kind == "usage":
-                usage = normalize_usage(normalized.payload.get("usage"))
+                usage = merge_usage(usage, normalize_usage(normalized.payload.get("usage")))
             if emit_event is not None:
                 emit_event(normalized)
             if normalized.kind == "tool_output":
@@ -128,7 +127,6 @@ async def run_prompt_once(
                 "request": {
                     "input": prompt,
                     "max_turns": max_turns,
-                    "image_count": len(image_data_urls or []),
                 },
             }
         )
@@ -153,7 +151,6 @@ async def run_prompt_once(
                 "request": {
                     "input": prompt,
                     "max_turns": max_turns,
-                    "image_count": len(image_data_urls or []),
                 },
                 "response": {"output": output, "usage": usage.to_dict()},
             }
@@ -193,14 +190,6 @@ def _resolve_loaded_skills(
     return match_skills_for_prompt(discover_skills(root), prompt)
 
 
-def _build_runner_input(prompt: str, image_data_urls: list[str]) -> str | list[dict[str, Any]]:
-    if not image_data_urls:
-        return prompt
-    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-    content.extend({"type": "input_image", "image_url": url} for url in image_data_urls)
-    return [{"role": "user", "content": content}]
-
-
 def _cancel_stream_result(
     result: Any,
     *,
@@ -219,8 +208,8 @@ def _pending_questions_from_tool_output(output: str) -> list[dict[str, Any]]:
     if not output.strip():
         return []
     try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
+        payload = json_utils.loads(output)
+    except json_utils.JSONDecodeError:
         return []
     if not isinstance(payload, dict) or payload.get("awaitUserResponse") is not True:
         return []

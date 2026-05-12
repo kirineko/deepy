@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+
 from rich.console import Console
 
 from deepy.config import Settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
-from deepy.sessions import SessionEntry
+from deepy.sessions import DeepyJsonlSession, SessionEntry
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
-from deepy.ui.clipboard import ClipboardImage
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _handle_slash_command
+from deepy.ui.terminal import _print_assistant_output
 from deepy.ui.terminal import _print_stream_event
+from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
+from deepy.ui.terminal import _run_once_with_status
 
 
 def test_parse_slash_command_handles_argument():
@@ -80,7 +84,6 @@ def test_use_slash_command_loads_skill_name(tmp_path):
 def test_new_slash_command_clears_loaded_skill_names(tmp_path):
     console = Console(record=True)
     loaded = ["demo"]
-    attached_images = ["data:image/png;base64,x"]
 
     next_session = _handle_slash_command(
         SlashCommand("new"),
@@ -88,51 +91,10 @@ def test_new_slash_command_clears_loaded_skill_names(tmp_path):
         tmp_path,
         "s1",
         loaded,
-        attached_images=attached_images,
     )
 
     assert next_session is None
     assert loaded == []
-    assert attached_images == []
-
-
-def test_paste_image_slash_command_attaches_clipboard_image(tmp_path, monkeypatch):
-    console = Console(record=True)
-    attached_images: list[str] = []
-    monkeypatch.setattr(
-        terminal,
-        "read_clipboard_image",
-        lambda: ClipboardImage("data:image/png;base64,x", "image/png"),
-    )
-
-    next_session = _handle_slash_command(
-        SlashCommand("paste-image"),
-        console,
-        tmp_path,
-        "s1",
-        attached_images=attached_images,
-    )
-
-    assert next_session == "s1"
-    assert attached_images == ["data:image/png;base64,x"]
-    assert "Attached clipboard image (1 total)." in console.export_text()
-
-
-def test_clear_images_slash_command_clears_attachments(tmp_path):
-    console = Console(record=True)
-    attached_images = ["data:image/png;base64,x"]
-
-    next_session = _handle_slash_command(
-        SlashCommand("clear-images"),
-        console,
-        tmp_path,
-        "s1",
-        attached_images=attached_images,
-    )
-
-    assert next_session == "s1"
-    assert attached_images == []
-    assert "Cleared attached images." in console.export_text()
 
 
 def test_resume_slash_command_selects_session_from_prompt(tmp_path, monkeypatch):
@@ -153,9 +115,56 @@ def test_resume_slash_command_selects_session_from_prompt(tmp_path, monkeypatch)
 
     rendered = console.export_text()
     assert next_session == "s2"
-    assert "1. s1" in rendered
-    assert "2. s2" in rendered
+    assert "Resume a session (2 total)" in rendered
+    assert "1. Untitled" in rendered
+    assert "2. Untitled" in rendered
     assert "Resuming session s2" in rendered
+
+
+def test_resume_slash_command_prints_selected_session_history(tmp_path):
+    console = Console(record=True)
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    asyncio.run(
+        session.add_items(
+            [
+                {"role": "user", "content": "当前项目是做什么的？"},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "先查看 README。"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "read",
+                    "arguments": '{"file_path":"README.md"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": '{"ok":true,"name":"read","output":"","metadata":{"path":"README.md"}}',
+                },
+                {
+                    "role": "assistant",
+                    "content": "这是一个 **Python** 终端编程代理。",
+                },
+            ]
+        )
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("resume"),
+        console,
+        tmp_path,
+        "old",
+        input_func=lambda prompt: "1",
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "当前项目是做什么的？" in rendered
+    assert "Thinking" in rendered
+    assert "read README.md  ok" in rendered
+    assert "这是一个 Python 终端编程代理。" in rendered
 
 
 def test_resume_slash_command_keeps_current_session_on_invalid_selection(tmp_path, monkeypatch):
@@ -224,21 +233,70 @@ def test_collect_pending_question_response_accepts_multi_select_text():
     assert '"Which scopes?"="tests, lint"' in response
 
 
-def test_print_stream_event_shows_tool_call_and_output():
+def test_print_stream_event_merges_tool_call_and_output():
     console = Console(record=True)
+    pending = {}
 
-    _print_stream_event(console, DeepyStreamEvent(kind="tool_call", name="read"))
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="read",
+            payload={"call_id": "call-1", "arguments": '{"file_path":"/repo/README.md"}'},
+        ),
+        project_root="/repo",
+        pending_tool_calls=pending,
+    )
     _print_stream_event(
         console,
         DeepyStreamEvent(
             kind="tool_output",
+            payload={"call_id": "call-1"},
             text='{"ok":true,"name":"read","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
         ),
+        pending_tool_calls=pending,
     )
 
     rendered = console.export_text()
-    assert "tool call: read" in rendered
-    assert "tool output: read ok - /tmp/a" in rendered
+    assert "read README.md  ok" in rendered
+    assert "tool call:" not in rendered
+    assert "tool output:" not in rendered
+
+
+def test_print_user_input_uses_prompt_marker():
+    console = Console(record=True)
+
+    _print_user_input(console, "hello\nworld")
+
+    rendered = console.export_text()
+    assert "> hello" in rendered
+    assert "  world" in rendered
+
+
+def test_terminal_stream_renderer_flushes_reasoning_summary():
+    console = Console(record=True)
+    renderer = terminal.TerminalStreamRenderer(console)
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="让我先看看项目结构。"))
+    renderer.flush()
+
+    rendered = console.export_text()
+    assert "Thinking" in rendered
+    assert "让我先看看项目结构。" in rendered
+
+
+def test_terminal_stream_renderer_flushes_reasoning_for_each_model_turn():
+    console = Console(record=True)
+    renderer = terminal.TerminalStreamRenderer(console)
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="第一轮思考。"))
+    renderer.flush()
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="第二轮思考。"))
+    renderer.flush()
+
+    rendered = console.export_text()
+    assert "第一轮思考。" in rendered
+    assert "第二轮思考。" in rendered
 
 
 def test_status_slash_command_prints_status(tmp_path):
@@ -278,4 +336,57 @@ def test_print_usage_footer_shows_known_usage():
         ),
     )
 
-    assert "prompt=10 completion=2 total=12" in console.export_text()
+    rendered = console.export_text()
+    assert "usage input 10 · output 2 · total 12" in rendered
+
+
+def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():
+    console = Console(record=True)
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="usage",
+            payload={
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "completion_tokens_details": {"reasoning_tokens": 1},
+                }
+            },
+        ),
+    )
+
+    assert console.export_text() == ""
+
+
+def test_print_assistant_output_renders_markdown():
+    console = Console(record=True, width=120)
+
+    _print_assistant_output(
+        console,
+        "**Deepy** 项目\n\n- 终端 Agent\n\n```bash\nuv run deepy --help\n```",
+    )
+
+    rendered = console.export_text()
+    assert "Deepy" in rendered
+    assert "**Deepy**" not in rendered
+    assert "• 终端 Agent" in rendered
+    assert "code bash" in rendered
+    assert "```" not in rendered
+
+
+def test_run_once_with_status_returns_summary(tmp_path):
+    async def fake_run_once(prompt, **kwargs):
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    summary = _run_once_with_status(
+        Console(record=True),
+        fake_run_once,
+        "hello",
+        project_root=tmp_path,
+        settings=Settings(),
+    )
+
+    assert summary.output == "answer: hello"

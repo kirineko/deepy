@@ -14,14 +14,15 @@ def test_render_markdown_preserves_heading_text():
     result = render_markdown("# Title").plain
 
     assert "Title" in result
-    assert "#" in result
+    assert "#" not in result
 
 
 def test_render_markdown_preserves_code_fences_with_language_tag():
     result = render_markdown("```js\nconsole.log(1);\n```").plain
 
-    assert "[js]" in result
+    assert "code js" in result
     assert "console.log(1);" in result
+    assert "```" not in result
 
 
 def test_render_markdown_styles_inline_code_without_removing_it():
@@ -31,11 +32,11 @@ def test_render_markdown_styles_inline_code_without_removing_it():
     assert "`" not in result
 
 
-def test_render_markdown_keeps_bullet_markers():
+def test_render_markdown_renders_bullets():
     result = render_markdown("- item one\n- item two").plain
 
-    assert "- item one" in result
-    assert "- item two" in result
+    assert "• item one" in result
+    assert "• item two" in result
 
 
 def test_render_markdown_handles_plain_text_unchanged():

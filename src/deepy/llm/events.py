@@ -16,6 +16,16 @@ StreamKind = Literal[
     "unknown",
 ]
 
+TEXT_DELTA_TYPES = {
+    "",
+    "response.output_text.delta",
+    "response.refusal.delta",
+}
+REASONING_DELTA_TYPES = {
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_text.delta",
+}
+
 
 @dataclass(frozen=True)
 class DeepyStreamEvent:
@@ -31,10 +41,17 @@ def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
         data = getattr(event, "data", None)
         data_type = getattr(data, "type", "")
         delta = _raw_delta(event)
-        if data_type == "response.reasoning_summary_text.delta" and delta:
+        if data_type in REASONING_DELTA_TYPES and delta:
             return DeepyStreamEvent(kind="reasoning_delta", text=delta, payload={"raw": data})
-        if delta:
+        if delta and data_type in TEXT_DELTA_TYPES:
             return DeepyStreamEvent(kind="text_delta", text=delta)
+        if delta:
+            return DeepyStreamEvent(
+                kind="raw_response",
+                name=str(data_type or ""),
+                text=delta,
+                payload={"raw": data},
+            )
         if data_type == "response.completed":
             usage = _response_usage(data)
             return DeepyStreamEvent(
@@ -59,7 +76,7 @@ def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
             kind="tool_call",
             name=tool_name,
             text=tool_name,
-            payload={"call_id": _call_id(item)},
+            payload={"call_id": _call_id(item), "arguments": _tool_arguments(item)},
         )
     if name == "tool_output":
         output = getattr(item, "output", "")
@@ -114,6 +131,30 @@ def _tool_name(item: Any) -> str:
         value = raw_item.get("name")
         return value if isinstance(value, str) else ""
     value = getattr(raw_item, "name", "")
+    return value if isinstance(value, str) else ""
+
+
+def _tool_arguments(item: Any) -> str:
+    if item is None:
+        return ""
+    arguments = getattr(item, "arguments", None)
+    if isinstance(arguments, str):
+        return arguments
+    raw_item = getattr(item, "raw_item", None)
+    if isinstance(raw_item, dict):
+        value = raw_item.get("arguments")
+        if isinstance(value, str):
+            return value
+        function = raw_item.get("function")
+        if isinstance(function, dict):
+            value = function.get("arguments")
+            return value if isinstance(value, str) else ""
+        return ""
+    value = getattr(raw_item, "arguments", None)
+    if isinstance(value, str):
+        return value
+    function = getattr(raw_item, "function", None)
+    value = getattr(function, "arguments", None)
     return value if isinstance(value, str) else ""
 
 

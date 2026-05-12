@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -13,6 +12,7 @@ import tomli_w
 from . import __version__
 from .config import Settings, load_settings, settings_to_toml_dict
 from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
+from .errors import format_error_display
 from .llm.provider import build_provider_bundle
 from .llm.runner import run_prompt_once
 from .sessions import DeepyJsonlSession, list_session_entries
@@ -20,6 +20,7 @@ from .skills import discover_skills, find_skill, format_skills_for_terminal, rea
 from .status import build_status_report, format_status_report, status_report_to_dict
 from .usage import TokenUsage, format_usage_line, usage_from_run_result
 from .ui import run_interactive
+from .utils import json as json_utils
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -77,7 +78,7 @@ def _cmd_config_show(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     data = settings_to_toml_dict(settings, reveal_secret=args.show_secret)
     if args.json:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print(json_utils.dumps_pretty(data))
     else:
         print(tomli_w.dumps(data), end="")
     return 0
@@ -263,10 +264,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             try:
                 report["live"] = asyncio.run(_doctor_live(settings))
             except Exception as exc:
-                report["live"] = {"ok": False, "error": str(exc)}
+                report["live"] = {"ok": False, "error": format_error_display(exc)}
                 code = 1
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(json_utils.dumps_pretty(report))
         return code
     for item in report["checks"]:
         status = "ok" if item["ok"] else "fail"
@@ -307,7 +308,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             )
         )
     except Exception as exc:
-        print(f"deepy run failed: {exc}", file=sys.stderr)
+        print(f"deepy run failed: {format_error_display(exc)}", file=sys.stderr)
         return 1
     if summary.output and not summary.output.endswith("\n"):
         print()
@@ -334,14 +335,12 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             None,
         )
         print(
-            json.dumps(
+            json_utils.dumps_pretty(
                 {
                     "session_id": args.session_id,
                     "usage": entry.usage if entry is not None else None,
                     "items": items,
-                },
-                ensure_ascii=False,
-                indent=2,
+                }
             )
         )
         return 0
@@ -366,7 +365,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     report = build_status_report(Path.cwd(), settings)
     if args.json:
-        print(json.dumps(status_report_to_dict(report), ensure_ascii=False, indent=2))
+        print(json_utils.dumps_pretty(status_report_to_dict(report)))
     else:
         print(format_status_report(report))
     return 0

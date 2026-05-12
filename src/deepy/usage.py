@@ -63,6 +63,8 @@ def normalize_usage(value: Any) -> TokenUsage:
         input_details.get("cached_tokens"),
     )
     prompt_cache_miss_tokens = _int_field(payload.get("prompt_cache_miss_tokens"))
+    if prompt_cache_miss_tokens == 0 and prompt_tokens and prompt_cache_hit_tokens:
+        prompt_cache_miss_tokens = max(prompt_tokens - prompt_cache_hit_tokens, 0)
     reasoning_tokens = _first_int(
         completion_details.get("reasoning_tokens"),
         output_details.get("reasoning_tokens"),
@@ -83,6 +85,9 @@ def normalize_usage(value: Any) -> TokenUsage:
             entry["reasoning_tokens"] = reasoning_tokens
         if any(entry.values()):
             request_entries = [entry]
+    requests = _int_field(payload.get("requests"))
+    if requests == 0 and request_entries:
+        requests = len(request_entries)
 
     return TokenUsage(
         prompt_tokens=prompt_tokens,
@@ -91,7 +96,7 @@ def normalize_usage(value: Any) -> TokenUsage:
         prompt_cache_hit_tokens=prompt_cache_hit_tokens,
         prompt_cache_miss_tokens=prompt_cache_miss_tokens,
         reasoning_tokens=reasoning_tokens,
-        requests=_int_field(payload.get("requests")),
+        requests=requests,
         request_usage_entries=request_entries,
     )
 
@@ -128,19 +133,18 @@ def format_usage_line(usage: TokenUsage | Mapping[str, Any] | None) -> str:
     normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
     if not normalized.known:
         return "usage=unknown"
-    parts = [
-        f"prompt={normalized.prompt_tokens}",
-        f"completion={normalized.completion_tokens}",
-        f"total={normalized.total_tokens}",
-    ]
-    if normalized.reasoning_tokens:
-        parts.append(f"reasoning={normalized.reasoning_tokens}")
+    parts = [f"input {normalized.prompt_tokens:,}"]
     if normalized.prompt_cache_hit_tokens or normalized.prompt_cache_miss_tokens:
         parts.append(
-            "cache="
-            f"{normalized.prompt_cache_hit_tokens}/{normalized.prompt_cache_miss_tokens}"
+            "cache "
+            f"{normalized.prompt_cache_hit_tokens:,} hit / "
+            f"{normalized.prompt_cache_miss_tokens:,} miss"
         )
-    return " ".join(parts)
+    parts.append(f"output {normalized.completion_tokens:,}")
+    if normalized.reasoning_tokens:
+        parts.append(f"reasoning {normalized.reasoning_tokens:,}")
+    parts.append(f"total {normalized.total_tokens:,}")
+    return " · ".join(parts)
 
 
 def _to_mapping(value: Any) -> Mapping[str, Any] | None:

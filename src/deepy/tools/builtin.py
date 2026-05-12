@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import math
 import os
 import re
@@ -18,6 +17,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from deepy.config import Settings
+from deepy.utils import json as json_utils
 
 from .file_state import FileSnippet, FileState
 from .result import ToolResult
@@ -649,13 +649,13 @@ def _web_search_chat(settings: Settings, prompt: str) -> str:
 def _parse_json_response(text: str) -> dict[str, object]:
     cleaned = _strip_code_fence(text).strip()
     try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(cleaned)
+    except json_utils.JSONDecodeError:
         first_brace = cleaned.find("{")
         last_brace = cleaned.rfind("}")
         if first_brace < 0 or last_brace <= first_brace:
             raise ValueError(f"Failed to parse JSON response: {cleaned or '<empty>'}")
-        parsed = json.loads(cleaned[first_brace : last_brace + 1])
+        parsed = json_utils.loads(cleaned[first_brace : last_brace + 1])
     if not isinstance(parsed, dict):
         raise ValueError("JSON response must be an object.")
     return parsed
@@ -1133,7 +1133,7 @@ class ToolRuntime:
                 "WebSearch default mode requires machine_id in the TOML tools.web_search config.",
                 metadata={**prepared.metadata(), "apiUrl": api_url},
             ).to_json()
-        body = json.dumps({"query": prepared.resolved_query}).encode("utf-8")
+        body = json_utils.dumps({"query": prepared.resolved_query}).encode("utf-8")
         request = urllib.request.Request(
             api_url,
             data=body,
@@ -1154,8 +1154,8 @@ class ToolRuntime:
             ).to_json()
         output = body.strip()
         try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
+            payload = json_utils.loads(body)
+        except json_utils.JSONDecodeError:
             payload = None
         if isinstance(payload, dict):
             result = payload.get("result")
@@ -1218,7 +1218,7 @@ def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, o
     if path.suffix.lower() == ".json" and content is not None and not isinstance(content, bytes):
         try:
             return (
-                json.dumps(content, ensure_ascii=False, indent=2),
+                json_utils.dumps_pretty(content),
                 {"input_repaired": True, "repair_kind": "json-stringify-content"},
                 None,
             )
@@ -1232,8 +1232,8 @@ def _format_notebook(path: Path) -> tuple[str, str | None]:
     if not raw:
         return "WARNING: File is empty.", None
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        parsed = json_utils.loads(raw)
+    except json_utils.JSONDecodeError as exc:
         return "", f"Failed to parse notebook JSON: {exc}"
     if not isinstance(parsed, dict):
         return "WARNING: Notebook has no cells.", None

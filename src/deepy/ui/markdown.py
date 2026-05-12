@@ -25,8 +25,11 @@ def render_markdown(text: str) -> Text:
     for segment in split_by_fences(text):
         if segment.kind == "code":
             if segment.lang:
-                output.append(f"[{segment.lang}]\n", style="dim")
-            output.append(segment.body, style="cyan")
+                output.append(f"code {segment.lang}\n", style="dim")
+            for index, line in enumerate(segment.body.splitlines() or [""]):
+                if index:
+                    output.append("\n")
+                output.append(f"  {line}", style="bright_white on #1f2430")
         else:
             output.append(render_inline_block(segment.body))
     return output
@@ -90,16 +93,14 @@ def render_inline_line(line: str) -> Text:
     if heading:
         lead, hashes, content = heading.groups()
         rendered = Text(lead)
-        rendered.append(hashes, style="dim")
-        rendered.append(" ")
         rendered.append(content, style="bold cyan" if len(hashes) > 2 else "bold bright_cyan")
         return rendered
 
     list_match = re.match(r"^(\s*)([-*+])\s+(.*)$", line)
     if list_match:
-        lead, bullet, content = list_match.groups()
+        lead, _bullet, content = list_match.groups()
         rendered = Text(lead)
-        rendered.append(bullet, style="yellow")
+        rendered.append("•", style="bright_blue")
         rendered.append(" ")
         rendered.append(render_inline_spans(content))
         return rendered
@@ -140,9 +141,9 @@ def render_inline_spans(text: str) -> Text:
             rendered.append(text[position : match.start()])
         code, bold, star_italic, underscore_italic = match.groups()
         if code is not None:
-            rendered.append(code, style="cyan")
+            rendered.append(code, style="bold bright_yellow")
         elif bold is not None:
-            rendered.append(bold, style="bold")
+            rendered.append(bold, style="bold bright_white")
         else:
             rendered.append(star_italic or underscore_italic or "", style="italic")
         position = match.end()

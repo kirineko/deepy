@@ -22,6 +22,30 @@ def test_normalize_raw_text_delta():
     assert normalized.text == "hi"
 
 
+def test_normalize_tool_argument_delta_does_not_emit_text():
+    event = type(
+        "Event",
+        (),
+        {
+            "type": "raw_response_event",
+            "data": type(
+                "Data",
+                (),
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "delta": '{"file_path": "README.md"}',
+                },
+            )(),
+        },
+    )()
+
+    normalized = normalize_stream_event(event)
+
+    assert normalized is not None
+    assert normalized.kind == "raw_response"
+    assert normalized.text == '{"file_path": "README.md"}'
+
+
 def test_normalize_reasoning_delta():
     event = type(
         "Event",
@@ -41,6 +65,27 @@ def test_normalize_reasoning_delta():
     assert normalized is not None
     assert normalized.kind == "reasoning_delta"
     assert normalized.text == "thinking"
+
+
+def test_normalize_reasoning_text_delta():
+    event = type(
+        "Event",
+        (),
+        {
+            "type": "raw_response_event",
+            "data": type(
+                "Data",
+                (),
+                {"type": "response.reasoning_text.delta", "delta": "思考"},
+            )(),
+        },
+    )()
+
+    normalized = normalize_stream_event(event)
+
+    assert normalized is not None
+    assert normalized.kind == "reasoning_delta"
+    assert normalized.text == "思考"
 
 
 def test_normalize_response_completed_usage():
@@ -78,7 +123,11 @@ def test_normalize_raw_response_without_special_handling():
 
 
 def test_normalize_tool_call_event():
-    item = type("Item", (), {"tool_name": "read", "call_id": "call-1"})()
+    item = type(
+        "Item",
+        (),
+        {"tool_name": "read", "call_id": "call-1", "arguments": '{"file_path":"README.md"}'},
+    )()
     event = type(
         "Event",
         (),
@@ -91,6 +140,7 @@ def test_normalize_tool_call_event():
     assert normalized.kind == "tool_call"
     assert normalized.name == "read"
     assert normalized.payload["call_id"] == "call-1"
+    assert normalized.payload["arguments"] == '{"file_path":"README.md"}'
 
 
 def test_normalize_tool_output_event():

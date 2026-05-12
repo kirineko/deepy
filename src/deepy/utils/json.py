@@ -8,6 +8,8 @@ try:
 except Exception:  # pragma: no cover - exercised when optional wheel is unavailable.
     orjson = None  # type: ignore[assignment]
 
+JSONDecodeError = json.JSONDecodeError
+
 
 def dumps(value: Any) -> str:
     if orjson is not None:

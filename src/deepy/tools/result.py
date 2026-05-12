@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from deepy.utils import json as json_utils
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class ToolResult:
         return payload
 
     def to_json(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        return json_utils.dumps(self.to_dict())
 
     @classmethod
     def ok_result(

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Mapping
+
+from deepy.utils import json as json_utils
 
 
 OTHER_VALUE = "__other__"
@@ -103,8 +104,8 @@ def parse_ask_user_question_content(content: Any) -> list[AskUserQuestionItem]:
     if not isinstance(content, str) or not content:
         return []
     try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
+        parsed = json_utils.loads(content)
+    except json_utils.JSONDecodeError:
         return []
     if not isinstance(parsed, Mapping) or parsed.get("awaitUserResponse") is not True:
         return []

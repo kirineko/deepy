@@ -7,17 +7,36 @@ from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.styles import Style
 
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.slash_commands import SlashCommandItem
 
 
-IMAGE_ATTACHMENT_CLEAR_HINT = "ctrl+x clear images"
 DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
+PROMPT_TOOLBAR_BACKGROUND = "#24283b"
+PROMPT_TOOLBAR_FOREGROUND = "#d7def8"
+PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
+PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
+PROMPT_TOOLBAR: AnyFormattedText = [
+    (
+        "class:toolbar",
+        "Enter send · Shift+Enter newline · / commands · Esc interrupt",
+    )
+]
+PROMPT_STYLE = Style.from_dict(
+    {
+        "prompt": "ansicyan bold",
+        "placeholder": "#8a90aa",
+        "toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND} bold",
+        "bottom-toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
+    }
+)
 SHIFT_ENTER_SEQUENCES = (
     "\x1b[27;2;13~",  # xterm modified-key format.
     "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
@@ -47,6 +66,7 @@ def create_prompt_session(
         complete_while_typing=True,
         multiline=True,
         key_bindings=build_prompt_key_bindings(on_interrupt=on_interrupt),
+        style=PROMPT_STYLE,
     )
 
 
@@ -85,15 +105,16 @@ def install_shift_enter_key_sequence_overrides() -> None:
         prefix_cache.clear()
 
 
-def prompt_for_input(session: PromptSession[str], message: str = "deepy> ") -> str:
-    return session.prompt(message).strip()
-
-
-def format_image_attachment_status(count: int) -> str:
-    if count <= 0:
-        return ""
-    suffix = "" if count == 1 else "s"
-    return f"📎 {count} image{suffix} attached"
+def prompt_for_input(
+    session: PromptSession[str],
+    message: AnyFormattedText | None = None,
+) -> str:
+    prompt_message = PROMPT_MESSAGE if message is None else message
+    return session.prompt(
+        prompt_message,
+        placeholder=PROMPT_PLACEHOLDER,
+        bottom_toolbar=PROMPT_TOOLBAR,
+    ).strip()
 
 
 def format_selected_skills_status(skills: list[SkillInfo]) -> str:
@@ -130,10 +151,6 @@ def remove_current_slash_token(state: PromptBufferState) -> PromptBufferState:
 
     text = f"{state.text[:start]}{state.text[state.cursor:]}"
     return PromptBufferState(text=text, cursor=start)
-
-
-def is_clear_image_attachments_shortcut(input_text: str, *, ctrl: bool) -> bool:
-    return ctrl and input_text in {"x", "X"}
 
 
 def render_buffer_with_cursor(

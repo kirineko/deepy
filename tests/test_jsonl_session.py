@@ -332,3 +332,70 @@ async def test_jsonl_session_round_trips_sdk_tool_items(tmp_path):
     await session.add_items(sdk_items)
 
     assert await session.get_items() == sdk_items
+
+
+@pytest.mark.asyncio
+async def test_jsonl_session_drops_empty_assistant_between_function_calls_and_outputs(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+
+    sdk_items = [
+        {
+            "arguments": '{"file_path":"README.md"}',
+            "call_id": "call-read",
+            "name": "read",
+            "type": "function_call",
+        },
+        {
+            "id": "__fake_id__",
+            "content": [{"annotations": [], "text": "", "type": "output_text"}],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message",
+        },
+        {
+            "call_id": "call-read",
+            "output": json.dumps({"ok": True, "name": "read", "output": "README"}),
+            "type": "function_call_output",
+        },
+    ]
+
+    await session.add_items(sdk_items)
+
+    assert await DeepyJsonlSession.open(
+        tmp_path / "project",
+        "s1",
+        deepy_home=tmp_path / "home",
+    ).get_items() == [sdk_items[0], sdk_items[2]]
+
+
+@pytest.mark.asyncio
+async def test_jsonl_session_sanitizes_loaded_cache_after_append(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    first_item = {"role": "user", "content": "hello"}
+    await session.add_items([first_item])
+    assert await session.get_items() == [first_item]
+
+    sdk_items = [
+        {
+            "arguments": '{"file_path":"README.md"}',
+            "call_id": "call-read",
+            "name": "read",
+            "type": "function_call",
+        },
+        {
+            "id": "__fake_id__",
+            "content": [{"annotations": [], "text": "", "type": "output_text"}],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message",
+        },
+        {
+            "call_id": "call-read",
+            "output": json.dumps({"ok": True, "name": "read", "output": "README"}),
+            "type": "function_call_output",
+        },
+    ]
+
+    await session.add_items(sdk_items)
+
+    assert await session.get_items() == [first_item, sdk_items[0], sdk_items[2]]

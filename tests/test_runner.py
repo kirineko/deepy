@@ -66,6 +66,30 @@ class UsageStream:
         )()
 
 
+class MultiUsageStream:
+    final_output = "ok"
+    is_complete = True
+
+    async def stream_events(self):
+        for usage in (
+            SimpleNamespace(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+            SimpleNamespace(prompt_tokens=6, completion_tokens=2, total_tokens=8),
+        ):
+            response = SimpleNamespace(usage=usage)
+            yield type(
+                "Event",
+                (),
+                {
+                    "type": "raw_response_event",
+                    "data": type(
+                        "Data",
+                        (),
+                        {"type": "response.completed", "response": response},
+                    )(),
+                },
+            )()
+
+
 class FailingStream:
     final_output = None
     is_complete = False
@@ -257,36 +281,24 @@ async def test_run_prompt_once_returns_and_records_usage(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_prompt_once_sends_image_data_urls_as_multimodal_input(monkeypatch, tmp_path):
-    captured_inputs: list[object] = []
-
+async def test_run_prompt_once_accumulates_multiple_stream_usage_events(monkeypatch, tmp_path):
     class FakeRunner:
         @staticmethod
         def run_streamed(agent, input, max_turns, run_config, session):
-            captured_inputs.append(input)
-            return FakeStream()
+            return MultiUsageStream()
 
     monkeypatch.setattr("agents.Runner", FakeRunner)
 
-    await run_prompt_once(
-        "look",
+    summary = await run_prompt_once(
+        "usage",
         project_root=tmp_path,
         settings=Settings(),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
-        image_data_urls=["data:image/png;base64,x"],
     )
 
-    assert captured_inputs == [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "look"},
-                    {"type": "input_image", "image_url": "data:image/png;base64,x"},
-                ],
-            }
-        ]
-    ]
+    assert summary.usage.prompt_tokens == 10
+    assert summary.usage.completion_tokens == 3
+    assert summary.usage.total_tokens == 13
 
 
 @pytest.mark.asyncio
@@ -378,7 +390,6 @@ async def test_run_prompt_once_logs_debug_and_notifies(monkeypatch, tmp_path):
     assert debug_entries[0]["request"] == {
         "input": "say hello",
         "max_turns": 10,
-        "image_count": 0,
     }
     assert debug_entries[0]["response"] == {"output": "hello", "usage": {}}
     assert notify_calls and notify_calls[0][0] == "/tmp/notify.sh"
@@ -409,7 +420,6 @@ async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_
     assert error_entries[0]["request"] == {
         "input": "explode",
         "max_turns": 10,
-        "image_count": 0,
     }
     assert isinstance(error_entries[0]["error"], RuntimeError)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from deepy.sessions import SessionEntry
+from deepy.llm.context import estimate_tokens_for_text
 from deepy.ui.app import DeepyAppState
 from deepy.ui.app import StreamProgress
 from deepy.ui.app import append_message
@@ -40,7 +41,11 @@ def test_app_state_tracks_sessions_processes_and_progress():
 
     assert state.sessions == [entry]
     assert state.running_processes == {"123": {"command": "pytest"}}
-    assert state.stream_progress == StreamProgress(text_tokens=2, reasoning_tokens=1, tool_calls=1)
+    assert state.stream_progress == StreamProgress(
+        text_tokens=estimate_tokens_for_text("hello"),
+        reasoning_tokens=estimate_tokens_for_text("plan"),
+        tool_calls=1,
+    )
 
 
 def test_app_state_tracks_pending_questions_and_new_session_reset():

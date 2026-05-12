@@ -5,19 +5,22 @@ from pathlib import Path
 
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
-from deepy.ui.prompt_input import IMAGE_ATTACHMENT_CLEAR_HINT
+from deepy.ui.prompt_input import PROMPT_MESSAGE
+from deepy.ui.prompt_input import PROMPT_PLACEHOLDER
+from deepy.ui.prompt_input import PROMPT_TOOLBAR
+from deepy.ui.prompt_input import PROMPT_TOOLBAR_BACKGROUND
+from deepy.ui.prompt_input import PROMPT_TOOLBAR_FOREGROUND
 from deepy.ui.prompt_input import PromptCursorPlacement
 from deepy.ui.prompt_input import add_unique_skill
 from deepy.ui.prompt_input import build_prompt_key_bindings
 from deepy.ui.prompt_input import character_width
 from deepy.ui.prompt_input import create_prompt_session
-from deepy.ui.prompt_input import format_image_attachment_status
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
 from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
-from deepy.ui.prompt_input import is_clear_image_attachments_shortcut
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
+from deepy.ui.prompt_input import prompt_for_input
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
 from deepy.ui.prompt_input import SHIFT_ENTER_SEQUENCES
@@ -32,20 +35,6 @@ def _strip_ansi(text: str) -> str:
 
 def _skill(name: str, description: str) -> SkillInfo:
     return SkillInfo(name=name, path=Path(f"/skills/{name}/SKILL.md"), description=description)
-
-
-def test_format_image_attachment_status_formats_count_label():
-    assert format_image_attachment_status(0) == ""
-    assert format_image_attachment_status(1) == "📎 1 image attached"
-    assert format_image_attachment_status(2) == "📎 2 images attached"
-    assert IMAGE_ATTACHMENT_CLEAR_HINT == "ctrl+x clear images"
-
-
-def test_clear_image_attachments_shortcut_uses_ctrl_x():
-    assert is_clear_image_attachments_shortcut("x", ctrl=True)
-    assert is_clear_image_attachments_shortcut("X", ctrl=True)
-    assert not is_clear_image_attachments_shortcut("x", ctrl=False)
-    assert not is_clear_image_attachments_shortcut("c", ctrl=True)
 
 
 def test_selected_skill_helpers_format_dedupe_toggle_and_clear_slash_tokens():
@@ -122,7 +111,7 @@ def test_create_prompt_session_configures_history_multiline_and_slash_completion
     session = create_prompt_session(
         slash_commands=[
             SlashCommandItem("new", "new", "/new", "Start fresh"),
-            SlashCommandItem("paste-image", "paste-image", "/paste-image", "Paste image"),
+            SlashCommandItem("resume", "resume", "/resume", "Resume"),
         ],
         history_path=tmp_path / "history.txt",
     )
@@ -130,6 +119,25 @@ def test_create_prompt_session_configures_history_multiline_and_slash_completion
     assert session.multiline is True
     assert session.completer is not None
     assert (tmp_path / "history.txt").exists()
+
+
+def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
+    class FakePromptSession:
+        kwargs = {}
+
+        def prompt(self, message, **kwargs):
+            self.message = message
+            self.kwargs = kwargs
+            return " hello "
+
+    session = FakePromptSession()
+
+    assert prompt_for_input(session) == "hello"
+    assert session.message == PROMPT_MESSAGE
+    assert session.kwargs["placeholder"] == PROMPT_PLACEHOLDER
+    assert session.kwargs["bottom_toolbar"] == PROMPT_TOOLBAR
+    assert PROMPT_TOOLBAR_BACKGROUND == "#24283b"
+    assert PROMPT_TOOLBAR_FOREGROUND == "#d7def8"
 
 
 def test_build_prompt_key_bindings_registers_escape_interrupt():

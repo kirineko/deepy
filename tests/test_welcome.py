@@ -85,4 +85,3 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
     assert "deepseek-v4-pro" in rendered
     assert "Reasoning Effort" in rendered
     assert "/resume" in rendered
-    assert "/paste-image" in rendered

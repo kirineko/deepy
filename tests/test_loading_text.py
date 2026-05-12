@@ -106,5 +106,24 @@ def test_build_loading_text_falls_back_to_thinking_for_invalid_timestamp():
     assert text == "Thinking..."
 
 
+def test_build_loading_text_appends_known_usage():
+    text = build_loading_text(
+        progress={
+            "requestId": "r",
+            "startedAt": STARTED_AT,
+            "formattedTokens": "850",
+        },
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "completion_tokens_details": {"reasoning_tokens": 1},
+        },
+        now_ms=STARTED_MS + 5_000,
+    )
+
+    assert text == "Thinking... (5s) · ↓ 850 tokens · input 10 · output 2 · reasoning 1 · total 12"
+
+
 def test_format_elapsed_time_handles_invalid_timestamp_as_zero():
     assert format_elapsed_time("not-a-date", now_ms=STARTED_MS) == "0s"

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from deepy.llm.context import estimate_tokens_for_item
+from deepy.llm.replay import sanitize_sdk_items_for_replay
 from deepy.usage import TokenUsage, merge_usage, normalize_usage
 from deepy.utils import json as json_utils
 
@@ -101,7 +103,9 @@ class DeepyJsonlSession:
                 record = self._record_from_sdk_item(item)
                 fh.write(json_utils.dumps(record) + "\n")
         if self._loaded_items is not None:
-            self._loaded_items.extend(dict(item) for item in items)
+            self._loaded_items = sanitize_sdk_items_for_replay(
+                [*self._loaded_items, *(dict(item) for item in items)]
+            )
         self._touch_index(active_tokens=self._estimate_active_tokens())
 
     async def pop_item(self) -> dict[str, Any] | None:
@@ -161,11 +165,12 @@ class DeepyJsonlSession:
 
     def _load_items(self) -> list[dict[str, Any]]:
         if self._loaded_items is None:
-            self._loaded_items = [
+            loaded_items = [
                 item
                 for item in (_sdk_item_from_record(record) for record in self._load_records())
                 if item is not None
             ]
+            self._loaded_items = sanitize_sdk_items_for_replay(loaded_items)
         return list(self._loaded_items)
 
     def _estimate_active_tokens(self, records: list[dict[str, Any]] | None = None) -> int:
@@ -295,7 +300,7 @@ def _normalize_processes(value: Any) -> dict[str, dict[str, str]] | None:
 
 
 def _estimate_record_tokens(record: dict[str, Any]) -> int:
-    content = record.get("content", "")
-    if not isinstance(content, str):
-        content = json_utils.dumps(content)
-    return max(1, (len(content) + 3) // 4)
+    item = _sdk_item_from_record(record)
+    if item is not None:
+        return estimate_tokens_for_item(item)
+    return estimate_tokens_for_item(record.get("content", ""))

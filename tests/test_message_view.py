@@ -5,6 +5,8 @@ import json
 from rich.console import Console
 
 from deepy.ui.message_view import format_tool_output_summary
+from deepy.ui.message_view import format_tool_progress_summary
+from deepy.ui.message_view import format_tool_call_summary
 from deepy.ui.message_view import build_thinking_summary
 from deepy.ui.message_view import build_tool_params_snippet
 from deepy.ui.message_view import build_tool_result_snippet
@@ -186,6 +188,18 @@ def test_build_thinking_summary_summarizes_content_across_lines():
     )
 
 
+def test_build_thinking_summary_keeps_moderate_content_untruncated():
+    content = " ".join(["step"] * 60)
+
+    assert "[truncated]" not in build_thinking_summary(content)
+
+
+def test_build_thinking_summary_truncates_very_long_content():
+    content = " ".join(["step"] * 120)
+
+    assert "[truncated]" in build_thinking_summary(content)
+
+
 def test_build_thinking_summary_removes_trailing_colon():
     assert build_thinking_summary("Planning:") == "Planning"
     assert build_thinking_summary("规划：") == "规划"
@@ -203,6 +217,38 @@ def test_build_tool_params_snippet_formats_bash_command_and_description():
             {"name": "bash", "arguments": '{"command":"pytest","description":"run tests"}'}
         )
         == "pytest  # run tests"
+    )
+
+
+def test_format_tool_call_summary_formats_read_arguments():
+    assert (
+        format_tool_call_summary(
+            "read",
+            '{"file_path":"/repo/README.md"}',
+            project_root="/repo",
+        )
+        == "read README.md"
+    )
+
+
+def test_format_tool_progress_summary_merges_call_and_output_status():
+    output = (
+        '{"ok":true,"name":"read","output":"","error":null,'
+        '"metadata":{"path":"/repo/README.md"},"awaitUserResponse":false}'
+    )
+
+    assert format_tool_progress_summary("read README.md", output) == "read README.md  ok"
+
+
+def test_format_tool_progress_summary_includes_failure_detail():
+    output = (
+        '{"ok":false,"name":"bash","output":"stderr","error":"Command exited with code 1.",'
+        '"metadata":{"exitCode":1},"awaitUserResponse":false}'
+    )
+
+    assert (
+        format_tool_progress_summary("bash pytest", output)
+        == "bash pytest  failed - Command exited with code 1."
     )
 
 
