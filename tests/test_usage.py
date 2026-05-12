@@ -53,7 +53,7 @@ def test_merge_usage_and_format_line():
     assert usage.prompt_tokens == 9
     assert usage.completion_tokens == 14
     assert usage.total_tokens == 23
-    assert format_usage_line(usage) == "input 9 · output 14 · total 23"
+    assert format_usage_line(usage) == "context input 9 · output 14 · total 23"
 
 
 def test_format_usage_line_shows_cache_hit_rate():
@@ -69,7 +69,7 @@ def test_format_usage_line_shows_cache_hit_rate():
 
     assert (
         format_usage_line(usage)
-        == "input 100 · cache 80 hit / 20 miss (80.0% hit) · output 25 · total 125"
+        == "context input 100 · fresh input 20 · cached input 80 (80.0% hit) · output 25 · total 125"
     )
 
 

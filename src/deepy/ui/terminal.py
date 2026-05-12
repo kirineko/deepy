@@ -692,7 +692,7 @@ def _print_usage_footer(
         duration = _format_duration_ms(summary.duration_ms) if summary.duration_ms > 0 else ""
         prefix = f"time {duration} · " if duration else ""
         console.print(
-            f"[{STYLE_MUTED}]turn usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
+            f"[{STYLE_MUTED}]turn API usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
         )
     elif summary.duration_ms > 0:
         console.print(f"[{STYLE_MUTED}]turn time[/] {_format_duration_ms(summary.duration_ms)}")

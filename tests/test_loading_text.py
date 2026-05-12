@@ -122,7 +122,10 @@ def test_build_loading_text_appends_known_usage():
         now_ms=STARTED_MS + 5_000,
     )
 
-    assert text == "Thinking... (5s) · ↓ 850 tokens · input 10 · output 2 · reasoning 1 · total 12"
+    assert (
+        text
+        == "Thinking... (5s) · ↓ 850 tokens · context input 10 · output 2 · reasoning 1 · total 12"
+    )
 
 
 def test_format_elapsed_time_handles_invalid_timestamp_as_zero():

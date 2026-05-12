@@ -133,15 +133,14 @@ def format_usage_line(usage: TokenUsage | Mapping[str, Any] | None) -> str:
     normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
     if not normalized.known:
         return "usage=unknown"
-    parts = [f"input {normalized.prompt_tokens:,}"]
+    parts = [f"context input {normalized.prompt_tokens:,}"]
     cache_tokens = normalized.prompt_cache_hit_tokens + normalized.prompt_cache_miss_tokens
     if cache_tokens:
         cache_hit_rate = normalized.prompt_cache_hit_tokens / cache_tokens * 100
+        parts.append(f"fresh input {normalized.prompt_cache_miss_tokens:,}")
         parts.append(
-            "cache "
-            f"{normalized.prompt_cache_hit_tokens:,} hit / "
-            f"{normalized.prompt_cache_miss_tokens:,} miss"
-            f" ({cache_hit_rate:.1f}% hit)"
+            f"cached input {normalized.prompt_cache_hit_tokens:,} "
+            f"({cache_hit_rate:.1f}% hit)"
         )
     parts.append(f"output {normalized.completion_tokens:,}")
     if normalized.reasoning_tokens:

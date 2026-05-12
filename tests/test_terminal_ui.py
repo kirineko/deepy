@@ -450,7 +450,7 @@ def test_print_usage_footer_shows_known_usage():
     )
 
     rendered = console.export_text()
-    assert "turn usage input 10 · output 2 · total 12" in rendered
+    assert "turn API usage context input 10 · output 2 · total 12" in rendered
 
 
 def test_print_usage_footer_shows_turn_duration():
@@ -467,7 +467,10 @@ def test_print_usage_footer_shows_turn_duration():
         ),
     )
 
-    assert "turn usage time 1m 5s · input 10 · output 2 · total 12" in console.export_text()
+    assert (
+        "turn API usage time 1m 5s · context input 10 · output 2 · total 12"
+        in console.export_text()
+    )
 
 
 def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
@@ -505,7 +508,7 @@ def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     )
 
     rendered = console.export_text()
-    assert "turn usage requests 2 · input 100 · output 2 · total 102" in rendered
+    assert "turn API usage requests 2 · context input 100 · output 2 · total 102" in rendered
     assert "context used" not in rendered
     assert "900" not in rendered
     assert "session" not in rendered
