@@ -785,6 +785,41 @@ class ToolRuntime:
             metadata=metadata,
         ).to_json()
 
+    def modify(
+        self,
+        path: str | None,
+        *,
+        content: object | None = None,
+        old: str | None = None,
+        new: str | None = None,
+        replace_all: bool = False,
+        snippet_id: str | None = None,
+    ) -> str:
+        has_content = content is not None
+        has_replacement = old is not None or new is not None
+        if has_content and has_replacement:
+            return ToolResult.error_result(
+                "modify",
+                "Use either content for a new file or old_string/new_string for an existing file, not both.",
+            ).to_json()
+        if has_content:
+            if not path:
+                return ToolResult.error_result("modify", "file_path is required for new files.").to_json()
+            target = _resolve_in_cwd(self.cwd, path)
+            if target.exists():
+                return ToolResult.error_result(
+                    "modify",
+                    "File already exists. Read it and use old_string/new_string with modify instead of content.",
+                    metadata={"path": str(target)},
+                ).to_json()
+            return self.write(path, content)
+        if old is None or new is None:
+            return ToolResult.error_result(
+                "modify",
+                "Provide content for a new file, or both old_string and new_string for an existing file.",
+            ).to_json()
+        return self.edit(path, old, new, replace_all=replace_all, snippet_id=snippet_id)
+
     def write(self, path: str, content: object) -> str:
         name = "write"
         target = _resolve_in_cwd(self.cwd, path)

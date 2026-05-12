@@ -512,6 +512,26 @@ def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     assert "read before" in denied["error"]
 
 
+def test_modify_creates_new_files_and_edits_existing_files(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    created = decode(runtime.modify("new.txt", content="hello\n"))
+    assert created["ok"] is True
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
+
+    denied = decode(runtime.modify("existing.txt", content="changed\n"))
+    assert denied["ok"] is False
+    assert "old_string/new_string" in denied["error"]
+
+    decode(runtime.read("existing.txt"))
+    edited = decode(runtime.modify("existing.txt", old="old", new="new"))
+
+    assert edited["ok"] is True
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
 def test_write_preserves_existing_crlf_line_endings(tmp_path):
     target = tmp_path / "windows.txt"
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
@@ -729,8 +749,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "bash",
         "AskUserQuestion",
         "read",
-        "write",
-        "edit",
+        "modify",
         "WebSearch",
     ]
     assert all(tool.description for tool in tools)
@@ -751,14 +770,12 @@ def test_function_tool_schemas_match_legacy_names(tmp_path):
         "limit",
         "pages",
     ]
-    assert tools["write"].params_json_schema["required"] == ["file_path", "content"]
-    assert list(tools["write"].params_json_schema["properties"]) == ["file_path", "content"]
-    assert "prefer edit" in tools["write"].description
-    assert tools["edit"].params_json_schema["required"] == ["old_string", "new_string"]
-    assert "Prefer this over write" in tools["edit"].description
-    assert list(tools["edit"].params_json_schema["properties"]) == [
+    assert tools["modify"].params_json_schema["required"] == []
+    assert "old_string/new_string" in tools["modify"].description
+    assert list(tools["modify"].params_json_schema["properties"]) == [
         "file_path",
         "snippet_id",
+        "content",
         "old_string",
         "new_string",
         "replace_all",

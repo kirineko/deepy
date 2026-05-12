@@ -360,6 +360,22 @@ def test_format_tool_call_summary_formats_write_without_content_body():
     assert "println" not in summary
 
 
+def test_format_tool_call_summary_formats_modify_create_without_content_body():
+    summary = format_tool_call_summary(
+        "modify",
+        json.dumps(
+            {
+                "file_path": "/repo/src/lib.rs",
+                "content": "fn main() {\n    println!(\"hi\");\n}\n",
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "modify src/lib.rs (4 lines, 34 chars)"
+    assert "println" not in summary
+
+
 def test_format_tool_progress_summary_merges_call_and_output_status():
     output = (
         '{"ok":true,"name":"read","output":"","error":null,'

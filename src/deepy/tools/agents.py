@@ -28,16 +28,13 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
             pages=_optional_string_arg(args, "pages"),
         )
 
-    async def invoke_write(_context: object, raw_input: str) -> str:
+    async def invoke_modify(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
-        return runtime.write(_string_arg(args, "file_path"), _string_arg(args, "content"))
-
-    async def invoke_edit(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
-        return runtime.edit(
+        return runtime.modify(
             _optional_string_arg(args, "file_path"),
-            _string_arg(args, "old_string"),
-            _string_arg(args, "new_string"),
+            content=args.get("content"),
+            old=_nullable_string_arg(args, "old_string"),
+            new=_nullable_string_arg(args, "new_string"),
             replace_all=_bool_arg(args, "replace_all", False),
             snippet_id=_optional_string_arg(args, "snippet_id"),
         )
@@ -72,24 +69,13 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
             strict_json_schema=False,
         ),
         FunctionTool(
-            name="write",
+            name="modify",
             description=(
-                "Create new files or perform an intentional full-file replacement. "
-                "For existing files, prefer edit for functions, imports, tests, blocks, "
-                "or small sets of lines."
+                "Create new files or edit existing files. Use content only for files that do not "
+                "exist. For existing files, read first and use old_string/new_string."
             ),
-            params_json_schema=WRITE_SCHEMA,
-            on_invoke_tool=invoke_write,
-            strict_json_schema=False,
-        ),
-        FunctionTool(
-            name="edit",
-            description=(
-                "Perform scoped string replacements in existing files. Prefer this over write "
-                "for targeted code, import, test, comment, or block changes."
-            ),
-            params_json_schema=EDIT_SCHEMA,
-            on_invoke_tool=invoke_edit,
+            params_json_schema=MODIFY_SCHEMA,
+            on_invoke_tool=invoke_modify,
             strict_json_schema=False,
         ),
         FunctionTool(
@@ -118,6 +104,11 @@ def _string_arg(args: dict[str, Any], name: str) -> str:
 def _optional_string_arg(args: dict[str, Any], name: str) -> str | None:
     value = args.get(name)
     return value if isinstance(value, str) and value else None
+
+
+def _nullable_string_arg(args: dict[str, Any], name: str) -> str | None:
+    value = args.get(name)
+    return value if isinstance(value, str) else None
 
 
 def _int_arg(args: dict[str, Any], name: str, default: int) -> int:
@@ -231,19 +222,48 @@ READ_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-WRITE_SCHEMA: dict[str, Any] = {
+MODIFY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "Absolute path to file",
+            "description": "Absolute path to file. Optional when snippet_id scopes an existing edit.",
+        },
+        "snippet_id": {
+            "type": "string",
+            "description": (
+                "Snippet id returned by the Read or Modify tool to scope the search range after "
+                "a partial read."
+            ),
         },
         "content": {
             "type": "string",
-            "description": "Complete file content as a single string. Serialize JSON documents before writing.",
+            "description": (
+                "Complete content for a new file only. Do not use for existing files; read the file "
+                "and use old_string/new_string instead."
+            ),
+        },
+        "old_string": {
+            "type": "string",
+            "description": "Exact existing text to replace inside the file or snippet scope",
+        },
+        "new_string": {
+            "type": "string",
+            "description": "Replacement text for old_string",
+        },
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace all occurrences of old_string (default false)",
+            "default": False,
+        },
+        "expected_occurrences": {
+            "type": "number",
+            "description": (
+                "Expected number of matches, especially useful as a safety check with replace_all"
+            ),
         },
     },
-    "required": ["file_path", "content"],
+    "required": [],
     "additionalProperties": False,
 }
 
