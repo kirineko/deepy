@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -83,6 +85,7 @@ async def run_prompt_once(
     waiting_for_user = False
     pending_questions: list[dict[str, Any]] = []
     usage = TokenUsage()
+    interrupt_task: asyncio.Task[bool] | None = None
     try:
         result = Runner.run_streamed(
             agent,
@@ -91,6 +94,14 @@ async def run_prompt_once(
             run_config=run_config,
             session=session,
         )
+        if should_interrupt is not None:
+            interrupt_task = asyncio.create_task(
+                _watch_stream_interrupt(
+                    result,
+                    should_interrupt=should_interrupt,
+                    cancel_mode=cancel_mode,
+                )
+            )
         async for event in result.stream_events():
             if should_interrupt is not None and should_interrupt():
                 _cancel_stream_result(result, mode=cancel_mode)
@@ -120,6 +131,7 @@ async def run_prompt_once(
                 interrupted = True
                 break
     except MaxTurnsExceeded:
+        interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
         result_usage = usage_from_run_result(result)
         if result_usage.known:
             usage = result_usage
@@ -134,6 +146,7 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except APIStatusError as exc:
+        interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
         log_api_error(
             {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -164,6 +177,7 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except Exception as exc:
+        await _finish_interrupt_task(interrupt_task)
         log_api_error(
             {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -180,6 +194,8 @@ async def run_prompt_once(
             }
         )
         raise
+
+    interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
 
     final_output = getattr(result, "final_output", None)
     output = final_output if isinstance(final_output, str) else "".join(chunks)
@@ -384,6 +400,31 @@ def _cancel_stream_result(
         cancel(mode=mode)
     except TypeError:
         cancel()
+
+
+async def _watch_stream_interrupt(
+    result: Any,
+    *,
+    should_interrupt: Callable[[], bool],
+    cancel_mode: Literal["immediate", "after_turn"],
+) -> bool:
+    while not bool(getattr(result, "is_complete", False)):
+        if should_interrupt():
+            _cancel_stream_result(result, mode=cancel_mode)
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+async def _finish_interrupt_task(task: asyncio.Task[bool] | None) -> bool:
+    if task is None:
+        return False
+    if task.done():
+        return task.result()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    return False
 
 
 def _pending_questions_from_tool_output(output: str) -> list[dict[str, Any]]:

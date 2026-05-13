@@ -116,6 +116,14 @@ context_window_tokens = 1048576
 compact_threshold = 0.8
 ```
 
+WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it
+with your own SearXNG instance:
+
+```toml
+[tools.web_search]
+searxng_url = "https://your-searxng.example/"
+```
+
 You can also initialize config non-interactively:
 
 ```bash
@@ -172,6 +180,6 @@ assets live outside the package directory and are not included in the wheel.
 
 ## Release Status
 
-Deepy is preparing its first public `0.1.2` release. The current release path is
+Deepy is preparing its first public `0.1.3` release. The current release path is
 GitHub + PyPI. Standalone binaries and npm wrappers can be added later, but the
 primary distribution is the Python CLI.

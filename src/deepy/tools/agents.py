@@ -84,7 +84,11 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         ),
         FunctionTool(
             name="WebSearch",
-            description="Perform web searching using a natural language query.",
+            description=(
+                "Perform web searching using a natural language query. Use a small number of "
+                "targeted searches, then stop and synthesize once enough sources are available; "
+                "prefer WebFetch for exact URLs."
+            ),
             params_json_schema=WEB_SEARCH_SCHEMA,
             on_invoke_tool=invoke_web_search,
             strict_json_schema=False,

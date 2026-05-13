@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import math
 import os
 import re
 import signal
-import shlex
 import subprocess
 import tempfile
 import time
 import urllib.parse
 import urllib.request
 import uuid
+import zlib
 from dataclasses import dataclass, field
 from difflib import unified_diff
 from fnmatch import fnmatch
 from html.parser import HTMLParser
 from pathlib import Path
 
-from deepy.config import Settings
+from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, Settings, mask_secret
 from deepy.utils import json as json_utils
 
 from .file_state import FileSnippet, FileState
@@ -36,6 +37,20 @@ MAX_WEB_FETCH_BYTES = 2 * 1024 * 1024
 MAX_WEB_FETCH_OUTPUT_CHARS = 30_000
 DEFAULT_WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 DEFAULT_WEB_SEARCH_RESULTS = 8
+MAX_WEB_SEARCH_CALLS_PER_TURN = 8
+WEB_SEARCH_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+}
 PDF_LARGE_PAGE_THRESHOLD = 10
 PDF_MAX_PAGE_RANGE = 20
 MAX_CANDIDATE_COUNT = 5
@@ -162,6 +177,26 @@ class WebSearchResult:
     title: str
     url: str
     snippet: str = ""
+
+
+@dataclass(frozen=True)
+class WebSearchProviderFailure:
+    provider: str
+    error: str
+    search_url: str | None = None
+
+    def metadata(self) -> dict[str, str]:
+        payload = {"provider": self.provider, "error": self.error}
+        if self.search_url:
+            payload["searchUrl"] = _mask_url_secrets(self.search_url)
+        return payload
+
+
+@dataclass(frozen=True)
+class WebSearchProviderResult:
+    provider: str
+    search_url: str
+    results: list[WebSearchResult]
 
 
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
@@ -773,6 +808,86 @@ def _format_search_results(query: str, results: list[WebSearchResult]) -> str:
     return "\n".join(lines).strip()
 
 
+def _parse_searxng_results(body: str) -> list[WebSearchResult]:
+    payload = json_utils.loads(body)
+    if not isinstance(payload, dict):
+        raise ValueError("SearXNG response must be a JSON object.")
+    raw_results = payload.get("results")
+    if not isinstance(raw_results, list):
+        raise ValueError("SearXNG response is missing a results array.")
+    results: list[WebSearchResult] = []
+    seen_urls: set[str] = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        url = item.get("url")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        if not isinstance(url, str) or not url.strip() or url in seen_urls:
+            continue
+        content = item.get("content")
+        snippet = content if isinstance(content, str) else ""
+        seen_urls.add(url)
+        results.append(WebSearchResult(title=" ".join(title.split()), url=url, snippet=snippet.strip()))
+    return results
+
+
+def _build_searxng_search_url(base_url: str, query: str) -> str:
+    stripped = base_url.strip()
+    parsed = urllib.parse.urlparse(stripped)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("SearXNG URL must be a complete http or https URL.")
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("SearXNG URL must use http or https.")
+    path = parsed.path.rstrip("/")
+    endpoint_path = parsed.path if path.endswith("/search") else f"{path}/search"
+    parts = parsed._replace(path=endpoint_path or "/search")
+    query_params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    query_params.extend([("q", query), ("format", "json")])
+    return urllib.parse.urlunparse(parts._replace(query=urllib.parse.urlencode(query_params)))
+
+
+def _decode_http_body(body: bytes, *, encoding: str | None, charset: str = "utf-8") -> str:
+    normalized_encoding = (encoding or "").split(";", 1)[0].strip().lower()
+    if normalized_encoding == "gzip":
+        body = gzip.decompress(body)
+    elif normalized_encoding == "deflate":
+        try:
+            body = zlib.decompress(body)
+        except zlib.error:
+            body = zlib.decompress(body, -zlib.MAX_WBITS)
+    elif normalized_encoding not in {"", "identity"}:
+        raise ValueError(f"Unsupported content encoding: {encoding}")
+    return body.decode(charset, errors="replace")
+
+
+def _response_header(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    value = getter(name)
+    return value if isinstance(value, str) else None
+
+
+def _mask_url_secrets(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    query_params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    sensitive_keys = {"api_key", "apikey", "key", "token", "access_token", "auth", "authorization"}
+    masked = [
+        (key, mask_secret(value) if key.lower() in sensitive_keys else value)
+        for key, value in query_params
+    ]
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(masked)))
+
+
+def _format_provider_failures(failures: list[WebSearchProviderFailure]) -> str:
+    return "; ".join(f"{failure.provider}: {failure.error}" for failure in failures)
+
+
 class _ReadableHtmlParser(HTMLParser):
     BLOCK_TAGS = {
         "address",
@@ -928,6 +1043,7 @@ class ToolRuntime:
     settings: Settings
     file_state: FileState = field(default_factory=FileState)
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
+    web_search_calls: int = 0
 
     def read(
         self,
@@ -1317,12 +1433,21 @@ class ToolRuntime:
         name = "WebSearch"
         if not query.strip():
             return ToolResult.error_result(name, 'Missing required "query" string.').to_json()
-        command = self.settings.tools.web_search.command
-        if command:
-            return self._web_search_command(query, command)
-        api_url = self.settings.tools.web_search.api_url
-        if api_url:
-            return self._web_search_api(query, api_url)
+        self.web_search_calls += 1
+        if self.web_search_calls > MAX_WEB_SEARCH_CALLS_PER_TURN:
+            return ToolResult.error_result(
+                name,
+                (
+                    f"WebSearch call limit reached for this turn "
+                    f"({MAX_WEB_SEARCH_CALLS_PER_TURN}). Stop searching and answer from the "
+                    "results already gathered, or use WebFetch only for a specific URL that is "
+                    "essential."
+                ),
+                metadata={
+                    "callLimit": MAX_WEB_SEARCH_CALLS_PER_TURN,
+                    "callCount": self.web_search_calls,
+                },
+            ).to_json()
         return self._web_search_builtin(query)
 
     def web_fetch(self, url: str) -> str:
@@ -1398,196 +1523,147 @@ class ToolRuntime:
             },
         ).to_json()
 
-    def _web_search_command(self, query: str, command: str) -> str:
-        name = "WebSearch"
-        prepared = _prepare_web_search_query(query)
-        activity_label = _format_web_search_activity_label(query)
-        process: subprocess.Popen[str] | None = None
-        try:
-            process = subprocess.Popen(
-                f"{command} {shlex.quote(prepared.resolved_query)}",
-                shell=True,
-                cwd=self.cwd,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                executable="/bin/zsh",
-            )
-            process_id = str(process.pid)
-            self.running_processes[process_id] = {
-                "startTime": _now_iso(),
-                "command": activity_label,
-            }
-            stdout, stderr = process.communicate(timeout=60)
-        except subprocess.TimeoutExpired:
-            if process is not None:
-                _terminate_process(process)
-                stdout, stderr = process.communicate()
-                self.running_processes.pop(str(process.pid), None)
-            output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
-            return ToolResult.error_result(
-                name,
-                "WebSearch command timed out after 60000ms.",
-                output=output,
-                metadata={
-                    **prepared.metadata(),
-                    "activityLabel": activity_label,
-                    "outputTruncated": output_truncated,
-                    "interrupted": True,
-                },
-            ).to_json()
-        finally:
-            if process is not None:
-                self.running_processes.pop(str(process.pid), None)
-        output = (stdout or "") + (stderr or "")
-        output, output_truncated = _truncate_output(output)
-        if process.returncode != 0:
-            return ToolResult.error_result(
-                name,
-                f"WebSearch command exited with code {process.returncode}.",
-                output=output,
-                metadata={
-                    **prepared.metadata(),
-                    "exitCode": process.returncode,
-                    "activityLabel": activity_label,
-                    "outputTruncated": output_truncated,
-                },
-            ).to_json()
-        return ToolResult.ok_result(
-            name,
-            output,
-            metadata={
-                **prepared.metadata(),
-                "exitCode": process.returncode,
-                "activityLabel": activity_label,
-                "outputTruncated": output_truncated,
-            },
-        ).to_json()
-
     def _web_search_builtin(self, query: str) -> str:
         name = "WebSearch"
         prepared, prepare_error = _prepare_web_search_query_with_llm(query, self.settings)
-        search_url = (
-            DEFAULT_WEB_SEARCH_URL
-            + "?"
-            + urllib.parse.urlencode({"q": prepared.resolved_query}, doseq=False)
-        )
         activity_label = _format_web_search_activity_label(prepared.resolved_query)
         activity_id = f"web-search-{uuid.uuid4().hex}"
         self.running_processes[activity_id] = {
             "startTime": _now_iso(),
             "command": activity_label,
         }
-        request = urllib.request.Request(
-            search_url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Deepy/0.1"
-                )
-            },
-            method="GET",
-        )
+        failures: list[WebSearchProviderFailure] = []
+        query_metadata = {
+            **prepared.metadata(),
+            "activityLabel": activity_label,
+            **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
+        }
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read().decode("utf-8", errors="replace")
-        except Exception as exc:
+            searxng_url = self.settings.tools.web_search.searxng_url or DEFAULT_WEB_SEARCH_SEARXNG_URL
+            result, failure = self._try_searxng_search(prepared.resolved_query, searxng_url)
+            if result is not None:
+                return ToolResult.ok_result(
+                    name,
+                    _format_search_results(prepared.resolved_query, result.results),
+                    metadata={
+                        **query_metadata,
+                        "backend": result.provider,
+                        "provider": result.provider,
+                        "searchUrl": _mask_url_secrets(result.search_url),
+                        "providerAttempts": [
+                            {**item.metadata(), "ok": False} for item in failures
+                        ]
+                        + [{"provider": result.provider, "ok": True}],
+                        "resultCount": min(len(result.results), DEFAULT_WEB_SEARCH_RESULTS),
+                    },
+                ).to_json()
+            if failure is not None:
+                failures.append(failure)
+
+            result, failure = self._try_duckduckgo_search(prepared.resolved_query)
+            if result is not None:
+                return ToolResult.ok_result(
+                    name,
+                    _format_search_results(prepared.resolved_query, result.results),
+                    metadata={
+                        **query_metadata,
+                        "backend": result.provider,
+                        "provider": result.provider,
+                        "searchUrl": _mask_url_secrets(result.search_url),
+                        "providerAttempts": [
+                            {**item.metadata(), "ok": False} for item in failures
+                        ]
+                        + [{"provider": result.provider, "ok": True}],
+                        "resultCount": min(len(result.results), DEFAULT_WEB_SEARCH_RESULTS),
+                    },
+                ).to_json()
+            if failure is not None:
+                failures.append(failure)
+
             return ToolResult.error_result(
                 name,
-                f"WebSearch request failed: {exc}",
+                "WebSearch failed: " + _format_provider_failures(failures),
                 metadata={
-                    **prepared.metadata(),
-                    "backend": "duckduckgo_html",
-                    "searchUrl": search_url,
-                    "activityLabel": activity_label,
-                    **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
+                    **query_metadata,
+                    "backend": "provider_chain",
+                    "providerAttempts": [
+                        {**item.metadata(), "ok": False} for item in failures
+                    ],
                 },
             ).to_json()
         finally:
             self.running_processes.pop(activity_id, None)
 
-        results = _parse_search_results(body)
-        if not results:
-            return ToolResult.error_result(
-                name,
-                "WebSearch returned no parseable results.",
-                metadata={
-                    **prepared.metadata(),
-                    "backend": "duckduckgo_html",
-                    "searchUrl": search_url,
-                    "activityLabel": activity_label,
-                    **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
-                },
-            ).to_json()
-        return ToolResult.ok_result(
-            name,
-            _format_search_results(prepared.resolved_query, results),
-            metadata={
-                **prepared.metadata(),
-                "backend": "duckduckgo_html",
-                "searchUrl": search_url,
-                "activityLabel": activity_label,
-                "resultCount": min(len(results), DEFAULT_WEB_SEARCH_RESULTS),
-                **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
-            },
-        ).to_json()
-
-    def _web_search_api(self, query: str, api_url: str) -> str:
-        name = "WebSearch"
-        prepared, prepare_error = _prepare_web_search_query_with_llm(query, self.settings)
-        if prepare_error is not None:
-            return ToolResult.error_result(
-                name,
-                f"WebSearch custom API mode failed: {prepare_error}",
-                metadata={"query": query, "apiUrl": api_url},
-            ).to_json()
-        machine_id = self.settings.tools.web_search.machine_id
-        if not machine_id:
-            return ToolResult.error_result(
-                name,
-                "WebSearch custom API mode requires machine_id in the TOML tools.web_search config.",
-                metadata={**prepared.metadata(), "apiUrl": api_url},
-            ).to_json()
-        body = json_utils.dumps({"query": prepared.resolved_query}).encode("utf-8")
+    def _try_duckduckgo_search(
+        self,
+        query: str,
+    ) -> tuple[WebSearchProviderResult | None, WebSearchProviderFailure | None]:
+        provider = "duckduckgo_html"
+        search_url = DEFAULT_WEB_SEARCH_URL + "?" + urllib.parse.urlencode({"q": query}, doseq=False)
         request = urllib.request.Request(
-            api_url,
-            data=body,
+            search_url,
             headers={
-                "Content-Type": "application/json",
-                "Token": machine_id,
+                **WEB_SEARCH_BROWSER_HEADERS,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
-            method="POST",
+            method="GET",
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read().decode("utf-8", errors="replace")
+                body = _decode_http_body(
+                    response.read(),
+                    encoding=_response_header(response, "Content-Encoding"),
+                )
         except Exception as exc:
-            return ToolResult.error_result(
-                name,
-                f"WebSearch API request failed: {exc}",
-                metadata={**prepared.metadata(), "apiUrl": api_url},
-            ).to_json()
-        output = body.strip()
+            return None, WebSearchProviderFailure(
+                provider=provider,
+                error=f"request failed: {exc}",
+                search_url=search_url,
+            )
+        results = _parse_search_results(body)
+        if not results:
+            return None, WebSearchProviderFailure(
+                provider=provider,
+                error="no parseable results",
+                search_url=search_url,
+            )
+        return WebSearchProviderResult(provider=provider, search_url=search_url, results=results), None
+
+    def _try_searxng_search(
+        self,
+        query: str,
+        base_url: str,
+    ) -> tuple[WebSearchProviderResult | None, WebSearchProviderFailure | None]:
+        provider = "searxng_json"
         try:
-            payload = json_utils.loads(body)
-        except json_utils.JSONDecodeError:
-            payload = None
-        if isinstance(payload, dict):
-            result = payload.get("result")
-            if isinstance(result, str) and result.strip():
-                output = result.strip()
-        if not output:
-            return ToolResult.error_result(
-                name,
-                "WebSearch custom API mode failed: The web search response was empty.",
-                metadata={**prepared.metadata(), "apiUrl": api_url},
-            ).to_json()
-        return ToolResult.ok_result(
-            name,
-            output,
-            metadata={**prepared.metadata(), "apiUrl": api_url, "usedMachineId": bool(machine_id)},
-        ).to_json()
+            search_url = _build_searxng_search_url(base_url, query)
+        except ValueError as exc:
+            return None, WebSearchProviderFailure(provider=provider, error=str(exc))
+        request = urllib.request.Request(
+            search_url,
+            headers=WEB_SEARCH_BROWSER_HEADERS,
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = _decode_http_body(
+                    response.read(),
+                    encoding=_response_header(response, "Content-Encoding"),
+                )
+            results = _parse_searxng_results(body)
+        except Exception as exc:
+            return None, WebSearchProviderFailure(
+                provider=provider,
+                error=f"request failed: {exc}",
+                search_url=search_url,
+            )
+        if not results:
+            return None, WebSearchProviderFailure(
+                provider=provider,
+                error="no parseable results",
+                search_url=search_url,
+            )
+        return WebSearchProviderResult(provider=provider, search_url=search_url, results=results), None
 
 
 def _unified_diff(old: str, new: str, *, path: str) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from deepy.config import load_settings, settings_to_toml_dict
+from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, load_settings, settings_to_toml_dict
 
 
 def test_loads_toml_config_and_resolves_context_threshold(tmp_path):
@@ -71,6 +71,30 @@ api_key = "sk-config"
     assert settings.model.name == "deepseek-v4-flash"
     assert settings.model.base_url == "https://proxy.example/v1"
     assert settings.model.api_key == "sk-env"
+
+
+def test_loads_web_search_searxng_fallback_url(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[tools.web_search]
+searxng_url = "https://search.example"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.tools.web_search.searxng_url == "https://search.example"
+
+
+def test_defaults_web_search_to_deepy_searxng_when_unconfigured(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("", encoding="utf-8")
+
+    settings = load_settings(config, env={})
+
+    assert settings.tools.web_search.searxng_url == DEFAULT_WEB_SEARCH_SEARXNG_URL
 
 
 def test_settings_to_toml_masks_api_key(tmp_path):

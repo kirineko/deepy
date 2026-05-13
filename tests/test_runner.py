@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,6 +182,25 @@ class CancellableStream:
 
     def cancel(self, mode="immediate"):
         self.cancel_calls.append(mode)
+
+
+class IdleCancellableStream:
+    final_output = None
+    is_complete = False
+
+    def __init__(self):
+        self.cancel_calls: list[str] = []
+        self.cancelled = asyncio.Event()
+
+    async def stream_events(self):
+        await self.cancelled.wait()
+        self.is_complete = True
+        if False:
+            yield None
+
+    def cancel(self, mode="immediate"):
+        self.cancel_calls.append(mode)
+        self.cancelled.set()
 
 
 class AskUserQuestionStream:
@@ -642,6 +662,32 @@ async def test_run_prompt_once_cancels_stream_when_interrupted(monkeypatch, tmp_
     assert summary.interrupted is True
     assert summary.status == "interrupted"
     assert stream.cancel_calls == ["after_turn"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_interrupt_watcher_cancels_idle_stream(monkeypatch, tmp_path):
+    stream = IdleCancellableStream()
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "stop now",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        should_interrupt=lambda: True,
+    )
+
+    assert summary.output == ""
+    assert summary.complete is False
+    assert summary.interrupted is True
+    assert summary.status == "interrupted"
+    assert stream.cancel_calls == ["immediate"]
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .settings import (
     ContextConfig,
+    DEFAULT_WEB_SEARCH_SEARXNG_URL,
     ModelConfig,
     Settings,
     default_config_path,
@@ -12,6 +13,7 @@ from .settings import (
 
 __all__ = [
     "ContextConfig",
+    "DEFAULT_WEB_SEARCH_SEARXNG_URL",
     "ModelConfig",
     "Settings",
     "default_config_path",

@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import json
 import os
-from types import SimpleNamespace
 
 from deepy.config import Settings
-from deepy.config.settings import ModelConfig, ToolsConfig, WebSearchToolConfig
+from deepy.config.settings import (
+    DEFAULT_WEB_SEARCH_SEARXNG_URL,
+    ModelConfig,
+    ToolsConfig,
+    WebSearchToolConfig,
+)
 from deepy.tools import ToolResult, ToolRuntime
 from deepy.tools.agents import build_function_tools
-from deepy.tools.builtin import DEFAULT_LINE_LIMIT, MAX_BASH_OUTPUT_CHARS, MAX_LINE_LENGTH
+from deepy.tools.builtin import (
+    DEFAULT_LINE_LIMIT,
+    MAX_BASH_OUTPUT_CHARS,
+    MAX_LINE_LENGTH,
+    MAX_WEB_SEARCH_CALLS_PER_TURN,
+)
 
 
 def decode(payload: str) -> dict:
@@ -878,18 +887,17 @@ def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
     assert payload["metadata"]["charset"] == "utf-8"
 
 
-def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
+def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
     settings = Settings(
         model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
         tools=ToolsConfig(
             web_search=WebSearchToolConfig(
-                api_url="https://search.example/api",
-                machine_id="machine-1",
+                searxng_url="https://search.example",
             )
         )
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
-    requested: list[object] = []
+    requested_urls: list[str] = []
     chat_prompts: list[str] = []
 
     class FakeResponse:
@@ -900,14 +908,26 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return b'{"success":true,"result":"results"}'
+            return json.dumps(
+                {
+                    "results": [
+                        {
+                            "title": "DeepSeek Docs",
+                            "url": "https://api-docs.deepseek.com",
+                            "content": "DeepSeek API documentation.",
+                        }
+                    ]
+                }
+            ).encode()
 
     def fake_urlopen(request, timeout):
-        requested.append(request)
+        requested_urls.append(request.full_url)
         assert timeout == 30
-        assert request.get_method() == "POST"
-        assert request.get_header("Content-type") == "application/json"
-        assert json.loads(request.data.decode()) == {"query": "deep seek"}
+        assert request.get_method() == "GET"
+        assert request.full_url == "https://search.example/search?q=deep+seek&format=json"
+        assert request.get_header("Accept-language") == "zh-CN,zh;q=0.9,en;q=0.8"
+        assert request.get_header("Accept-encoding") == "gzip, deflate"
+        assert request.get_header("Sec-fetch-site") == "none"
         return FakeResponse()
 
     def fake_chat(settings, prompt):
@@ -920,81 +940,76 @@ def test_web_search_uses_configured_api_url(tmp_path, monkeypatch):
     payload = decode(runtime.web_search("deep seek"))
 
     assert payload["ok"] is True
-    assert payload["output"] == "results"
-    assert requested[0].full_url == "https://search.example/api"
-    assert requested[0].get_header("Token") == "machine-1"
+    assert "DeepSeek Docs" in payload["output"]
+    assert requested_urls == ["https://search.example/search?q=deep+seek&format=json"]
     assert payload["metadata"]["dominantLanguage"] == "en"
     assert payload["metadata"]["languageReason"] == "English docs are richer."
-    assert payload["metadata"]["usedMachineId"] is True
+    assert payload["metadata"]["backend"] == "searxng_json"
     assert len(chat_prompts) == 1
 
 
-def test_web_search_prefers_configured_command_over_api_url(tmp_path, monkeypatch):
+def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkeypatch):
     settings = Settings(
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
         tools=ToolsConfig(
-            web_search=WebSearchToolConfig(
-                command="search-tool",
-                api_url="https://search.example/api",
-            )
+            web_search=WebSearchToolConfig(searxng_url="https://search.example")
         )
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
-    commands: list[str] = []
+    requested_urls: list[str] = []
 
-    class FakeProcess:
-        pid = 123
-        returncode = 0
+    class FakeDuckDuckGoResponse:
+        def __enter__(self):
+            return self
 
-        def __init__(self, command, **kwargs):
-            commands.append(command)
-            assert kwargs["cwd"] == tmp_path
+        def __exit__(self, exc_type, exc, tb):
+            return False
 
-        def communicate(self, timeout=None):
-            assert timeout == 60
-            assert runtime.running_processes == {
-                "123": {
-                    "startTime": runtime.running_processes["123"]["startTime"],
-                    "command": "WebSearch: deep seek",
-                }
-            }
-            return "local results", ""
+        def read(self):
+            return (
+                b'<html><body><a class="result__a" href="https://example.com">'
+                b"Example Result</a></body></html>"
+            )
 
-    def fake_popen(command, **kwargs):
-        commands.append(command)
-        assert kwargs["cwd"] == tmp_path
-        return SimpleNamespace(
-            pid=123,
-            returncode=0,
-            communicate=lambda timeout=None: ("local results", ""),
-        )
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        if request.full_url.startswith("https://search.example/search?"):
+            raise OSError("searxng offline")
+        assert request.full_url.startswith("https://html.duckduckgo.com/html/?")
+        return FakeDuckDuckGoResponse()
 
-    def fail_urlopen(*args, **kwargs):
-        raise AssertionError("api_url should not be used when command is configured")
-
-    monkeypatch.setattr("deepy.tools.builtin.subprocess.Popen", FakeProcess)
-    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    monkeypatch.setattr(
+        "deepy.tools.builtin._web_search_chat",
+        lambda settings, prompt: (
+            '{"dominant_language":"en","reason":"English results are richer."}'
+        ),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     payload = decode(runtime.web_search("deep seek"))
 
     assert payload["ok"] is True
-    assert payload["output"] == "local results"
-    assert commands == ["search-tool 'deep seek'"]
-    assert runtime.running_processes == {}
-    assert payload["metadata"]["activityLabel"] == "WebSearch: deep seek"
+    assert "Example Result" in payload["output"]
+    assert payload["metadata"]["backend"] == "duckduckgo_html"
+    assert [attempt["provider"] for attempt in payload["metadata"]["providerAttempts"]] == [
+        "searxng_json",
+        "duckduckgo_html",
+    ]
+    assert payload["metadata"]["providerAttempts"][0]["ok"] is False
+    assert payload["metadata"]["providerAttempts"][1]["ok"] is True
+    assert requested_urls[0] == "https://search.example/search?q=deep+seek&format=json"
+    assert requested_urls[1].startswith("https://html.duckduckgo.com/html/?")
 
 
 def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     settings = Settings(
         model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
         tools=ToolsConfig(
-            web_search=WebSearchToolConfig(
-                api_url="https://search.example/api",
-                machine_id="machine-1",
-            )
+            web_search=WebSearchToolConfig(searxng_url="https://search.example")
         ),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
-    requested: list[object] = []
+    requested_urls: list[str] = []
     chat_prompts: list[str] = []
 
     class FakeResponse:
@@ -1005,12 +1020,24 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return json.dumps({"success": True, "result": "中文结果"}).encode()
+            return json.dumps(
+                {
+                    "results": [
+                        {
+                            "title": "DeepSeek models",
+                            "url": "https://api-docs.deepseek.com/news",
+                            "content": "Latest DeepSeek model information.",
+                        }
+                    ]
+                }
+            ).encode()
 
     def fake_urlopen(request, timeout):
-        requested.append(request)
-        assert request.get_method() == "POST"
-        assert json.loads(request.data.decode()) == {"query": "latest DeepSeek model"}
+        requested_urls.append(request.full_url)
+        assert request.get_method() == "GET"
+        assert request.full_url == (
+            "https://search.example/search?q=latest+DeepSeek+model&format=json"
+        )
         return FakeResponse()
 
     def fake_chat(settings, prompt):
@@ -1028,11 +1055,13 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     assert payload["metadata"]["dominantLanguage"] == "en"
     assert payload["metadata"]["translated"] is True
     assert payload["metadata"]["resolvedQuery"] == "latest DeepSeek model"
-    assert requested[0].full_url == "https://search.example/api"
+    assert requested_urls == [
+        "https://search.example/search?q=latest+DeepSeek+model&format=json"
+    ]
     assert len(chat_prompts) == 2
 
 
-def test_web_search_uses_builtin_duckduckgo_backend(tmp_path, monkeypatch):
+def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch):
     settings = Settings(
         model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
     )
@@ -1047,13 +1076,17 @@ def test_web_search_uses_builtin_duckduckgo_backend(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return (
-                b'<html><body><a class="result__a" '
-                b'href="/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen%2Fabout%2Fprevious-releases">'
-                b"Node.js Releases</a>"
-                b'<div class="result__snippet">Previous and current Node.js releases.</div>'
-                b"</body></html>"
-            )
+            return json.dumps(
+                {
+                    "results": [
+                        {
+                            "title": "Node.js Releases",
+                            "url": "https://nodejs.org/en/about/previous-releases",
+                            "content": "Previous and current Node.js releases.",
+                        }
+                    ]
+                }
+            ).encode()
 
     def fake_urlopen(request, timeout):
         requested.append(request)
@@ -1075,10 +1108,14 @@ def test_web_search_uses_builtin_duckduckgo_backend(tmp_path, monkeypatch):
     assert "Node.js Releases" in payload["output"]
     assert "https://nodejs.org/en/about/previous-releases" in payload["output"]
     assert "Previous and current Node.js releases." in payload["output"]
-    assert requested[0].full_url.startswith("https://html.duckduckgo.com/html/?")
+    assert requested[0].full_url.startswith(DEFAULT_WEB_SEARCH_SEARXNG_URL + "search?")
     assert "q=latest+node+release" in requested[0].full_url
-    assert requested[0].get_header("Token") is None
-    assert payload["metadata"]["backend"] == "duckduckgo_html"
+    assert requested[0].get_header("Accept-language") == "zh-CN,zh;q=0.9,en;q=0.8"
+    assert requested[0].get_header("Accept-encoding") == "gzip, deflate"
+    assert payload["metadata"]["backend"] == "searxng_json"
+    assert payload["metadata"]["providerAttempts"] == [
+        {"provider": "searxng_json", "ok": True}
+    ]
 
 
 def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypatch):
@@ -1095,10 +1132,7 @@ def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypat
             return False
 
         def read(self):
-            return (
-                b'<html><body><a class="result__a" href="https://example.com">'
-                b"Example Result</a></body></html>"
-            )
+            return b'{"results":[{"title":"Example Result","url":"https://example.com"}]}'
 
     monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
 
@@ -1106,30 +1140,134 @@ def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypat
 
     assert payload["ok"] is True
     assert "Example Result" in payload["output"]
-    assert payload["metadata"]["backend"] == "duckduckgo_html"
+    assert payload["metadata"]["backend"] == "searxng_json"
     assert "valid LLM configuration" in payload["metadata"]["queryPreparationWarning"]
 
 
-def test_web_search_custom_api_requires_machine_id(tmp_path, monkeypatch):
-    runtime = ToolRuntime(
-        cwd=tmp_path,
-        settings=Settings(
-            model=ModelConfig(
-                api_key="sk-test",
-                base_url="https://api.deepseek.com",
-                name="deepseek-chat",
-            ),
-            tools=ToolsConfig(web_search=WebSearchToolConfig(api_url="https://search.example/api")),
-        ),
+def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path, monkeypatch):
+    settings = Settings(
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    requested_urls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, body: bytes):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        if request.full_url.startswith("https://search.example/search?"):
+            return FakeResponse(b'{"results":[]}')
+        assert request.full_url.startswith("https://html.duckduckgo.com/html/?")
+        return FakeResponse(
+            b'<html><body><a class="result__a" '
+            b'href="/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen%2Fabout%2Fprevious-releases">'
+            b"Node.js Releases</a>"
+            b'<div class="result__snippet">Previous and current Node.js releases.</div>'
+            b"</body></html>"
+        )
+
     monkeypatch.setattr(
         "deepy.tools.builtin._web_search_chat",
         lambda settings, prompt: (
             '{"dominant_language":"en","reason":"English results are richer."}'
         ),
     )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = decode(runtime.web_search("latest node release"))
+
+    assert payload["ok"] is True
+    assert "Node.js Releases" in payload["output"]
+    assert payload["metadata"]["backend"] == "duckduckgo_html"
+    assert payload["metadata"]["provider"] == "duckduckgo_html"
+    assert payload["metadata"]["providerAttempts"][0]["provider"] == "searxng_json"
+    assert payload["metadata"]["providerAttempts"][0]["ok"] is False
+    assert payload["metadata"]["providerAttempts"][1] == {
+        "provider": "duckduckgo_html",
+        "ok": True,
+    }
+    assert requested_urls[0] == "https://search.example/search?q=latest+node+release&format=json"
+    assert requested_urls[1].startswith("https://html.duckduckgo.com/html/?")
+
+
+def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path, monkeypatch):
+    settings = Settings(
+        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        tools=ToolsConfig(
+            web_search=WebSearchToolConfig(
+                searxng_url="https://search.example/?token=secret-token-value"
+            )
+        ),
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+
+    def fake_urlopen(request, timeout):
+        raise OSError("offline")
+
+    monkeypatch.setattr(
+        "deepy.tools.builtin._web_search_chat",
+        lambda settings, prompt: (
+            '{"dominant_language":"en","reason":"English results are richer."}'
+        ),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     payload = decode(runtime.web_search("latest node release"))
 
     assert payload["ok"] is False
-    assert "custom API mode requires machine_id" in payload["error"]
+    assert "duckduckgo_html" in payload["error"]
+    assert "searxng_json" in payload["error"]
+    attempts = payload["metadata"]["providerAttempts"]
+    assert [attempt["provider"] for attempt in attempts] == ["searxng_json", "duckduckgo_html"]
+    assert all(attempt["ok"] is False for attempt in attempts)
+    assert "secret-token-value" not in json.dumps(payload)
+    assert "secr...alue" in attempts[0]["searchUrl"]
+
+
+def test_web_search_limits_calls_per_turn(tmp_path, monkeypatch):
+    runtime = ToolRuntime(
+        cwd=tmp_path,
+        settings=Settings(
+            model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat")
+        ),
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"results":[{"title":"Example","url":"https://example.com"}]}'
+
+    monkeypatch.setattr(
+        "deepy.tools.builtin._web_search_chat",
+        lambda settings, prompt: (
+            '{"dominant_language":"en","reason":"English results are richer."}'
+        ),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    for index in range(MAX_WEB_SEARCH_CALLS_PER_TURN):
+        payload = decode(runtime.web_search(f"query {index}"))
+        assert payload["ok"] is True
+
+    payload = decode(runtime.web_search("one too many"))
+
+    assert payload["ok"] is False
+    assert "call limit reached" in payload["error"]
+    assert payload["metadata"]["callLimit"] == MAX_WEB_SEARCH_CALLS_PER_TURN

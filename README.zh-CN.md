@@ -107,6 +107,14 @@ context_window_tokens = 1048576
 compact_threshold = 0.8
 ```
 
+WebSearch 默认使用 Deepy 托管的 SearXNG 搜索服务。你也可以改成自己的
+SearXNG 实例：
+
+```toml
+[tools.web_search]
+searxng_url = "https://your-searxng.example/"
+```
+
 也可以通过命令行初始化：
 
 ```bash
@@ -162,5 +170,5 @@ wheel。
 
 ## 发布状态
 
-Deepy 正在准备第一个公开 `0.1.2` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
+Deepy 正在准备第一个公开 `0.1.3` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
 文件和 npm wrapper 可以后续再加，第一版以 Python CLI 为主。

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import select
+import sys
+import termios
 import threading
 import time
+import tty
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -220,10 +226,19 @@ def _run_once_with_status(
     **kwargs: object,
 ) -> RunSummary:
     original_emit_event = kwargs.pop("emit_event", None)
+    original_should_interrupt = kwargs.pop("should_interrupt", None)
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
     renderer: TerminalStreamRenderer | None = None
     started_at = time.monotonic()
+    interrupt_requested = threading.Event()
+
+    def should_interrupt() -> bool:
+        if interrupt_requested.is_set():
+            return True
+        return bool(callable(original_should_interrupt) and original_should_interrupt())
+
+    kwargs["should_interrupt"] = should_interrupt
 
     with console.status(_working_status_text(started_at), spinner="dots") as status:
         renderer = TerminalStreamRenderer(
@@ -241,18 +256,71 @@ def _run_once_with_status(
         status_thread.start()
 
         try:
-            def emit_event(event: DeepyStreamEvent) -> None:
-                renderer(event)
-                if callable(original_emit_event):
-                    original_emit_event(event)
+            with _esc_interrupt_watcher(interrupt_requested):
+                def emit_event(event: DeepyStreamEvent) -> None:
+                    renderer(event)
+                    if callable(original_emit_event):
+                        original_emit_event(event)
 
-            summary = asyncio.run(run_once(prompt, **kwargs, emit_event=emit_event))
+                summary = asyncio.run(run_once(prompt, **kwargs, emit_event=emit_event))
         finally:
             stop_status_refresh.set()
             status_thread.join(timeout=0.2)
 
     renderer.flush()
     return summary
+
+
+@contextlib.contextmanager
+def _esc_interrupt_watcher(interrupt_requested: threading.Event):
+    if not sys.stdin.isatty() and not Path("/dev/tty").exists():
+        yield
+        return
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_watch_esc_keypress,
+        args=(interrupt_requested, stop_event),
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=0.2)
+
+
+def _watch_esc_keypress(
+    interrupt_requested: threading.Event,
+    stop_event: threading.Event,
+) -> None:
+    fd: int | None = None
+    old_attrs: list[Any] | None = None
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
+        old_attrs = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        while not stop_event.is_set() and not interrupt_requested.is_set():
+            readable, _, _ = select.select([fd], [], [], 0.05)
+            if not readable:
+                continue
+            try:
+                data = os.read(fd, 32)
+            except BlockingIOError:
+                continue
+            if b"\x1b" in data:
+                interrupt_requested.set()
+                return
+    except Exception:
+        return
+    finally:
+        if fd is not None:
+            if old_attrs is not None:
+                with contextlib.suppress(Exception):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            with contextlib.suppress(Exception):
+                os.close(fd)
 
 
 class TerminalStreamRenderer:

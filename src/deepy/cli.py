@@ -11,7 +11,7 @@ import tomli_w
 
 from . import __version__
 from .config import Settings, load_settings, settings_to_toml_dict
-from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL
+from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_WEB_SEARCH_SEARXNG_URL
 from .errors import format_error_display
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
@@ -159,9 +159,7 @@ def _write_config(config_path: Path, *, api_key: str, model: str, base_url: str)
         },
         "tools": {
             "web_search": {
-                "command": "",
-                "api_url": "",
-                "machine_id": "",
+                "searxng_url": DEFAULT_WEB_SEARCH_SEARXNG_URL,
             },
         },
     }

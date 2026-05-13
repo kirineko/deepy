@@ -11,6 +11,7 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_048_576
 DEFAULT_COMPACT_TRIGGER_RATIO = 0.8
 DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD = 838_861
+DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 REASONING_EFFORTS = {"high", "max"}
 
 
@@ -142,16 +143,12 @@ class NotifyConfig:
 
 @dataclass(frozen=True)
 class WebSearchToolConfig:
-    command: str | None = None
-    api_url: str | None = None
-    machine_id: str | None = None
+    searxng_url: str | None = DEFAULT_WEB_SEARCH_SEARXNG_URL
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
         return cls(
-            command=_as_str(raw.get("command")) or None,
-            api_url=_as_str(raw.get("api_url")) or None,
-            machine_id=_as_str(raw.get("machine_id")) or None,
+            searxng_url=_as_str(raw.get("searxng_url"), DEFAULT_WEB_SEARCH_SEARXNG_URL),
         )
 
 

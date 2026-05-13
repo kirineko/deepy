@@ -47,8 +47,7 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert "[logging]" in text
     assert "[notify]" in text
     assert "[tools.web_search]" in text
-    assert 'command = ""' in text
-    assert 'api_url = ""' in text
+    assert 'searxng_url = "https://s.kirineko.tech/"' in text
 
 
 def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):

@@ -480,6 +480,26 @@ def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
     assert "Running read README.md" in rendered
 
 
+def test_run_once_with_status_passes_interrupt_check(tmp_path):
+    observed_interrupt: list[bool] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        observed_interrupt.append(kwargs["should_interrupt"]())
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=False, interrupted=True)
+
+    summary = _run_once_with_status(
+        Console(record=True),
+        fake_run_once,
+        "hello",
+        project_root=tmp_path,
+        settings=Settings(),
+        should_interrupt=lambda: True,
+    )
+
+    assert summary.interrupted is True
+    assert observed_interrupt == [True]
+
+
 def test_format_duration_ms_formats_minutes_and_hours():
     assert _format_duration_ms(352_000) == "5m 52s"
     assert _format_duration_ms(3_660_000) == "1h 1m"
