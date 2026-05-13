@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="asset/deepy-logo.png" alt="Deepy logo" width="160">
+  <img src="https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-logo.png" alt="Deepy logo" width="160">
 </p>
 
 <h1 align="center">Deepy</h1>
@@ -18,7 +18,7 @@
   <a href="#快速开始">快速开始</a>
 </p>
 
-![Deepy 启动画面](asset/welcome.png)
+![Deepy 启动画面](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
 
 ## Deepy 是什么？
 
@@ -46,32 +46,34 @@ Deepy 的核心目标是适配 DeepSeek V4 的 thinking 能力、长上下文、
 
 Deepy 启动后会展示当前模型、thinking 设置、工作目录和核心命令。
 
-![Deepy 启动画面](asset/welcome.png)
+![Deepy 启动画面](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
 
 ### 软件开发能力
 
 让 Deepy 编写代码、补充测试、运行验证命令，并总结结果。
 
-![Deepy 编码与 diff 展示](asset/coding-1.png)
+![Deepy 编码与 diff 展示](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-1.jpg)
 
 Deepy 也可以把命令输出整理成更适合阅读的项目说明、代码片段和测试覆盖结果。
 
-![Deepy 项目总结](asset/coding-2.png)
+![Deepy 项目总结](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-2.jpg)
 
 ### 资料查阅能力
 
 Deepy 提供 WebSearch 和 WebFetch 工具，既可以搜索最新资料，也可以根据完整 URL
 抓取指定页面内容。
 
-![Deepy Web 检索与抓取](asset/websearch.png)
+![Deepy Web 检索与抓取](https://raw.githubusercontent.com/kirineko/deepy/main/asset/websearch.jpg)
 
 ## 快速开始
 
 首个 PyPI 版本发布后，可以直接安装：
 
 ```bash
-uv tool install deepy
+uv tool install deepy-cli
 ```
+
+安装后的命令仍然是 `deepy`。
 
 也可以安装 GitHub 上的最新代码：
 

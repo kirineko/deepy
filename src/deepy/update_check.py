@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from deepy.utils import json as json_utils
 
-DEFAULT_PYPI_PACKAGE = "deepy"
+DEFAULT_PYPI_PACKAGE = "deepy-cli"
 DEFAULT_GITHUB_REPO = "kirineko/deepy"
 DEFAULT_TIMEOUT_SECONDS = 0.8
 

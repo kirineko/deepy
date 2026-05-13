@@ -87,14 +87,14 @@ def test_build_welcome_settings_shows_available_update(tmp_path):
             current_version="0.1.0",
             latest_version="0.2.0",
             source="PyPI",
-            url="https://pypi.org/project/deepy/",
-            install_hint="uv tool upgrade deepy",
+            url="https://pypi.org/project/deepy-cli/",
+            install_hint="uv tool upgrade deepy-cli",
         ),
     )
 
     assert settings[0].label == "Version"
     assert settings[0].value == "0.1.0 -> 0.2.0 available from PyPI"
-    assert (settings[-1].label, settings[-1].value) == ("Update", "uv tool upgrade deepy")
+    assert (settings[-1].label, settings[-1].value) == ("Update", "uv tool upgrade deepy-cli")
 
 
 def test_build_deepy_ascii_logo_contains_terminal_mark():

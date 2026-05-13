@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from agents import ModelSettings
 from agents.exceptions import MaxTurnsExceeded
+from openai import APIStatusError, BadRequestError
 
 from deepy.config import ContextConfig, Settings
 from deepy.config.settings import LoggingConfig, NotifyConfig
 from deepy.llm.provider import ProviderBundle
-from deepy.llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
+from deepy.llm.runner import DEFAULT_MAX_TURNS, format_deepseek_api_error, run_prompt_once
 
 
 class FakeStream:
@@ -118,6 +120,30 @@ class FailingStream:
 
     async def stream_events(self):
         raise RuntimeError("provider failed api_key=sk-secret")
+        yield
+
+
+class DeepSeekStatusErrorStream:
+    final_output = None
+    is_complete = False
+
+    async def stream_events(self):
+        response = httpx.Response(
+            402,
+            request=httpx.Request("POST", "https://api.deepseek.com/chat/completions"),
+            json={
+                "error": {
+                    "message": "Insufficient Balance",
+                    "type": "invalid_request_error",
+                    "code": "invalid_request_error",
+                }
+            },
+        )
+        raise APIStatusError(
+            "Error code: 402 - Insufficient Balance",
+            response=response,
+            body=response.json(),
+        )
         yield
 
 
@@ -510,6 +536,56 @@ async def test_run_prompt_once_logs_api_error_before_reraising(monkeypatch, tmp_
         "max_turns": DEFAULT_MAX_TURNS,
     }
     assert isinstance(error_entries[0]["error"], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_returns_deepseek_status_error_as_content(monkeypatch, tmp_path):
+    error_entries: list[dict] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return DeepSeekStatusErrorStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    monkeypatch.setattr("deepy.llm.runner.log_api_error", error_entries.append)
+
+    summary = await run_prompt_once(
+        "explode",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.complete is False
+    assert summary.status == "api_error"
+    assert "DeepSeek API error 402: 余额不足" in summary.output
+    assert "Server message: Insufficient Balance" in summary.output
+    assert "Reason: 账号余额不足。" in summary.output
+    assert "Suggestion: 请确认账户余额" in summary.output
+    assert "code=invalid_request_error" in summary.output
+    assert error_entries[0]["response"]["statusCode"] == 402
+    assert error_entries[0]["response"]["body"]["error"]["message"] == "Insufficient Balance"
+
+
+def test_format_deepseek_api_error_includes_known_error_code_guidance():
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://api.deepseek.com/chat/completions"),
+        json={"error": {"message": "bad request body", "type": "invalid_request_error"}},
+    )
+    error = BadRequestError(
+        "Error code: 400 - bad request body",
+        response=response,
+        body=response.json(),
+    )
+
+    output = format_deepseek_api_error(error)
+
+    assert "DeepSeek API error 400: 格式错误" in output
+    assert "Server message: bad request body" in output
+    assert "Reason: 请求体格式错误。" in output
+    assert "Suggestion: 请根据错误信息提示修改请求体。" in output
 
 
 @pytest.mark.asyncio

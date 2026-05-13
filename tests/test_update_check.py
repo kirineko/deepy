@@ -29,11 +29,11 @@ def test_compare_versions_orders_semantic_versions():
 
 def test_fetch_latest_pypi_version_reads_info_version():
     def fake_urlopen(request, timeout):
-        assert request.full_url == "https://pypi.org/pypi/deepy/json"
+        assert request.full_url == "https://pypi.org/pypi/deepy-cli/json"
         assert timeout == 1.0
         return FakeResponse('{"info":{"version":"0.2.0"}}')
 
-    candidate = fetch_latest_pypi_version("deepy", timeout_seconds=1.0, urlopen=fake_urlopen)
+    candidate = fetch_latest_pypi_version("deepy-cli", timeout_seconds=1.0, urlopen=fake_urlopen)
 
     assert candidate is not None
     assert candidate.version == "0.2.0"
@@ -58,7 +58,7 @@ def test_fetch_latest_github_version_prefers_release_tag():
 
 def test_check_for_version_update_chooses_highest_candidate():
     def fake_urlopen(request, timeout):
-        if request.full_url == "https://pypi.org/pypi/deepy/json":
+        if request.full_url == "https://pypi.org/pypi/deepy-cli/json":
             return FakeResponse('{"info":{"version":"0.2.0"}}')
         if request.full_url == "https://api.github.com/repos/kirineko/deepy/releases/latest":
             return FakeResponse('{"tag_name":"v0.3.0","html_url":"https://github.com/kirineko/deepy/releases/tag/v0.3.0"}')
@@ -69,12 +69,12 @@ def test_check_for_version_update_chooses_highest_candidate():
     assert update is not None
     assert update.latest_version == "0.3.0"
     assert update.source == "GitHub"
-    assert update.install_hint == "uv tool upgrade deepy"
+    assert update.install_hint == "uv tool upgrade deepy-cli"
 
 
 def test_check_for_version_update_returns_none_for_current_version():
     def fake_urlopen(request, timeout):
-        if request.full_url == "https://pypi.org/pypi/deepy/json":
+        if request.full_url == "https://pypi.org/pypi/deepy-cli/json":
             return FakeResponse('{"info":{"version":"0.1.0"}}')
         if request.full_url == "https://api.github.com/repos/kirineko/deepy/releases/latest":
             return FakeResponse('{"tag_name":"v0.1.0"}')

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="asset/deepy-logo.png" alt="Deepy logo" width="160">
+  <img src="https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-logo.png" alt="Deepy logo" width="160">
 </p>
 
 <h1 align="center">Deepy</h1>
@@ -18,7 +18,7 @@
   <a href="#quick-start">Quick Start</a>
 </p>
 
-![Deepy welcome screen](asset/welcome.png)
+![Deepy welcome screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
 
 ## What Is Deepy?
 
@@ -53,34 +53,36 @@ context state visible while the agent works.
 Deepy shows the current model, thinking settings, working directory, and the core
 commands directly on startup.
 
-![Deepy startup screen](asset/welcome.png)
+![Deepy startup screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
 
 ### Build And Verify Code
 
 Ask Deepy to implement a change, write tests, run the project test command, and
 summarize the result.
 
-![Deepy coding workflow with diff](asset/coding-1.png)
+![Deepy coding workflow with diff](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-1.jpg)
 
 Deepy can also turn command output into a readable project summary, including
 files created, code snippets, and test coverage.
 
-![Deepy project summary](asset/coding-2.png)
+![Deepy project summary](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-2.jpg)
 
 ### Research With Sources
 
 Deepy includes WebSearch and WebFetch tools, so a terminal session can gather
 current information and fetch exact pages when a URL is provided.
 
-![Deepy web research workflow](asset/websearch.png)
+![Deepy web research workflow](https://raw.githubusercontent.com/kirineko/deepy/main/asset/websearch.jpg)
 
 ## Quick Start
 
 Install from PyPI after the first release:
 
 ```bash
-uv tool install deepy
+uv tool install deepy-cli
 ```
+
+The installed command is still `deepy`.
 
 Install the latest code from GitHub:
 

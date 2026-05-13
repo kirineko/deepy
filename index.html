@@ -1,27 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy is a cute terminal coding agent for DeepSeek models. Read, edit, run tools, search the web, and keep project context in one terminal session."
+      content="Deepy 是一个可爱的 DeepSeek 终端编程 Agent，可在终端里阅读项目、编辑文件、运行命令、检索资料，并持续保留项目上下文。"
     >
-    <title>Deepy - Terminal Coding Agent for DeepSeek</title>
+    <title>Deepy - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.png">
     <link rel="stylesheet" href="site.css">
   </head>
   <body>
-    <header class="site-header" aria-label="Primary navigation">
-      <a class="brand" href="#top" aria-label="Deepy home">
+    <header class="site-header" aria-label="主导航">
+      <a class="brand" href="#top" aria-label="Deepy 首页">
         <img src="asset/deepy-logo.png" alt="" width="40" height="40">
         <span>Deepy</span>
       </a>
       <nav>
-        <a href="#features">Features</a>
-        <a href="#screenshots">Screenshots</a>
-        <a href="#install">Install</a>
-        <a href="README.zh-CN.md">中文</a>
+        <a href="#features">特性</a>
+        <a href="#screenshots">截图</a>
+        <a href="#install">安装</a>
+        <a href="README.md">English</a>
       </nav>
     </header>
 
@@ -29,98 +29,96 @@
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
           <p class="terminal-mark">&gt; deepy</p>
-          <h1 id="hero-title">A cute terminal coding agent for DeepSeek.</h1>
+          <h1 id="hero-title">可爱的 DeepSeek 终端编程 Agent。</h1>
           <p class="hero-lede">
-            Ask, edit, run tools, search or fetch web pages, and keep project
-            context in one terminal session.
+            在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并持续保留项目上下文。
           </p>
-          <div class="hero-actions" aria-label="Primary actions">
-            <a class="button primary" href="#install">Install with uv</a>
+          <div class="hero-actions" aria-label="主要操作">
+            <a class="button primary" href="#install">使用 uv 安装</a>
             <a class="button secondary" href="https://github.com/kirineko/deepy">GitHub</a>
           </div>
         </div>
-        <div class="hero-visual" aria-label="Deepy terminal welcome screen">
-          <img src="asset/welcome.png" alt="Deepy startup screen in a terminal">
+        <div class="hero-visual" aria-label="Deepy 终端欢迎界面">
+          <img src="asset/welcome.jpg" alt="Deepy 终端启动界面">
         </div>
       </section>
 
       <section class="intro" aria-labelledby="intro-title">
         <div>
-          <h2 id="intro-title">Built for DeepSeek coding sessions</h2>
+          <h2 id="intro-title">为 DeepSeek 编程会话而设计</h2>
           <p>
-            Deepy is a Python CLI that uses DeepSeek through the OpenAI Agents
-            SDK. It is tuned for thinking mode, long context, cache-friendly
-            prompts, and a terminal interface that makes agent work visible.
+            Deepy 是一个 Python CLI，通过 OpenAI Agents SDK 调用 DeepSeek。它围绕
+            thinking 模式、长上下文、上下文缓存和可读的终端 UI 进行优化，让 Agent 的
+            工作过程清晰可见。
           </p>
         </div>
         <div class="intro-grid" id="features">
           <article>
-            <strong>Project aware</strong>
-            <span>Loads project rules, skills, session history, and the current working directory.</span>
+            <strong>理解项目</strong>
+            <span>自动加载项目规则、skills、会话历史和当前工作目录。</span>
           </article>
           <article>
-            <strong>Tool driven</strong>
-            <span>Reads files, edits code, runs commands, searches the web, and fetches URLs.</span>
+            <strong>工具驱动</strong>
+            <span>读取文件、编辑代码、运行命令、搜索资料，并抓取指定 URL。</span>
           </article>
           <article>
-            <strong>Readable terminal UI</strong>
-            <span>Markdown, thinking traces, diffs, per-turn usage, and context window status.</span>
+            <strong>终端体验</strong>
+            <span>渲染 Markdown、thinking、diff、每轮 usage 和上下文窗口状态。</span>
           </article>
         </div>
       </section>
 
       <section class="showcase" id="screenshots" aria-labelledby="screenshots-title">
         <div class="section-heading">
-          <h2 id="screenshots-title">A terminal-first workflow</h2>
-          <p>Deepy keeps the conversation, tool calls, code changes, and verification output together.</p>
+          <h2 id="screenshots-title">终端优先的工作流</h2>
+          <p>Deepy 把对话、工具调用、代码修改和验证输出放在同一个终端上下文里。</p>
         </div>
 
         <article class="feature-row">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; build</p>
-            <h3>Write code and verify it</h3>
+            <p class="terminal-mark">&gt; 开发</p>
+            <h3>编写代码并运行验证</h3>
             <p>
-              Ask Deepy to implement a feature, create tests, run the project
-              command, and summarize the result. Diffs are rendered in the
-              terminal so the change stays easy to review.
+              让 Deepy 实现功能、补充测试、运行项目命令并总结结果。diff 会直接在终端中
+              渲染，方便你快速审查改动。
             </p>
           </div>
-          <img src="asset/coding-1.png" alt="Deepy coding workflow with a rendered diff">
+          <img src="asset/coding-1.jpg" alt="Deepy 编码工作流和 diff 展示">
         </article>
 
         <article class="feature-row flipped">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; explain</p>
-            <h3>Turn work into clear summaries</h3>
+            <p class="terminal-mark">&gt; 总结</p>
+            <h3>把执行结果整理成说明</h3>
             <p>
-              Deepy can organize command output and project files into readable
-              Markdown, including project structure, implementation details, and
-              test coverage.
+              Deepy 可以把命令输出和项目文件整理成可读的 Markdown，包括项目结构、
+              实现细节和测试覆盖。
             </p>
           </div>
-          <img src="asset/coding-2.png" alt="Deepy project summary output">
+          <img src="asset/coding-2.jpg" alt="Deepy 项目总结输出">
         </article>
 
         <article class="feature-row">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; research</p>
-            <h3>Search and fetch sources</h3>
+            <p class="terminal-mark">&gt; 查资料</p>
+            <h3>检索并抓取来源页面</h3>
             <p>
-              WebSearch finds current information. WebFetch reads a specific URL
-              when the task needs exact page content and source-grounded answers.
+              WebSearch 用于查找最新资料；WebFetch 可以读取指定 URL，在需要精确网页
+              内容时给出有来源依据的回答。
             </p>
           </div>
-          <img src="asset/websearch.png" alt="Deepy web search and web fetch workflow">
+          <img src="asset/websearch.jpg" alt="Deepy WebSearch 和 WebFetch 工作流">
         </article>
       </section>
 
       <section class="install" id="install" aria-labelledby="install-title">
         <div>
-          <h2 id="install-title">Install</h2>
-          <p>Use PyPI after the first release, or install the latest GitHub version now.</p>
+          <h2 id="install-title">安装</h2>
+          <p>发布后可以从 PyPI 安装，也可以直接安装 GitHub 上的最新版本。</p>
         </div>
         <div class="code-grid">
-          <pre><code>uv tool install deepy</code></pre>
+          <pre><code>uv tool install deepy-cli
+# 命令仍然是：deepy</code></pre>
           <pre><code>uv tool install git+https://github.com/kirineko/deepy.git</code></pre>
           <pre><code>deepy config setup
 cd your-project

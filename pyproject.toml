@@ -1,5 +1,5 @@
 [project]
-name = "Deepy"
+name = "deepy-cli"
 version = "0.1.0"
 description = "Deepy - Vibe coding for DeepSeek models in your terminal"
 readme = "README.md"
@@ -7,6 +7,16 @@ authors = [
     { name = "kirineko", email = "kirineko@qq.com" }
 ]
 requires-python = ">=3.12"
+keywords = ["deepseek", "coding-agent", "terminal", "cli", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Terminals",
+]
 dependencies = [
     "openai-agents>=0.17.0",
     "openai>=2.26,<3",
@@ -20,6 +30,11 @@ dependencies = [
 
 [project.scripts]
 deepy = "deepy.cli:main"
+
+[project.urls]
+Homepage = "https://kirineko.github.io/deepy/"
+Repository = "https://github.com/kirineko/deepy"
+Issues = "https://github.com/kirineko/deepy/issues"
 
 [dependency-groups]
 dev = [
@@ -44,6 +59,9 @@ typeCheckingMode = "off"
 include = ["src", "tests"]
 exclude = ["dist", "reference", "spec"]
 reportMissingTypeStubs = false
+
+[tool.uv.build-backend]
+module-name = "deepy"
 
 [build-system]
 requires = ["uv_build>=0.11.10,<0.12.0"]
