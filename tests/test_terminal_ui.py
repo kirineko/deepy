@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import subprocess
+import sys
 import time
 
 from rich.console import Console
@@ -23,6 +26,77 @@ from deepy.ui.terminal import _format_duration_ms
 from deepy.ui.terminal import _run_once_with_status
 from deepy.ui.terminal import _working_status_text
 from deepy.utils import json as json_utils
+
+
+def test_terminal_import_does_not_require_termios():
+    code = """
+import importlib.abc
+import sys
+
+
+class BlockTermios(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"termios", "tty"}:
+            raise ImportError(fullname)
+        return None
+
+
+sys.meta_path.insert(0, BlockTermios())
+import deepy.ui.terminal
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_windows_esc_watcher_sets_interrupt(monkeypatch):
+    class FakeMsvcrt:
+        @staticmethod
+        def kbhit():
+            return True
+
+        @staticmethod
+        def getwch():
+            return "\x1b"
+
+    interrupt_requested = terminal.threading.Event()
+    stop_event = terminal.threading.Event()
+    monkeypatch.setattr(terminal, "msvcrt", FakeMsvcrt)
+
+    terminal._watch_windows_esc_keypress(interrupt_requested, stop_event)
+
+    assert interrupt_requested.is_set()
+
+
+def test_windows_esc_watcher_ignores_other_keys(monkeypatch):
+    class FakeMsvcrt:
+        calls = 0
+
+        @classmethod
+        def kbhit(cls):
+            cls.calls += 1
+            if cls.calls == 1:
+                return True
+            stop_event.set()
+            return False
+
+        @staticmethod
+        def getwch():
+            return "a"
+
+    interrupt_requested = terminal.threading.Event()
+    stop_event = terminal.threading.Event()
+    monkeypatch.setattr(terminal, "msvcrt", FakeMsvcrt)
+
+    terminal._watch_windows_esc_keypress(interrupt_requested, stop_event)
+
+    assert not interrupt_requested.is_set()
 
 
 def test_parse_slash_command_handles_argument():

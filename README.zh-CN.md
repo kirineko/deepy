@@ -170,5 +170,5 @@ wheel。
 
 ## 发布状态
 
-Deepy 正在准备第一个公开 `0.1.3` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
+Deepy 正在准备第一个公开 `0.1.4` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
 文件和 npm wrapper 可以后续再加，第一版以 Python CLI 为主。

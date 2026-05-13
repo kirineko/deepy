@@ -4,15 +4,24 @@ import asyncio
 import contextlib
 import os
 import select
-import sys
-import termios
 import threading
 import time
-import tty
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import termios
+    import tty
+except ImportError:  # pragma: no cover - exercised on Windows.
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - exercised on non-Windows platforms.
+    msvcrt = None  # type: ignore[assignment]
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -273,13 +282,17 @@ def _run_once_with_status(
 
 @contextlib.contextmanager
 def _esc_interrupt_watcher(interrupt_requested: threading.Event):
-    if not sys.stdin.isatty() and not Path("/dev/tty").exists():
+    if termios is not None and tty is not None and Path("/dev/tty").exists():
+        target = _watch_posix_esc_keypress
+    elif msvcrt is not None:
+        target = _watch_windows_esc_keypress
+    else:
         yield
         return
 
     stop_event = threading.Event()
     thread = threading.Thread(
-        target=_watch_esc_keypress,
+        target=target,
         args=(interrupt_requested, stop_event),
         daemon=True,
     )
@@ -291,13 +304,15 @@ def _esc_interrupt_watcher(interrupt_requested: threading.Event):
         thread.join(timeout=0.2)
 
 
-def _watch_esc_keypress(
+def _watch_posix_esc_keypress(
     interrupt_requested: threading.Event,
     stop_event: threading.Event,
 ) -> None:
     fd: int | None = None
     old_attrs: list[Any] | None = None
     try:
+        if termios is None or tty is None:
+            return
         fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
         old_attrs = termios.tcgetattr(fd)
         tty.setcbreak(fd)
@@ -321,6 +336,25 @@ def _watch_esc_keypress(
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
             with contextlib.suppress(Exception):
                 os.close(fd)
+
+
+def _watch_windows_esc_keypress(
+    interrupt_requested: threading.Event,
+    stop_event: threading.Event,
+) -> None:
+    if msvcrt is None:
+        return
+    while not stop_event.is_set() and not interrupt_requested.is_set():
+        try:
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            key = msvcrt.getwch()
+        except Exception:
+            return
+        if key == "\x1b":
+            interrupt_requested.set()
+            return
 
 
 class TerminalStreamRenderer:

@@ -112,19 +112,54 @@
 
       <section class="install" id="install" aria-labelledby="install-title">
         <div>
-          <h2 id="install-title">安装</h2>
-          <p>发布后可以从 PyPI 安装，也可以直接安装 GitHub 上的最新版本。</p>
+          <h2 id="install-title">安装与维护</h2>
+          <p>
+            推荐用 uv 安装 Deepy。国内网络环境可以先配置清华 PyPI 镜像，再安装、
+            升级或卸载命令行工具。
+          </p>
         </div>
-        <div class="code-grid">
-          <pre><code>uv tool install deepy-cli</code></pre>
-          <pre><code>cd your-project
+        <div class="install-steps">
+          <article>
+            <h3>1. 准备 uv</h3>
+            <p>macOS / Linux</p>
+            <pre><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+            <p>Windows PowerShell</p>
+            <pre><code>powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+          </article>
+
+          <article>
+            <h3>2. 配置清华镜像（可选）</h3>
+            <p>Linux / macOS: <code>~/.config/uv/uv.toml</code></p>
+            <p>Windows: <code>%AppData%\uv\uv.toml</code></p>
+            <pre><code>[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true</code></pre>
+          </article>
+
+          <article>
+            <h3>3. 安装并启动 Deepy</h3>
+            <pre><code>uv tool install deepy-cli
+
+# 进入你的项目目录
+cd your-project
 deepy</code></pre>
+          </article>
+
+          <article>
+            <h3>4. 升级 Deepy</h3>
+            <pre><code>uv tool upgrade deepy-cli</code></pre>
+          </article>
+
+          <article>
+            <h3>5. 卸载 Deepy</h3>
+            <pre><code>uv tool uninstall deepy-cli</code></pre>
+          </article>
         </div>
       </section>
     </main>
 
     <footer>
-      <span>Deepy 0.1.0</span>
+      <span>Deepy 0.1.4</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>
