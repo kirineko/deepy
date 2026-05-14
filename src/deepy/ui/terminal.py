@@ -1328,7 +1328,7 @@ def _format_context_footer(
         return " · ".join(parts)
 
     session_entry = _session_entry(project_root, session_id)
-    used_tokens = session_entry.active_tokens if session_entry is not None else (0 if not session_id else None)
+    used_tokens = _session_context_tokens(project_root, session_id, session_entry)
     used_text = _format_token_count_short(used_tokens) if used_tokens is not None else "unknown"
     used_ratio = (
         f" ({used_tokens / window_tokens * 100:.1f}%)"
@@ -1370,6 +1370,25 @@ def _session_entry(project_root: Path | None, session_id: str | None) -> Session
         return None
     entry = next((item for item in entries if item.id == session_id), None)
     return entry
+
+
+def _session_context_tokens(
+    project_root: Path | None,
+    session_id: str | None,
+    session_entry: SessionEntry | None,
+) -> int | None:
+    if not session_id:
+        return 0
+    if project_root is not None:
+        try:
+            session = DeepyJsonlSession.open(project_root, session_id)
+            if session.path.exists():
+                return session.context_token_state().active_tokens
+        except Exception:
+            pass
+    if session_entry is not None:
+        return session_entry.active_tokens
+    return None
 
 
 def _format_token_count_short(value: int) -> str:

@@ -13,6 +13,8 @@ from deepy.utils import json as json_utils
 
 SESSION_INDEX_VERSION = 2
 MAX_SESSION_INDEX_ENTRIES = 50
+CONTEXT_UNDERCOUNT_REPAIR_RATIO = 2
+CONTEXT_UNDERCOUNT_REPAIR_MIN_DELTA = 128
 
 
 @dataclass(frozen=True)
@@ -147,11 +149,13 @@ class DeepyJsonlSession:
             return
         previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
         accumulated = merge_usage(previous.get("usage") if previous else None, normalized)
+        current_state = self.context_token_state()
+        checkpoint_tokens = max(normalized.prompt_tokens, current_state.active_tokens)
         record_count = len(self._load_records())
         self._touch_index(
-            active_tokens=normalized.prompt_tokens,
+            active_tokens=checkpoint_tokens,
             usage=accumulated.to_dict(),
-            last_usage_tokens=normalized.prompt_tokens,
+            last_usage_tokens=checkpoint_tokens,
             pending_tokens=0,
             last_usage_record_count=record_count,
         )
@@ -166,13 +170,27 @@ class DeepyJsonlSession:
             last_usage_tokens = _optional_int(previous.get("lastUsageTokens"))
             last_usage_record_count = _optional_int(previous.get("lastUsageRecordCount"))
             if last_usage_tokens is not None and last_usage_record_count is not None:
-                bounded_count = max(0, min(last_usage_record_count, len(source)))
-                pending_tokens = sum(_estimate_record_tokens(record) for record in source[bounded_count:])
+                if last_usage_record_count > len(source):
+                    active_tokens = self._estimate_active_tokens(source)
+                    return ContextTokenState(
+                        active_tokens=active_tokens,
+                        last_usage_tokens=None,
+                        pending_tokens=0,
+                        last_usage_record_count=None,
+                        estimated=True,
+                    )
+                pending_tokens = sum(_estimate_record_tokens(record) for record in source[last_usage_record_count:])
+                checkpoint_tokens = last_usage_tokens + pending_tokens
+                estimated_tokens = self._estimate_active_tokens(source)
+                active_tokens = _repair_undercounted_context_tokens(
+                    checkpoint_tokens,
+                    estimated_tokens,
+                )
                 return ContextTokenState(
-                    active_tokens=last_usage_tokens + pending_tokens,
+                    active_tokens=active_tokens,
                     last_usage_tokens=last_usage_tokens,
-                    pending_tokens=pending_tokens,
-                    last_usage_record_count=bounded_count,
+                    pending_tokens=max(active_tokens - last_usage_tokens, pending_tokens),
+                    last_usage_record_count=last_usage_record_count,
                     estimated=True,
                 )
         active_tokens = self._estimate_active_tokens(source)
@@ -348,6 +366,9 @@ class DeepyJsonlSession:
 
 @dataclass(frozen=True)
 class ContextTokenState:
+    # active_tokens is the effective context pressure used by UI and auto compaction.
+    # last_usage_tokens is the latest checkpoint covered by usage or session rewrite.
+    # pending_tokens estimates records appended after that checkpoint.
     active_tokens: int
     last_usage_tokens: int | None = None
     pending_tokens: int = 0
@@ -452,3 +473,14 @@ def _estimate_record_tokens(record: dict[str, Any]) -> int:
     if item is not None:
         return estimate_tokens_for_item(item)
     return estimate_tokens_for_item(record.get("content", ""))
+
+
+def _repair_undercounted_context_tokens(checkpoint_tokens: int, estimated_tokens: int) -> int:
+    if estimated_tokens <= checkpoint_tokens:
+        return checkpoint_tokens
+    if (
+        estimated_tokens - checkpoint_tokens >= CONTEXT_UNDERCOUNT_REPAIR_MIN_DELTA
+        and estimated_tokens >= checkpoint_tokens * CONTEXT_UNDERCOUNT_REPAIR_RATIO
+    ):
+        return estimated_tokens
+    return checkpoint_tokens

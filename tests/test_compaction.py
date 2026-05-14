@@ -116,3 +116,42 @@ async def test_ensure_context_ready_blocks_when_auto_compaction_cannot_fit(tmp_p
             ),
             additional_input="continue",
         )
+
+
+@pytest.mark.asyncio
+async def test_ensure_context_ready_uses_effective_context_after_short_usage(
+    monkeypatch,
+    tmp_path,
+):
+    async def fake_compact_session(session, settings, *, provider=None, reason):
+        return type(
+            "FakeCompaction",
+            (),
+            {
+                "compacted": True,
+                "before_tokens": session.context_token_state().active_tokens,
+                "after_tokens": 100,
+            },
+        )()
+
+    monkeypatch.setattr("deepy.llm.compaction.compact_session", fake_compact_session)
+    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    await session.add_items([{"role": "user", "content": "large prompt"}])
+    session.record_usage({"prompt_tokens": 900, "completion_tokens": 5, "total_tokens": 905})
+    await session.add_items([{"role": "assistant", "content": "answer"}, {"role": "user", "content": "hi"}])
+    session.record_usage({"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22})
+
+    readiness = await ensure_context_ready(
+        session,
+        Settings(
+            context=ContextConfig(
+                window_tokens=1_000,
+                compact_trigger_ratio=0.8,
+                reserved_context_tokens=50,
+            )
+        ),
+        additional_input="continue",
+    )
+
+    assert readiness.compacted is True
+    assert readiness.before_tokens >= 900

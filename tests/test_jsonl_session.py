@@ -5,6 +5,7 @@ import json
 import pytest
 
 from deepy.sessions import DeepyJsonlSession, list_session_entries, project_code
+from deepy.llm.context import estimate_tokens_for_item
 from deepy.sessions.jsonl import MAX_SESSION_INDEX_ENTRIES, project_sessions_dir
 
 
@@ -145,6 +146,60 @@ async def test_session_token_state_tracks_usage_checkpoint_and_pending(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_session_token_state_does_not_shrink_on_short_latest_usage(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "large prompt"}])
+    session.record_usage({"prompt_tokens": 9_000, "completion_tokens": 100, "total_tokens": 9_100})
+    await session.add_items(
+        [
+            {"role": "assistant", "content": "large answer"},
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    before_short_usage = session.context_token_state()
+
+    session.record_usage({"prompt_tokens": 3_500, "completion_tokens": 10, "total_tokens": 3_510})
+
+    state = session.context_token_state()
+    entry = list_session_entries(project, deepy_home=home)[0]
+
+    assert before_short_usage.active_tokens > 9_000
+    assert state.active_tokens == before_short_usage.active_tokens
+    assert state.last_usage_tokens == before_short_usage.active_tokens
+    assert state.pending_tokens == 0
+    assert entry.active_tokens == state.active_tokens
+    assert entry.usage is not None
+    assert entry.usage["prompt_tokens"] == 12_500
+    assert entry.usage["total_tokens"] == 12_610
+
+
+@pytest.mark.asyncio
+async def test_context_token_state_falls_back_when_checkpoint_is_undercounted(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+    items = [
+        {"role": "user", "content": "x" * 1_000},
+        {"role": "assistant", "content": "y" * 1_000},
+    ]
+    await session.add_items(items)
+    session._touch_index(
+        active_tokens=10,
+        last_usage_tokens=10,
+        pending_tokens=0,
+        last_usage_record_count=2,
+    )
+
+    state = session.context_token_state()
+
+    assert state.active_tokens >= sum(estimate_tokens_for_item(item) for item in items)
+    assert state.active_tokens > 10
+
+
+@pytest.mark.asyncio
 async def test_replace_items_resets_checkpoint_to_compacted_estimate(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"
@@ -157,10 +212,36 @@ async def test_replace_items_resets_checkpoint_to_compacted_estimate(tmp_path):
     )
 
     state = session.context_token_state()
+    entry = list_session_entries(project, deepy_home=home)[0]
+
     assert state.active_tokens == 12
     assert state.last_usage_tokens == 12
     assert state.pending_tokens == 0
     assert state.last_usage_record_count == 1
+    assert entry.active_tokens == 12
+    assert entry.pending_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_context_token_state_reestimates_when_history_is_shortened(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items(
+        [
+            {"role": "user", "content": "large prompt"},
+            {"role": "assistant", "content": "large answer"},
+        ]
+    )
+    session.record_usage({"prompt_tokens": 9_000, "completion_tokens": 10, "total_tokens": 9_010})
+
+    await session.pop_item()
+
+    state = session.context_token_state()
+    assert state.active_tokens < 9_000
+    assert state.last_usage_tokens is None
+    assert state.last_usage_record_count is None
 
 
 @pytest.mark.asyncio

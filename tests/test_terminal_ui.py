@@ -1022,6 +1022,35 @@ def test_format_context_footer_shows_only_model_reasoning_cwd_and_context(tmp_pa
     assert "session" not in toolbar
 
 
+def test_format_context_footer_does_not_shrink_after_short_latest_usage(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session._touch_index(
+        active_tokens=9_000,
+        last_usage_tokens=9_000,
+        pending_tokens=0,
+        last_usage_record_count=0,
+    )
+    session.path.parent.mkdir(parents=True, exist_ok=True)
+    session.path.write_text(
+        '{"role":"user","content":"large prompt","meta":{"sdk_item":{"role":"user","content":"large prompt"}}}\n',
+        encoding="utf-8",
+    )
+    session.record_usage({"prompt_tokens": 3_500, "completion_tokens": 10, "total_tokens": 3_510})
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "ctx ~9K/8K" in toolbar
+    assert "win 10K · compact next" in toolbar
+    assert "ctx ~3.5K" not in toolbar
+
+
 def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
     prompts = iter(["first", "/new", "second", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
