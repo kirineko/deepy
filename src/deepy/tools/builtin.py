@@ -38,6 +38,7 @@ MAX_BASH_OUTPUT_CHARS = 30_000
 MAX_BASH_CAPTURE_CHARS = 10 * 1024 * 1024
 MAX_WEB_FETCH_BYTES = 2 * 1024 * 1024
 MAX_WEB_FETCH_OUTPUT_CHARS = 30_000
+MIN_USEFUL_WEB_FETCH_BODY_CHARS = 40
 DEFAULT_WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 DEFAULT_WEB_SEARCH_RESULTS = 8
 MAX_WEB_SEARCH_CALLS_PER_TURN = 8
@@ -942,12 +943,15 @@ class _ReadableHtmlParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.title_parts: list[str] = []
         self.text_parts: list[str] = []
+        self.description_candidates: dict[str, str] = {}
         self._in_title = False
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
         normalized = tag.lower()
+        if normalized == "meta":
+            self._record_meta_description(attrs)
+            return
         if normalized in self.SKIP_TAGS:
             self._skip_depth += 1
             return
@@ -994,6 +998,27 @@ class _ReadableHtmlParser(HTMLParser):
         raw = re.sub(r"\n{3,}", "\n\n", raw)
         return "\n".join(line.strip() for line in raw.splitlines()).strip()
 
+    @property
+    def meta_description(self) -> str:
+        for key in ("description", "og:description", "twitter:description"):
+            text = self.description_candidates.get(key, "").strip()
+            if text:
+                return text
+        return ""
+
+    def _record_meta_description(self, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {name.lower(): value for name, value in attrs if value is not None}
+        raw_key = attr_map.get("name") or attr_map.get("property")
+        content = attr_map.get("content", "")
+        if not raw_key or not content:
+            return
+        key = raw_key.strip().lower()
+        if key not in {"description", "og:description", "twitter:description"}:
+            return
+        normalized = " ".join(content.split()).strip()
+        if normalized and key not in self.description_candidates:
+            self.description_candidates[key] = normalized
+
 
 def _validate_web_fetch_url(url: str) -> tuple[str | None, str | None]:
     stripped = url.strip()
@@ -1016,11 +1041,31 @@ def _is_html_response(content_type: str, text: str) -> bool:
     return "<html" in prefix or "<!doctype html" in prefix
 
 
-def _extract_readable_html(html: str) -> tuple[str, str]:
+def _extract_readable_html(html: str) -> tuple[str, str, str]:
     parser = _ReadableHtmlParser()
     parser.feed(html)
     parser.close()
-    return parser.title, parser.readable_text
+    return parser.title, parser.readable_text, parser.meta_description
+
+
+def _select_web_fetch_html_text(readable_text: str, metadata_text: str) -> str:
+    stripped = readable_text.strip()
+    if stripped and _is_useful_web_fetch_body_text(stripped):
+        return stripped
+    return metadata_text.strip() or stripped
+
+
+def _is_useful_web_fetch_body_text(text: str) -> bool:
+    normalized = " ".join(text.split()).strip().lower()
+    if len(normalized) >= MIN_USEFUL_WEB_FETCH_BODY_CHARS:
+        return True
+    return normalized not in {
+        "",
+        "loading",
+        "loading...",
+        "please enable javascript",
+        "you need to enable javascript to run this app.",
+    }
 
 
 def _format_web_fetch_output(
@@ -1473,18 +1518,16 @@ class ToolRuntime:
         request = urllib.request.Request(
             target_url,
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Deepy/0.1"
-                ),
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                **WEB_SEARCH_BROWSER_HEADERS,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
             },
             method="GET",
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 final_url = response.geturl()
-                content_type = response.headers.get("Content-Type", "")
+                content_type = _response_header(response, "Content-Type") or ""
+                content_encoding = _response_header(response, "Content-Encoding")
                 body = response.read(MAX_WEB_FETCH_BYTES + 1)
         except Exception as exc:
             return ToolResult.error_result(
@@ -1501,9 +1544,24 @@ class ToolRuntime:
         bytes_truncated = len(body) > MAX_WEB_FETCH_BYTES
         body = body[:MAX_WEB_FETCH_BYTES]
         charset = _charset_from_content_type(content_type)
-        decoded = body.decode(charset, errors="replace")
+        try:
+            decoded = _decode_http_body(body, encoding=content_encoding, charset=charset)
+        except Exception as exc:
+            return ToolResult.error_result(
+                name,
+                f"WebFetch response decode failed: {exc}",
+                metadata={
+                    "url": target_url,
+                    "finalUrl": final_url,
+                    "contentType": content_type,
+                    "contentEncoding": content_encoding,
+                    "charset": charset,
+                    "activityLabel": activity_label,
+                },
+            ).to_json()
         if _is_html_response(content_type, decoded):
-            title, readable_text = _extract_readable_html(decoded)
+            title, readable_text, metadata_text = _extract_readable_html(decoded)
+            readable_text = _select_web_fetch_html_text(readable_text, metadata_text)
         else:
             title = ""
             readable_text = decoded.strip()

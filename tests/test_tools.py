@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shlex
@@ -941,6 +942,175 @@ def test_web_fetch_extracts_readable_html_page(tmp_path, monkeypatch):
     assert payload["metadata"]["finalUrl"] == "https://example.com/final"
     assert payload["metadata"]["contentType"] == "text/html; charset=utf-8"
     assert payload["metadata"]["bodyTruncated"] is False
+
+
+def test_web_fetch_uses_meta_description_when_body_text_is_empty(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://leetcode.cn/problems/two-sum/description/"
+
+        def read(self, size=-1):
+            assert size > 0
+            return (
+                b"<html><head><title>1. Two Sum</title>"
+                b"<meta name='description' content='Given an integer array nums and a target, "
+                b"return indices of the two numbers such that they add up to target.'>"
+                b"</head><body><div id='__next'></div><script>ignored()</script></body></html>"
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_fetch("https://leetcode.cn/problems/two-sum/description/"))
+
+    assert payload["ok"] is True
+    assert "Title: 1. Two Sum" in payload["output"]
+    assert "Given an integer array nums and a target" in payload["output"]
+    assert "return indices of the two numbers" in payload["output"]
+    assert "[No readable text extracted.]" not in payload["output"]
+    assert "ignored()" not in payload["output"]
+
+
+def test_web_fetch_uses_social_description_metadata_fallbacks(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/app"
+
+        def read(self, size=-1):
+            return (
+                b"<html><head><title>App Page</title>"
+                b"<meta name='twitter:description' content='Twitter description text.'>"
+                b"<meta property='og:description' content='OpenGraph description text.'>"
+                b"</head><body><div id='root'></div></body></html>"
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_fetch("https://example.com/app"))
+
+    assert payload["ok"] is True
+    assert "OpenGraph description text." in payload["output"]
+    assert "Twitter description text." not in payload["output"]
+
+
+def test_web_fetch_decodes_gzip_response(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    requested: list[object] = []
+
+    class FakeResponse:
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Encoding": "gzip",
+        }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/compressed"
+
+        def read(self, size=-1):
+            return gzip.compress(
+                b"<html><head><title>Compressed</title></head>"
+                b"<body><p>Compressed readable content.</p></body></html>"
+            )
+
+    def fake_urlopen(request, timeout):
+        requested.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = decode(runtime.web_fetch("https://example.com/compressed"))
+
+    assert payload["ok"] is True
+    assert requested[0].get_header("Accept-encoding") == "gzip, deflate"
+    assert "Compressed readable content." in payload["output"]
+    assert payload["metadata"]["byteCount"] > 0
+
+
+def test_web_fetch_prefers_body_text_over_meta_description(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    class FakeResponse:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/article"
+
+        def read(self, size=-1):
+            return (
+                b"<html><head><title>Article</title>"
+                b"<meta name='description' content='SEO summary should not replace body.'>"
+                b"</head><body><article><p>This is the article body text that should win.</p>"
+                b"</article></body></html>"
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_fetch("https://example.com/article"))
+
+    assert payload["ok"] is True
+    assert "This is the article body text that should win." in payload["output"]
+    assert "SEO summary should not replace body." not in payload["output"]
+
+
+def test_web_fetch_unsupported_content_encoding_returns_structured_error(tmp_path, monkeypatch):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    class FakeResponse:
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Encoding": "br",
+        }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def geturl(self):
+            return "https://example.com/brotli"
+
+        def read(self, size=-1):
+            return b"not decoded here"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    payload = decode(runtime.web_fetch("https://example.com/brotli"))
+
+    assert payload["ok"] is False
+    assert "Unsupported content encoding: br" in payload["error"]
+    assert payload["metadata"]["url"] == "https://example.com/brotli"
 
 
 def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
