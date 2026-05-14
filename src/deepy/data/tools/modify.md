@@ -15,3 +15,8 @@ Args for existing files: `file_path`, `old_string`, `new_string`, optional
 Existing files must be read before editing. Stale edits are rejected. Repeated matches
 are rejected unless `replace_all` is true; candidate snippets can be reused with
 `snippet_id`. Success includes diff metadata.
+
+If several `old_string` attempts fail and you know the complete desired file content,
+re-read the file and use the managed whole-file replacement path. Do not delete the file
+and recreate it with shell commands or here-strings; that bypasses Deepy's encoding,
+newline, and stale-write protections, especially on Windows.

@@ -563,6 +563,19 @@ def test_write_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"one\r\ntwo\r\n"
 
 
+def test_write_does_not_double_translate_existing_crlf_bytes(tmp_path):
+    target = tmp_path / "windows.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\n")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    decode(runtime.read("windows.txt"))
+    payload = decode(runtime.write("windows.txt", "one\ntwo\n"))
+
+    assert payload["ok"] is True
+    assert target.read_bytes() == b"one\r\ntwo\r\n"
+    assert b"\r\r\n" not in target.read_bytes()
+
+
 def test_write_preserves_existing_utf16le_encoding(tmp_path):
     target = tmp_path / "utf16.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-16")
@@ -576,6 +589,20 @@ def test_write_preserves_existing_utf16le_encoding(tmp_path):
     assert payload["metadata"]["encoding"] == "utf16le"
     assert target.read_bytes().startswith(b"\xff\xfe")
     assert target.read_text(encoding="utf-16") == "one\ntwo\n"
+
+
+def test_write_preserves_existing_utf8_sig_encoding(tmp_path):
+    target = tmp_path / "utf8_sig.py"
+    target.write_bytes("城市=北京\n".encode("utf-8-sig"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    decode(runtime.read("utf8_sig.py"))
+    payload = decode(runtime.write("utf8_sig.py", "城市=上海\n"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf8-sig"
+    assert target.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert target.read_bytes().decode("utf-8-sig") == "城市=上海\n"
 
 
 def test_read_decodes_gbk_compatible_text(tmp_path):
@@ -602,6 +629,42 @@ def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
     assert payload["metadata"]["encoding"] == "utf8"
 
 
+def test_windows_new_non_ascii_text_file_uses_utf8_signature(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    payload = decode(runtime.modify("notes.py", content="# 中文注释\nprint('ok')\n"))
+    target = tmp_path / "notes.py"
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf8-sig"
+    assert target.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert target.read_bytes().decode("utf-8-sig") == "# 中文注释\nprint('ok')\n"
+
+
+def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    payload = decode(runtime.modify("notes.py", content="# comment\nprint('ok')\n"))
+    target = tmp_path / "notes.py"
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf8"
+    assert not target.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert target.read_bytes() == b"# comment\nprint('ok')\n"
+
+
+def test_posix_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="darwin")
+
+    payload = decode(runtime.modify("notes.py", content="# 中文注释\nprint('ok')\n"))
+    target = tmp_path / "notes.py"
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf8"
+    assert not target.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert target.read_bytes().decode("utf-8") == "# 中文注释\nprint('ok')\n"
+
+
 def test_write_repairs_json_object_content_for_json_files(tmp_path):
     target = tmp_path / "package.json"
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -625,6 +688,21 @@ def test_write_rejects_non_string_content_for_non_json_files(tmp_path):
 
     assert payload["ok"] is False
     assert payload["error"] == "content must be a string."
+
+
+def test_modify_content_after_out_of_band_delete_preserves_stale_protection(tmp_path):
+    target = tmp_path / "notes.py"
+    target.write_text("print('old')\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    decode(runtime.read("notes.py"))
+    target.unlink()
+    payload = decode(runtime.modify("notes.py", content="print('new')\n"))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "File changed since it was read: it no longer exists."
+    assert payload["metadata"]["recovery_kind"] == "stale_deleted_file"
+    assert "do not recreate Unicode files through shell here-strings" in payload["metadata"]["recovery"]
 
 
 def test_edit_preserves_existing_crlf_line_endings(tmp_path):

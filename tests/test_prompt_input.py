@@ -21,16 +21,17 @@ from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
 from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
-from deepy.ui.prompt_input import install_windows_shift_enter_key_sequence_override
 from deepy.ui.prompt_input import is_windows_newline_fallback_enabled
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
+from deepy.ui.prompt_input import prompt_toolbar
 from deepy.ui.prompt_input import prompt_for_input
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
 from deepy.ui.prompt_input import SHIFT_ENTER_SEQUENCES
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
+from deepy.ui.prompt_input import WINDOWS_PROMPT_TOOLBAR_HELP
 from deepy.ui.slash_commands import SlashCommandItem
 
 
@@ -143,6 +144,13 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
     assert session.kwargs["bottom_toolbar"] == PROMPT_TOOLBAR
     assert PROMPT_TOOLBAR_BACKGROUND == "#161821"
     assert PROMPT_TOOLBAR_FOREGROUND == "#a6adc8"
+
+
+def test_prompt_toolbar_switches_newline_help_by_platform():
+    assert prompt_toolbar("win32") == [("class:toolbar.help", WINDOWS_PROMPT_TOOLBAR_HELP)]
+    assert "Ctrl+J newline" in WINDOWS_PROMPT_TOOLBAR_HELP
+    assert "Shift+Enter" not in WINDOWS_PROMPT_TOOLBAR_HELP
+    assert prompt_toolbar("darwin") == PROMPT_TOOLBAR
 
 
 def test_build_prompt_toolbar_only_shows_status():
@@ -299,103 +307,6 @@ def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
         [("Keys.Escape", sequence), ("Keys.ControlM", "")]
         for sequence in SHIFT_ENTER_SEQUENCES
     ]
-
-
-def test_windows_shift_enter_console_input_maps_to_escape_enter():
-    from prompt_toolkit.key_binding.key_processor import KeyPress
-    from prompt_toolkit.keys import Keys
-
-    class FakeConsoleInputReader:
-        SHIFT_PRESSED = 0x0010
-
-        def _event_to_key_presses(self, event):
-            return [KeyPress(Keys.ControlM, "\r")]
-
-    class Event:
-        def __init__(self, control_key_state: int):
-            self.ControlKeyState = control_key_state
-
-    assert install_windows_shift_enter_key_sequence_override(
-        platform_name="win32",
-        console_input_reader_cls=FakeConsoleInputReader,
-    )
-    assert install_windows_shift_enter_key_sequence_override(
-        platform_name="win32",
-        console_input_reader_cls=FakeConsoleInputReader,
-    )
-
-    shifted = FakeConsoleInputReader()._event_to_key_presses(Event(0x0010))
-    plain = FakeConsoleInputReader()._event_to_key_presses(Event(0))
-
-    assert [key.key for key in shifted] == [Keys.Escape, Keys.ControlM]
-    assert [key.key for key in plain] == [Keys.ControlM]
-
-
-def test_windows_shift_enter_vt100_console_input_yields_supported_sequence():
-    class FakeKeyEvent:
-        def __init__(self, control_key_state: int, char: str = "\r", key_down: bool = True):
-            self.ControlKeyState = control_key_state
-            self.KeyDown = key_down
-            self.VirtualKeyCode = 13
-            self.uChar = type("UChar", (), {"UnicodeChar": char})()
-
-    class FakeEvent:
-        def __init__(self, key_event):
-            self.KeyEvent = key_event
-
-    class FakeInputRecord:
-        EventType = 1
-
-        def __init__(self, key_event):
-            self.Event = FakeEvent(key_event)
-
-    class FakeRead:
-        def __init__(self, value: int):
-            self.value = value
-
-    class FakeVt100ConsoleInputReader:
-        def _get_keys(self, read, input_records):
-            for record in input_records[: read.value]:
-                yield record.Event.KeyEvent.uChar.UnicodeChar
-
-    assert install_windows_shift_enter_key_sequence_override(
-        platform_name="win32",
-        vt100_console_input_reader_cls=FakeVt100ConsoleInputReader,
-        event_types={1: "KeyEvent"},
-        key_event_record_cls=FakeKeyEvent,
-    )
-    assert install_windows_shift_enter_key_sequence_override(
-        platform_name="win32",
-        vt100_console_input_reader_cls=FakeVt100ConsoleInputReader,
-        event_types={1: "KeyEvent"},
-        key_event_record_cls=FakeKeyEvent,
-    )
-
-    shifted = list(
-        FakeVt100ConsoleInputReader()._get_keys(
-            FakeRead(1),
-            [FakeInputRecord(FakeKeyEvent(0x0010))],
-        )
-    )
-    plain = list(
-        FakeVt100ConsoleInputReader()._get_keys(
-            FakeRead(1),
-            [FakeInputRecord(FakeKeyEvent(0))],
-        )
-    )
-
-    assert shifted == [SHIFT_ENTER_SEQUENCES[0]]
-    assert plain == ["\r"]
-
-
-def test_windows_shift_enter_patch_is_noop_on_posix_platforms():
-    class FakeConsoleInputReader:
-        pass
-
-    assert not install_windows_shift_enter_key_sequence_override(
-        platform_name="darwin",
-        console_input_reader_cls=FakeConsoleInputReader,
-    )
 
 
 def test_text_width_counts_cjk_and_control_characters():

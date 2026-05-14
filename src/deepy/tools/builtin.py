@@ -8,6 +8,7 @@ import re
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -1161,6 +1162,7 @@ def _format_web_fetch_output(
 class ToolRuntime:
     cwd: Path
     settings: Settings
+    platform_name: str = field(default_factory=lambda: sys.platform)
     file_state: FileState = field(default_factory=FileState)
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
     web_search_calls: int = 0
@@ -1305,13 +1307,22 @@ class ToolRuntime:
         target = _resolve_in_cwd(self.cwd, path)
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
-            return ToolResult.error_result(name, error or "File is not writable.").to_json()
+            metadata = _stale_write_recovery_metadata(target, error)
+            return ToolResult.error_result(
+                name,
+                error or "File is not writable.",
+                metadata=metadata,
+            ).to_json()
         text_content, repair_metadata, content_error = _coerce_write_content(target, content)
         if content_error is not None:
             return ToolResult.error_result(name, content_error).to_json()
         existing_metadata = _read_text_metadata(target) if target.exists() else None
         old_content = existing_metadata.content if existing_metadata is not None else ""
-        encoding = existing_metadata.encoding if existing_metadata is not None else "utf8"
+        encoding = (
+            existing_metadata.encoding
+            if existing_metadata is not None
+            else _default_new_text_encoding(text_content, platform_name=self.platform_name)
+        )
         line_endings = _detect_line_endings(old_content or text_content)
         normalized_content = _normalize_line_endings(text_content, line_endings)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1858,8 +1869,33 @@ def _python_text_encoding(encoding: str) -> str:
     return "utf8"
 
 
+def _default_new_text_encoding(content: str, *, platform_name: str | None = None) -> str:
+    resolved_platform = platform_name or sys.platform
+    if resolved_platform.startswith("win") and _contains_non_ascii(content):
+        return "utf8-sig"
+    return "utf8"
+
+
+def _contains_non_ascii(text: str) -> bool:
+    return any(ord(char) > 0x7F for char in text)
+
+
 def _write_text_with_encoding(path: Path, content: str, encoding: str) -> None:
-    path.write_text(content, encoding=_python_text_encoding(encoding))
+    path.write_bytes(content.encode(_python_text_encoding(encoding)))
+
+
+def _stale_write_recovery_metadata(path: Path, error: str | None) -> dict[str, object]:
+    if error != "File changed since it was read: it no longer exists.":
+        return {}
+    return {
+        "path": str(path),
+        "recovery": (
+            "The file was deleted after Deepy read it. Re-read the path or use a "
+            "managed full-file replacement before deletion; do not recreate Unicode "
+            "files through shell here-strings."
+        ),
+        "recovery_kind": "stale_deleted_file",
+    }
 
 
 def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, object], str | None]:
