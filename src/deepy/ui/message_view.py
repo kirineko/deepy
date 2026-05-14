@@ -339,7 +339,7 @@ def is_invisible_execution(content: str) -> bool:
         parsed = json_utils.loads(content)
     except json_utils.JSONDecodeError:
         return False
-    return isinstance(parsed, dict) and parsed.get("name") == "bash" and parsed.get("ok") is not True
+    return isinstance(parsed, dict) and parsed.get("name") == "shell" and parsed.get("ok") is not True
 
 
 def render_tool_output(output: str, *, palette: UiPalette | None = None) -> Group:
@@ -455,7 +455,7 @@ def _format_tool_params_snippet(
     if tool_name in {"write", "modify"} and "content" in args:
         return _format_write_params_snippet(args, project_root=project_root)
 
-    if tool_name == "bash":
+    if tool_name == "shell":
         command = args.get("command")
         description = args.get("description")
         command_text = command.strip() if isinstance(command, str) else ""

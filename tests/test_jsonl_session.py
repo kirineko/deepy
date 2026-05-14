@@ -283,7 +283,7 @@ async def test_jsonl_session_does_not_repair_legacy_missing_tool_pairs(tmp_path)
                     {
                         "id": "call-1",
                         "type": "function",
-                        "function": {"name": "bash", "arguments": '{"command":"sleep 100"}'},
+                        "function": {"name": "shell", "arguments": '{"command":"sleep 100"}'},
                     }
                 ]
             },
@@ -318,13 +318,13 @@ async def test_jsonl_session_round_trips_sdk_tool_items(tmp_path):
                 {
                     "id": "call-1",
                     "type": "function",
-                    "function": {"name": "bash", "arguments": '{"command":"date"}'},
+                    "function": {"name": "shell", "arguments": '{"command":"date"}'},
                 }
             ],
         },
         {
             "role": "tool",
-            "content": json.dumps({"ok": True, "name": "bash", "output": "real result"}),
+            "content": json.dumps({"ok": True, "name": "shell", "output": "real result"}),
             "tool_call_id": "call-1",
         },
     ]

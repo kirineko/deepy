@@ -4,7 +4,7 @@ from importlib import resources
 
 
 TOOL_DOC_FILES = (
-    "bash.md",
+    "shell.md",
     "read.md",
     "modify.md",
     "AskUserQuestion.md",

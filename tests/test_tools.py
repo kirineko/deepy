@@ -623,25 +623,36 @@ def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     assert target.read_text(encoding="utf-16") == "alpha\ngamma\n"
 
 
-def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
+def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("cd sub"))
+    payload = decode(runtime.shell("cd sub"))
 
     assert payload["ok"] is True
     assert runtime.cwd == subdir
 
 
-def test_bash_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
+def test_shell_tool_returns_shell_result_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.shell("printf ok"))
+
+    assert payload["ok"] is True
+    assert payload["name"] == "shell"
+    assert payload["output"] == "ok"
+
+
+def test_shell_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("cd sub && pwd"))
+    payload = decode(runtime.shell("cd sub && pwd"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["cwd"] == str(subdir)
@@ -649,13 +660,13 @@ def test_bash_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
     assert runtime.cwd == subdir
 
 
-def test_bash_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
+def test_shell_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("cd sub && false"))
+    payload = decode(runtime.shell("cd sub && false"))
 
     assert payload["ok"] is False
     assert payload["metadata"]["exitCode"] == 1
@@ -663,11 +674,11 @@ def test_bash_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
     assert runtime.cwd == subdir
 
 
-def test_bash_uses_shell_compatibility_wrapper(tmp_path, monkeypatch):
+def test_shell_uses_shell_compatibility_wrapper(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("printf hidden >nul"))
+    payload = decode(runtime.shell("printf hidden >nul"))
 
     assert payload["ok"] is True
     assert payload["output"] == ""
@@ -728,11 +739,11 @@ def test_extract_shell_sentinel_parses_cwd_and_exit_code(tmp_path):
     assert exit_code == 7
 
 
-def test_bash_truncates_large_output(tmp_path, monkeypatch):
+def test_shell_truncates_large_output(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("printf 'x%.0s' {1..31000}"))
+    payload = decode(runtime.shell("printf 'x%.0s' {1..31000}"))
 
     assert payload["ok"] is True
     assert len(payload["output"]) > MAX_BASH_OUTPUT_CHARS
@@ -741,12 +752,12 @@ def test_bash_truncates_large_output(tmp_path, monkeypatch):
     assert payload["metadata"]["outputTruncated"] is True
 
 
-def test_bash_caps_captured_output_before_formatting(tmp_path, monkeypatch):
+def test_shell_caps_captured_output_before_formatting(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.setattr("deepy.tools.builtin.MAX_BASH_CAPTURE_CHARS", 10)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("printf 'x%.0s' {1..25}"))
+    payload = decode(runtime.shell("printf 'x%.0s' {1..25}"))
 
     assert payload["ok"] is True
     assert payload["output"] == "x" * 10
@@ -754,11 +765,11 @@ def test_bash_caps_captured_output_before_formatting(tmp_path, monkeypatch):
     assert payload["metadata"]["outputTruncated"] is False
 
 
-def test_bash_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
+def test_shell_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.bash("sleep 1", timeout_ms=20))
+    payload = decode(runtime.shell("sleep 1", timeout_ms=20))
 
     assert payload["ok"] is False
     assert "timed out" in payload["error"]
@@ -817,7 +828,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     tools = build_function_tools(runtime)
 
     assert [tool.name for tool in tools] == [
-        "bash",
+        "shell",
         "AskUserQuestion",
         "read",
         "modify",
@@ -825,19 +836,19 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "WebFetch",
     ]
     assert all(tool.description for tool in tools)
-    bash_tool = tools[0]
-    assert bash_tool.name == "bash"
-    assert "current runtime shell" in bash_tool.description
-    assert "PowerShell" in bash_tool.description
-    assert "persistent bash session" not in bash_tool.description
+    shell_tool = tools[0]
+    assert shell_tool.name == "shell"
+    assert "current runtime shell" in shell_tool.description
+    assert "command dialect" in shell_tool.description
+    assert "persistent bash session" not in shell_tool.description
 
 
-def test_function_tool_schemas_match_legacy_names(tmp_path):
+def test_function_tool_schemas_match_shell_tool(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
     tools = {tool.name: tool for tool in build_function_tools(runtime)}
 
-    assert tools["bash"].params_json_schema["required"] == ["command"]
-    assert list(tools["bash"].params_json_schema["properties"]) == ["command", "description"]
+    assert tools["shell"].params_json_schema["required"] == ["command"]
+    assert list(tools["shell"].params_json_schema["properties"]) == ["command", "description"]
     assert tools["AskUserQuestion"].params_json_schema["required"] == ["questions"]
     assert list(tools["AskUserQuestion"].params_json_schema["properties"]) == ["questions"]
     assert tools["read"].params_json_schema["required"] == ["file_path"]

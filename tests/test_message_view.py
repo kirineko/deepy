@@ -34,11 +34,11 @@ def test_format_tool_output_summary_uses_path_detail():
 
 def test_format_tool_output_summary_uses_error_detail():
     output = (
-        '{"ok":false,"name":"bash","output":"stderr","error":"Command exited with code 1.",'
+        '{"ok":false,"name":"shell","output":"stderr","error":"Command exited with code 1.",'
         '"metadata":{"exitCode":1},"awaitUserResponse":false}'
     )
 
-    assert format_tool_output_summary(output) == "bash failed - Command exited with code 1."
+    assert format_tool_output_summary(output) == "shell failed - Command exited with code 1."
 
 
 def test_parse_tool_output_preserves_pending_question_state():
@@ -360,10 +360,10 @@ def test_build_thinking_summary_uses_placeholder_for_hidden_reasoning():
     )
 
 
-def test_build_tool_params_snippet_formats_bash_command_and_description():
+def test_build_tool_params_snippet_formats_shell_command_and_description():
     assert (
         build_tool_params_snippet(
-            {"name": "bash", "arguments": '{"command":"pytest","description":"run tests"}'}
+            {"name": "shell", "arguments": '{"command":"pytest","description":"run tests"}'}
         )
         == "pytest  # run tests"
     )
@@ -423,13 +423,13 @@ def test_format_tool_progress_summary_merges_call_and_output_status():
 
 def test_format_tool_progress_summary_includes_failure_detail():
     output = (
-        '{"ok":false,"name":"bash","output":"stderr","error":"Command exited with code 1.",'
+        '{"ok":false,"name":"shell","output":"stderr","error":"Command exited with code 1.",'
         '"metadata":{"exitCode":1},"awaitUserResponse":false}'
     )
 
     assert (
-        format_tool_progress_summary("bash pytest", output)
-        == "bash pytest  failed - Command exited with code 1."
+        format_tool_progress_summary("shell pytest", output)
+        == "shell pytest  failed - Command exited with code 1."
     )
 
 
@@ -444,7 +444,7 @@ def test_build_tool_params_snippet_shortens_read_path_under_project_root():
 
 
 def test_build_tool_result_snippet_extracts_output_and_truncates():
-    content = json.dumps({"ok": True, "name": "bash", "output": "x" * 2_010})
+    content = json.dumps({"ok": True, "name": "shell", "output": "x" * 2_010})
 
     snippet = build_tool_result_snippet(content)
 
@@ -452,7 +452,7 @@ def test_build_tool_result_snippet_extracts_output_and_truncates():
     assert snippet.endswith("... (total 2010 chars)")
 
 
-def test_is_invisible_execution_detects_failed_bash_payload():
-    assert is_invisible_execution(json.dumps({"ok": False, "name": "bash"})) is True
-    assert is_invisible_execution(json.dumps({"ok": True, "name": "bash"})) is False
+def test_is_invisible_execution_detects_failed_shell_payload():
+    assert is_invisible_execution(json.dumps({"ok": False, "name": "shell"})) is True
+    assert is_invisible_execution(json.dumps({"ok": True, "name": "shell"})) is False
     assert is_invisible_execution(json.dumps({"ok": False, "name": "read"})) is False

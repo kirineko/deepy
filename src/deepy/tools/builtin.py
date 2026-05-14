@@ -1339,8 +1339,8 @@ class ToolRuntime:
             metadata["scope"] = _format_scope_metadata(target, snippet, scope, text)
         return ToolResult.ok_result(name, f"Edited {target}", metadata=metadata).to_json()
 
-    def bash(self, command: str, timeout_ms: int = 120_000) -> str:
-        name = "bash"
+    def shell(self, command: str, timeout_ms: int = 120_000) -> str:
+        name = "shell"
         timeout = max(timeout_ms, 1) / 1000
         marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
         shell_invocation = _build_shell_command(command, marker)

@@ -37,8 +37,8 @@
       }
     },
     {
-      "name": "bash_cwd_persistence",
-      "tool": "bash",
+      "name": "shell_cwd_persistence",
+      "tool": "shell",
       "args": { "command": "cd src && pwd", "description": "change directory and print it" }
     }
   ]

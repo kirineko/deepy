@@ -89,9 +89,9 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Follow local rules." in prompt
     assert "## WebSearch" in prompt
     assert "## WebFetch" in prompt
-    assert "## bash" in prompt
+    assert "## shell" in prompt
     assert "Use `modify` for file changes" in prompt
-    assert "Match shell commands to the runtime context" in prompt
+    assert "Run shell commands using the Runtime context's command dialect" in prompt
     assert "## modify" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt
@@ -113,10 +113,10 @@ def test_system_prompt_includes_powershell_tool_guidance(tmp_path):
         ),
     )
 
-    assert "Prefer PowerShell syntax for `powershell`" in prompt
-    assert "detected runtime shell" in prompt
+    assert "PowerShell with Windows paths" in prompt
+    assert "runtime shell" in prompt
     assert "command dialect" in prompt
-    assert "PowerShell-compatible commands and Windows paths" in prompt
+    assert "PowerShell commands and Windows paths" in prompt
 
 
 def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path):

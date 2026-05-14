@@ -50,5 +50,5 @@ def test_tool_fixture_covers_planned_cases():
         "write_existing_without_read_rejected",
         "edit_stale_read_rejected",
         "replace_all_guard",
-        "bash_cwd_persistence",
+        "shell_cwd_persistence",
     }

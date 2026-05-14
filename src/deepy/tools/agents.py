@@ -10,9 +10,9 @@ from .builtin import ToolRuntime
 def build_function_tools(runtime: ToolRuntime) -> list[object]:
     from agents.tool import FunctionTool
 
-    async def invoke_bash(_context: object, raw_input: str) -> str:
+    async def invoke_shell(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
-        return runtime.bash(_string_arg(args, "command"), timeout_ms=120_000)
+        return runtime.shell(_string_arg(args, "command"), timeout_ms=120_000)
 
     async def invoke_ask_user_question(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
@@ -49,13 +49,13 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
 
     return [
         FunctionTool(
-            name="bash",
+            name="shell",
             description=(
-                "Execute shell commands in the current runtime shell. Use the command dialect "
-                "from runtime context, such as PowerShell on Windows or POSIX syntax for bash/zsh."
+                "Execute commands in the current runtime shell. Match the runtime context's "
+                "command dialect and path style."
             ),
-            params_json_schema=BASH_SCHEMA,
-            on_invoke_tool=invoke_bash,
+            params_json_schema=SHELL_SCHEMA,
+            on_invoke_tool=invoke_shell,
             strict_json_schema=False,
         ),
         FunctionTool(
@@ -148,7 +148,7 @@ def _bool_arg(args: dict[str, Any], name: str, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
-BASH_SCHEMA: dict[str, Any] = {
+SHELL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "command": {
@@ -166,7 +166,6 @@ BASH_SCHEMA: dict[str, Any] = {
     "required": ["command"],
     "additionalProperties": False,
 }
-
 ASK_USER_QUESTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
