@@ -46,6 +46,7 @@ Core rules:
 - Read before changing existing files.
 - Use `modify` for file changes: `content` only creates new files; existing files use `old_string`/`new_string`.
 - After project generators create scaffold files, read and edit the generated block instead of replacing the file.
+- Match shell commands to the runtime context: use commands and paths compatible with the detected OS family, shell kind, command dialect, and path style. Prefer PowerShell syntax for `powershell`, cmd syntax for `cmd`, and POSIX syntax only for `posix`.
 - Ask only when blocked by missing intent or required approval.
 
 Tool protocol:

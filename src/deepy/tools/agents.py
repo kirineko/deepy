@@ -50,7 +50,10 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
     return [
         FunctionTool(
             name="bash",
-            description="Execute shell commands in a persistent bash session.",
+            description=(
+                "Execute shell commands in the current runtime shell. Use the command dialect "
+                "from runtime context, such as PowerShell on Windows or POSIX syntax for bash/zsh."
+            ),
             params_json_schema=BASH_SCHEMA,
             on_invoke_tool=invoke_bash,
             strict_json_schema=False,

@@ -6,6 +6,7 @@ import math
 import os
 import re
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -24,8 +25,10 @@ from deepy.utils import json as json_utils
 
 from .file_state import FileSnippet, FileState
 from .result import ToolResult
+from .shell_utils import RuntimeEnvironment
 from .shell_utils import build_disable_extglob_command
 from .shell_utils import build_shell_init_command
+from .shell_utils import detect_runtime_environment
 from .shell_utils import rewrite_windows_null_redirect
 
 
@@ -197,6 +200,13 @@ class WebSearchProviderResult:
     provider: str
     search_url: str
     results: list[WebSearchResult]
+
+
+@dataclass(frozen=True)
+class ShellInvocation:
+    shell_path: str
+    args: list[str]
+    runtime_environment: RuntimeEnvironment
 
 
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
@@ -1333,7 +1343,7 @@ class ToolRuntime:
         name = "bash"
         timeout = max(timeout_ms, 1) / 1000
         marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
-        shell_path, shell_args = _build_shell_command(command, marker)
+        shell_invocation = _build_shell_command(command, marker)
         process: subprocess.Popen[str] | None = None
         process_id: str | None = None
         try:
@@ -1342,7 +1352,7 @@ class ToolRuntime:
                 tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_file,
             ):
                 process = subprocess.Popen(
-                    [shell_path, *shell_args],
+                    [shell_invocation.shell_path, *shell_invocation.args],
                     cwd=self.cwd,
                     text=True,
                     stdout=stdout_file,
@@ -1363,20 +1373,24 @@ class ToolRuntime:
                     stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
                     stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
                     output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
+                    metadata = _shell_metadata(
+                        self.cwd,
+                        process_id,
+                        shell_invocation,
+                        output_truncated=output_truncated,
+                        capture_truncated=stdout_capture_truncated or stderr_capture_truncated,
+                    )
+                    metadata.update(
+                        {
+                            "timeoutMs": timeout_ms,
+                            "interrupted": True,
+                        }
+                    )
                     return ToolResult.error_result(
                         name,
                         f"Command timed out after {timeout_ms}ms.",
                         output=output,
-                        metadata={
-                            "cwd": str(self.cwd),
-                            "timeoutMs": timeout_ms,
-                            "processId": process_id,
-                            "shellPath": shell_path,
-                            "interrupted": True,
-                            "outputTruncated": output_truncated,
-                            "captureTruncated": stdout_capture_truncated
-                            or stderr_capture_truncated,
-                        },
+                        metadata=metadata,
                     ).to_json()
                 stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
                 stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
@@ -1390,31 +1404,25 @@ class ToolRuntime:
         returncode = exit_code if exit_code is not None else process.returncode
         output, output_truncated = _truncate_output(stdout + (stderr or ""))
         result = ToolResult.ok_result if returncode == 0 else ToolResult.error_result
+        metadata = _shell_metadata(
+            self.cwd,
+            process_id,
+            shell_invocation,
+            exit_code=returncode,
+            output_truncated=output_truncated,
+            capture_truncated=stdout_capture_truncated or stderr_capture_truncated,
+        )
         if returncode == 0:
             return result(
                 name,
                 output,
-                metadata={
-                    "cwd": str(self.cwd),
-                    "exitCode": returncode,
-                    "processId": process_id,
-                    "shellPath": shell_path,
-                    "outputTruncated": output_truncated,
-                    "captureTruncated": stdout_capture_truncated or stderr_capture_truncated,
-                },
+                metadata=metadata,
             ).to_json()
         return result(
             name,
             f"Command exited with code {returncode}.",
             output=output,
-            metadata={
-                "cwd": str(self.cwd),
-                "exitCode": returncode,
-                "processId": process_id,
-                "shellPath": shell_path,
-                "outputTruncated": output_truncated,
-                "captureTruncated": stdout_capture_truncated or stderr_capture_truncated,
-            },
+            metadata=metadata,
         ).to_json()
 
     def ask_user_question(self, questions: object) -> str:
@@ -1952,8 +1960,42 @@ def _read_captured_output(stream) -> tuple[str, bool]:
     return text[:MAX_BASH_CAPTURE_CHARS], True
 
 
-def _build_shell_command(command: str, marker: str) -> tuple[str, list[str]]:
-    shell_path = _resolve_shell_path()
+def _build_shell_command(
+    command: str,
+    marker: str,
+    *,
+    shell_path: str | None = None,
+    env: dict[str, str] | None = None,
+    platform_name: str | None = None,
+    os_name: str | None = None,
+) -> ShellInvocation:
+    resolved_shell = shell_path or _resolve_shell_path(env=env, os_name=os_name)
+    runtime_environment = detect_runtime_environment(
+        shell_path=resolved_shell,
+        env=env,
+        platform_name=platform_name,
+        os_name=os_name,
+    )
+    if runtime_environment.command_dialect == "powershell":
+        return ShellInvocation(
+            shell_path=resolved_shell,
+            args=_build_powershell_args(command, marker),
+            runtime_environment=runtime_environment,
+        )
+    if runtime_environment.command_dialect == "cmd":
+        return ShellInvocation(
+            shell_path=resolved_shell,
+            args=_build_cmd_args(command, marker),
+            runtime_environment=runtime_environment,
+        )
+    return ShellInvocation(
+        shell_path=resolved_shell,
+        args=_build_posix_shell_args(command, marker, resolved_shell),
+        runtime_environment=runtime_environment,
+    )
+
+
+def _build_posix_shell_args(command: str, marker: str, shell_path: str) -> list[str]:
     normalized_command = rewrite_windows_null_redirect(command)
     parts = [
         part
@@ -1967,14 +2009,98 @@ def _build_shell_command(command: str, marker: str) -> tuple[str, list[str]]:
         )
         if part
     ]
-    return shell_path, ["-c", "{ " + "; ".join(parts) + "; } < /dev/null"]
+    return ["-c", "{ " + "; ".join(parts) + "; } < /dev/null"]
 
 
-def _resolve_shell_path() -> str:
-    shell_path = os.environ.get("SHELL")
+def _build_powershell_args(command: str, marker: str) -> list[str]:
+    script = "\n".join(
+        [
+            "$global:LASTEXITCODE = $null",
+            "try {",
+            command,
+            "    $__deepy_success = $?",
+            "    $__deepy_last_exit = $global:LASTEXITCODE",
+            "    if ($null -eq $__deepy_last_exit) {",
+            "        if ($__deepy_success) { $__deepy_exit = 0 } else { $__deepy_exit = 1 }",
+            "    } else {",
+            "        $__deepy_exit = [int]$__deepy_last_exit",
+            "    }",
+            "} catch {",
+            "    Write-Error $_",
+            "    $__deepy_exit = 1",
+            "}",
+            "$__deepy_cwd = (Get-Location).ProviderPath",
+            'Write-Output ""',
+            f'Write-Output "{marker}CWD=$__deepy_cwd"',
+            f'Write-Output "{marker}EXIT=$__deepy_exit"',
+            "exit $__deepy_exit",
+        ]
+    )
+    return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
+
+
+def _build_cmd_args(command: str, marker: str) -> list[str]:
+    script = "\r\n".join(
+        [
+            command,
+            'set "__deepy_exit=%ERRORLEVEL%"',
+            "echo.",
+            f"echo {marker}CWD=%CD%",
+            f"echo {marker}EXIT=%__deepy_exit%",
+            "exit /b %__deepy_exit%",
+        ]
+    )
+    return ["/d", "/s", "/c", script]
+
+
+def _resolve_shell_path(
+    *,
+    env: dict[str, str] | None = None,
+    os_name: str | None = None,
+) -> str:
+    environment = env or os.environ
+    resolved_os_name = os_name or os.name
+    shell_path = environment.get("SHELL")
     if shell_path:
         return shell_path
+    if resolved_os_name == "nt":
+        if "PSModulePath" in environment:
+            return (
+                environment.get("POWERSHELL")
+                or shutil.which("pwsh")
+                or shutil.which("powershell")
+                or "powershell.exe"
+            )
+        comspec = environment.get("COMSPEC") or environment.get("ComSpec")
+        if comspec:
+            return comspec
+        return shutil.which("pwsh") or shutil.which("powershell") or "cmd.exe"
     return "/bin/zsh" if Path("/bin/zsh").exists() else "/bin/sh"
+
+
+def _shell_metadata(
+    cwd: Path,
+    process_id: str | None,
+    shell_invocation: ShellInvocation,
+    *,
+    exit_code: int | None = None,
+    output_truncated: bool,
+    capture_truncated: bool,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "cwd": str(cwd),
+        "processId": process_id,
+        "shellPath": shell_invocation.shell_path,
+        "shellKind": shell_invocation.runtime_environment.shell_kind,
+        "commandDialect": shell_invocation.runtime_environment.command_dialect,
+        "pathStyle": shell_invocation.runtime_environment.path_style,
+        "osFamily": shell_invocation.runtime_environment.os_family,
+        "outputTruncated": output_truncated,
+        "captureTruncated": capture_truncated,
+    }
+    if exit_code is not None:
+        metadata["exitCode"] = exit_code
+    return metadata
 
 
 def _now_iso() -> str:

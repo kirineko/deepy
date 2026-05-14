@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from deepy.tools.shell_utils import build_disable_extglob_command
 from deepy.tools.shell_utils import build_shell_init_command
+from deepy.tools.shell_utils import detect_runtime_environment
 from deepy.tools.shell_utils import get_shell_kind
 from deepy.tools.shell_utils import is_absolute_file_path
 from deepy.tools.shell_utils import normalize_file_path
@@ -35,6 +36,11 @@ def test_windows_nul_redirects_are_rewritten_for_posix_bash():
 
 def test_shell_kind_detection_supports_windows_bash_paths():
     assert get_shell_kind(r"C:\Program Files\Git\bin\bash.exe") == "bash"
+    assert get_shell_kind(r"C:\Program Files\PowerShell\7\pwsh.exe") == "powershell"
+    assert get_shell_kind(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe") == (
+        "powershell"
+    )
+    assert get_shell_kind(r"C:\Windows\System32\cmd.exe") == "cmd"
     assert get_shell_kind("/bin/zsh") == "zsh"
     assert get_shell_kind("/usr/bin/fish") == "unknown"
     assert build_disable_extglob_command(r"C:\Program Files\Git\bin\bash.exe") == (
@@ -49,6 +55,47 @@ def test_shell_init_command_sources_bash_or_zsh_rc():
     assert build_shell_init_command("/bin/bash") is not None
     assert ".bashrc" in build_shell_init_command("/bin/bash")
     assert build_shell_init_command("/usr/bin/fish") is None
+
+
+def test_runtime_environment_detects_windows_powershell():
+    environment = detect_runtime_environment(
+        env={"PSModulePath": "C:\\Users\\foo\\Documents\\PowerShell\\Modules"},
+        platform_name="win32",
+        os_name="nt",
+    )
+
+    assert environment.os_family == "windows"
+    assert environment.shell_kind == "powershell"
+    assert environment.command_dialect == "powershell"
+    assert environment.path_style == "windows"
+
+
+def test_runtime_environment_detects_posix_bash():
+    environment = detect_runtime_environment(
+        shell_path="/bin/bash",
+        env={},
+        platform_name="linux",
+        os_name="posix",
+    )
+
+    assert environment.os_family == "linux"
+    assert environment.shell_kind == "bash"
+    assert environment.command_dialect == "posix"
+    assert environment.path_style == "posix"
+
+
+def test_runtime_environment_keeps_unknown_shell_explicit():
+    environment = detect_runtime_environment(
+        shell_path="/usr/bin/fish",
+        env={},
+        platform_name="darwin",
+        os_name="posix",
+    )
+
+    assert environment.os_family == "macos"
+    assert environment.shell_kind == "unknown"
+    assert environment.command_dialect == "unknown"
+    assert environment.path_style == "posix"
 
 
 def test_file_path_normalization_converts_git_bash_drive_paths_on_windows():

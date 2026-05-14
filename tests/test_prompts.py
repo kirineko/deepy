@@ -91,10 +91,32 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## WebFetch" in prompt
     assert "## bash" in prompt
     assert "Use `modify` for file changes" in prompt
+    assert "Match shell commands to the runtime context" in prompt
     assert "## modify" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt
     assert "Runtime context here." in prompt
+
+
+def test_system_prompt_includes_powershell_tool_guidance(tmp_path):
+    prompt = build_system_prompt(
+        tmp_path,
+        Settings(),
+        project_rules="",
+        skills=[],
+        runtime_context=(
+            "Runtime environment:\n"
+            "- OS family: windows\n"
+            "- Shell kind: powershell\n"
+            "- Command dialect: powershell\n"
+            "- Path style: windows"
+        ),
+    )
+
+    assert "Prefer PowerShell syntax for `powershell`" in prompt
+    assert "detected runtime shell" in prompt
+    assert "command dialect" in prompt
+    assert "PowerShell-compatible commands and Windows paths" in prompt
 
 
 def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path):
@@ -203,6 +225,11 @@ def test_build_runtime_context_includes_top_level_entries(tmp_path):
     assert "Home directory:" in context
     assert "System:" in context
     assert "Shell:" in context
+    assert "Runtime environment:" in context
+    assert "- OS family:" in context
+    assert "- Shell kind:" in context
+    assert "- Command dialect:" in context
+    assert "- Path style:" in context
     assert "Python:" in context
     assert "Node:" in context
     assert "Tool availability:" in context

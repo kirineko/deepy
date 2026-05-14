@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from deepy.tools.shell_utils import detect_runtime_environment
 
 IGNORED_TOP_LEVEL_ENTRIES = {
     ".git",
@@ -21,11 +22,17 @@ IGNORED_TOP_LEVEL_ENTRIES = {
 
 
 def build_runtime_context(project_root: Path, *, include_git_dirty: bool = True) -> str:
+    runtime_environment = detect_runtime_environment()
     lines = [f"Project root: {project_root}"]
     lines.append(f"Current working directory: {Path.cwd()}")
     lines.append(f"Home directory: {Path.home()}")
     lines.append(f"System: {platform.platform()}")
-    lines.append(f"Shell: {_shell_info()}")
+    lines.append(f"Shell: {runtime_environment.shell_path}")
+    lines.append("Runtime environment:")
+    lines.append(f"- OS family: {runtime_environment.os_family}")
+    lines.append(f"- Shell kind: {runtime_environment.shell_kind}")
+    lines.append(f"- Command dialect: {runtime_environment.command_dialect}")
+    lines.append(f"- Path style: {runtime_environment.path_style}")
     lines.append(f"Python: {_python_info()}")
     node = _command_output(project_root, ["node", "--version"])
     lines.append(f"Node: {node or 'missing'}")
@@ -42,11 +49,6 @@ def build_runtime_context(project_root: Path, *, include_git_dirty: bool = True)
         lines.append("Top-level entries:")
         lines.extend(f"- {entry}" for entry in top_level)
     return "\n".join(lines)
-
-
-def _shell_info() -> str:
-    shell = os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
-    return shell or "unknown"
 
 
 def _python_info() -> str:

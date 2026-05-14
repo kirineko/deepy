@@ -17,6 +17,8 @@ from deepy.tools.builtin import (
     MAX_BASH_OUTPUT_CHARS,
     MAX_LINE_LENGTH,
     MAX_WEB_SEARCH_CALLS_PER_TURN,
+    _build_shell_command,
+    _extract_bash_sentinel,
 )
 
 
@@ -621,7 +623,8 @@ def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     assert target.read_text(encoding="utf-16") == "alpha\ngamma\n"
 
 
-def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path):
+def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -632,7 +635,8 @@ def test_bash_runs_in_session_cwd_and_tracks_simple_cd(tmp_path):
     assert runtime.cwd == subdir
 
 
-def test_bash_tracks_cwd_after_compound_cd_command(tmp_path):
+def test_bash_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -645,7 +649,8 @@ def test_bash_tracks_cwd_after_compound_cd_command(tmp_path):
     assert runtime.cwd == subdir
 
 
-def test_bash_tracks_cwd_even_when_command_fails(tmp_path):
+def test_bash_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -658,7 +663,8 @@ def test_bash_tracks_cwd_even_when_command_fails(tmp_path):
     assert runtime.cwd == subdir
 
 
-def test_bash_uses_shell_compatibility_wrapper(tmp_path):
+def test_bash_uses_shell_compatibility_wrapper(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
     payload = decode(runtime.bash("printf hidden >nul"))
@@ -666,10 +672,64 @@ def test_bash_uses_shell_compatibility_wrapper(tmp_path):
     assert payload["ok"] is True
     assert payload["output"] == ""
     assert payload["metadata"]["shellPath"]
+    assert payload["metadata"]["shellKind"]
+    assert payload["metadata"]["commandDialect"]
+    assert payload["metadata"]["pathStyle"]
+    assert payload["metadata"]["osFamily"]
     assert not (tmp_path / "nul").exists()
 
 
-def test_bash_truncates_large_output(tmp_path):
+def test_build_shell_command_uses_powershell_wrapper_for_powershell():
+    invocation = _build_shell_command(
+        "Set-Location child",
+        "__MARK__",
+        shell_path=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        env={"PSModulePath": r"C:\Users\foo\Documents\PowerShell\Modules"},
+        platform_name="win32",
+        os_name="nt",
+    )
+
+    script = invocation.args[-1]
+    assert invocation.runtime_environment.shell_kind == "powershell"
+    assert invocation.runtime_environment.command_dialect == "powershell"
+    assert invocation.runtime_environment.path_style == "windows"
+    assert invocation.args[:4] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+    assert "Get-Location" in script
+    assert "$global:LASTEXITCODE" in script
+    assert "__MARK__CWD=$__deepy_cwd" in script
+    assert "/c/" not in script
+
+
+def test_build_shell_command_supports_cmd_detection():
+    invocation = _build_shell_command(
+        "cd child",
+        "__MARK__",
+        shell_path=r"C:\Windows\System32\cmd.exe",
+        env={},
+        platform_name="win32",
+        os_name="nt",
+    )
+
+    assert invocation.runtime_environment.shell_kind == "cmd"
+    assert invocation.runtime_environment.command_dialect == "cmd"
+    assert invocation.runtime_environment.path_style == "windows"
+    assert invocation.args[:3] == ["/d", "/s", "/c"]
+    assert "__MARK__CWD=%CD%" in invocation.args[-1]
+
+
+def test_extract_shell_sentinel_parses_cwd_and_exit_code(tmp_path):
+    marker = "__MARK__"
+    stdout = f"visible\n\n{marker}CWD={tmp_path}\n{marker}EXIT=7\n"
+
+    visible, cwd, exit_code = _extract_bash_sentinel(stdout, marker)
+
+    assert visible == "visible\n"
+    assert cwd == tmp_path.resolve()
+    assert exit_code == 7
+
+
+def test_bash_truncates_large_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
     payload = decode(runtime.bash("printf 'x%.0s' {1..31000}"))
@@ -682,6 +742,7 @@ def test_bash_truncates_large_output(tmp_path):
 
 
 def test_bash_caps_captured_output_before_formatting(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.setattr("deepy.tools.builtin.MAX_BASH_CAPTURE_CHARS", 10)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
@@ -693,7 +754,8 @@ def test_bash_caps_captured_output_before_formatting(tmp_path, monkeypatch):
     assert payload["metadata"]["outputTruncated"] is False
 
 
-def test_bash_timeout_tracks_and_clears_process(tmp_path):
+def test_bash_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
     payload = decode(runtime.bash("sleep 1", timeout_ms=20))
@@ -763,6 +825,11 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "WebFetch",
     ]
     assert all(tool.description for tool in tools)
+    bash_tool = tools[0]
+    assert bash_tool.name == "bash"
+    assert "current runtime shell" in bash_tool.description
+    assert "PowerShell" in bash_tool.description
+    assert "persistent bash session" not in bash_tool.description
 
 
 def test_function_tool_schemas_match_legacy_names(tmp_path):
