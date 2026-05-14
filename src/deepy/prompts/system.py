@@ -68,6 +68,6 @@ Loaded skills:
 {loaded_skills_block}
 
 Runtime context:
-Runtime: root={project_root}; model={settings.model.name}; thinking={settings.model.thinking_enabled}; reasoning={settings.model.reasoning_effort}
+Runtime: root={project_root}; model={settings.model.name}; reasoning={settings.model.reasoning_mode}
 {runtime_context_block}
 """

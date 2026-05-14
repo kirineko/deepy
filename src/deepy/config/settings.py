@@ -16,8 +16,33 @@ DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD = 838_861
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 DEFAULT_UI_THEME = "auto"
 REASONING_EFFORTS = {"high", "max"}
+REASONING_MODES = {"none", "high", "max"}
 UI_THEMES = {"auto", "dark", "light"}
 UI_THEME_OPTIONS = (("1", "auto"), ("2", "dark"), ("3", "light"))
+
+
+@dataclass(frozen=True)
+class DeepSeekModelInfo:
+    name: str
+    label: str
+    description: str
+    supports_thinking: bool = True
+    default_reasoning_mode: str = "max"
+
+
+DEEPSEEK_MODEL_CATALOG = (
+    DeepSeekModelInfo(
+        name="deepseek-v4-pro",
+        label="DeepSeek V4 Pro",
+        description="Higher quality for agentic coding and complex reasoning.",
+    ),
+    DeepSeekModelInfo(
+        name="deepseek-v4-flash",
+        label="DeepSeek V4 Flash",
+        description="Lower latency and cost for faster everyday turns.",
+    ),
+)
+SUPPORTED_DEEPSEEK_MODELS = frozenset(model.name for model in DEEPSEEK_MODEL_CATALOG)
 
 
 def default_config_path() -> Path:
@@ -96,7 +121,13 @@ class ModelConfig:
     def thinking_enabled(self) -> bool:
         if self.thinking is not None:
             return self.thinking
-        return self.name.lower() in {"deepseek-v4-pro", "deepseek-v4-flash"}
+        return self.name.lower() in SUPPORTED_DEEPSEEK_MODELS
+
+    @property
+    def reasoning_mode(self) -> str:
+        if not self.thinking_enabled:
+            return "none"
+        return self.reasoning_effort if self.reasoning_effort in REASONING_EFFORTS else "max"
 
 
 @dataclass(frozen=True)
@@ -244,6 +275,14 @@ def is_valid_ui_theme(value: str) -> bool:
     return value in UI_THEMES
 
 
+def is_supported_deepseek_model(value: str) -> bool:
+    return value in SUPPORTED_DEEPSEEK_MODELS
+
+
+def is_valid_reasoning_mode(value: str) -> bool:
+    return value in REASONING_MODES
+
+
 def ui_theme_number(theme: str) -> str:
     for number, value in UI_THEME_OPTIONS:
         if value == theme:
@@ -311,23 +350,59 @@ def write_config(
     os.chmod(path, 0o600)
 
 
+def update_config_model_settings(
+    config_path: Path,
+    *,
+    model: str | None = None,
+    reasoning_mode: str | None = None,
+) -> None:
+    if model is not None and not is_supported_deepseek_model(model):
+        raise ValueError(
+            "Model must be one of: " + ", ".join(model_info.name for model_info in DEEPSEEK_MODEL_CATALOG)
+        )
+    if reasoning_mode is not None and not is_valid_reasoning_mode(reasoning_mode):
+        raise ValueError("Reasoning mode must be one of: none, high, max.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    model_section = raw.get("model")
+    model_map = dict(model_section) if isinstance(model_section, Mapping) else {}
+    if model is not None:
+        model_map["name"] = model
+    if reasoning_mode is not None:
+        if reasoning_mode == "none":
+            model_map["thinking"] = False
+        else:
+            model_map["thinking"] = True
+            model_map["reasoning_effort"] = reasoning_mode
+    raw["model"] = model_map
+    _write_private_toml(path, raw)
+
+
 def update_config_theme(config_path: Path, theme: str) -> None:
     if not is_valid_ui_theme(theme):
         raise ValueError("UI theme must be one of: auto, dark, light.")
     path = config_path.expanduser()
     if path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
-    raw: dict[str, Any]
-    if path.exists():
-        with path.open("rb") as fh:
-            loaded = tomllib.load(fh)
-        raw = dict(loaded)
-    else:
-        raw = {}
+    raw = _read_toml_mapping(path)
     ui = raw.get("ui")
     ui_map = dict(ui) if isinstance(ui, Mapping) else {}
     ui_map["theme"] = theme
     raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def _read_toml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("rb") as fh:
+        loaded = tomllib.load(fh)
+    return dict(loaded)
+
+
+def _write_private_toml(path: Path, raw: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomli_w.dumps(raw), encoding="utf-8")
     os.chmod(path, 0o600)

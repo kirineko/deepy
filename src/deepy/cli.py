@@ -241,6 +241,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         "thinking": {
             "enabled": settings.model.thinking_enabled,
             "reasoning_effort": settings.model.reasoning_effort,
+            "reasoning_mode": settings.model.reasoning_mode,
         },
     }
 
@@ -306,7 +307,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         status = "ok" if item["ok"] else "fail"
         print(f"{status:4} {item['name']}: {item['detail']}")
     thinking = report["thinking"]
-    print(f"info thinking: enabled={thinking['enabled']} effort={thinking['reasoning_effort']}")
+    print(f"info reasoning: mode={thinking['reasoning_mode']}")
     live = report.get("live")
     if isinstance(live, dict):
         if live.get("ok"):

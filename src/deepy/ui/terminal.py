@@ -29,11 +29,15 @@ from rich.text import Text
 
 from deepy import __version__
 from deepy.config import (
+    DEEPSEEK_MODEL_CATALOG,
     Settings,
     UI_THEMES,
+    is_supported_deepseek_model,
+    is_valid_reasoning_mode,
     load_settings,
     ui_theme_from_selection,
     ui_theme_number,
+    update_config_model_settings,
     update_config_theme,
     write_config,
 )
@@ -75,7 +79,9 @@ from deepy.ui.styles import (
     status_style,
 )
 from deepy.ui.theme_picker import THEME_CHOICES, pick_theme
+from deepy.ui.model_picker import REASONING_MODE_CHOICES, pick_model, pick_reasoning_mode
 from deepy.ui.welcome import build_welcome_panel
+from deepy.ui.welcome import format_home_relative_path
 from deepy.usage import TokenUsage, format_usage_line
 from deepy.utils import json as json_utils
 
@@ -188,7 +194,7 @@ def run_interactive(
             )
             if next_session == "__exit__":
                 return 0
-            if slash.name in {"theme", "reset"}:
+            if slash.name in {"theme", "reset", "model"}:
                 settings = load_theme_settings(settings)
                 palette = resolve_ui_palette(settings.ui.theme)
                 prompt_session = create_prompt_session(
@@ -196,7 +202,7 @@ def run_interactive(
                     palette=palette,
                 )
             session_id = next_session
-            if slash.name in {"new", "resume", "reset"}:
+            if slash.name in {"new", "resume", "reset", "model"}:
                 context_status = _format_context_footer(
                     session_id,
                     project_root=root,
@@ -500,6 +506,7 @@ def _handle_slash_command(
         console.print("/skills     List available skills")
         console.print("/skill NAME Show a skill document")
         console.print("/use NAME   Load a skill for subsequent prompts")
+        console.print("/model      Select model and thinking strength")
         console.print("/status     Show project status")
         console.print("/theme      Show or change UI theme")
         console.print("/reset      Delete config and run setup again")
@@ -555,6 +562,15 @@ def _handle_slash_command(
     if command.name == "status":
         console.print(format_status_report(build_status_report(project_root, settings)))
         return current_session_id
+    if command.name == "model":
+        return _handle_model_command(
+            command,
+            console,
+            current_session_id,
+            settings,
+            palette,
+            input_func=input_func,
+        )
     if command.name == "theme":
         return _handle_theme_command(
             command,
@@ -626,6 +642,195 @@ def _handle_theme_command(
     console.print(f"Saved UI theme: {theme}")
     console.print("Restart Deepy to apply the theme everywhere.")
     return current_session_id
+
+
+def _handle_model_command(
+    command: SlashCommand,
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    parts = command.argument.split()
+    if not parts:
+        return _handle_interactive_model_selection(
+            console,
+            current_session_id,
+            settings,
+            palette,
+            input_func=input_func,
+        )
+    action = parts[0].lower()
+    if action == "list" and len(parts) == 1:
+        _print_model_choices(console)
+        return current_session_id
+    if action == "set" and len(parts) in {2, 3}:
+        model = parts[1]
+        if not is_supported_deepseek_model(model):
+            console.print(f"[{palette.error}]Invalid model:[/] {model}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        reasoning_mode = parts[2] if len(parts) == 3 else None
+        if reasoning_mode is not None and not is_valid_reasoning_mode(reasoning_mode):
+            console.print(f"[{palette.error}]Invalid reasoning mode:[/] {reasoning_mode}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        return _save_model_settings(
+            console,
+            current_session_id,
+            settings,
+            palette,
+            model=model,
+            reasoning_mode=reasoning_mode,
+        )
+    if action in {"reasoning", "thinking"} and len(parts) == 2:
+        reasoning_mode = parts[1]
+        if not is_valid_reasoning_mode(reasoning_mode):
+            console.print(f"[{palette.error}]Invalid reasoning mode:[/] {reasoning_mode}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        return _save_model_settings(
+            console,
+            current_session_id,
+            settings,
+            palette,
+            reasoning_mode=reasoning_mode,
+        )
+    _print_model_usage(console, palette)
+    return current_session_id
+
+
+def _handle_interactive_model_selection(
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    console.print(
+        f"Current model: {settings.model.name} · reasoning: {settings.model.reasoning_mode}"
+    )
+    selected_model = _prompt_for_model_selection(
+        settings.model.name,
+        console=console,
+        input_func=input_func,
+    )
+    if selected_model is None:
+        console.print("Model unchanged.")
+        return current_session_id
+    selected_reasoning = _prompt_for_reasoning_mode_selection(
+        settings.model.reasoning_mode,
+        console=console,
+        input_func=input_func,
+    )
+    if selected_reasoning is None:
+        console.print("Model unchanged.")
+        return current_session_id
+    return _save_model_settings(
+        console,
+        current_session_id,
+        settings,
+        palette,
+        model=selected_model,
+        reasoning_mode=selected_reasoning,
+    )
+
+
+def _save_model_settings(
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+    *,
+    model: str | None = None,
+    reasoning_mode: str | None = None,
+) -> str | None:
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot persist model settings: config path is unknown.[/]")
+        return current_session_id
+    try:
+        update_config_model_settings(
+            settings.path,
+            model=model,
+            reasoning_mode=reasoning_mode,
+        )
+    except ValueError as exc:
+        console.print(f"[{palette.error}]{exc}[/]")
+        return current_session_id
+    active_model = model or settings.model.name
+    active_reasoning = reasoning_mode or settings.model.reasoning_mode
+    console.print(f"Saved model: {active_model} · reasoning: {active_reasoning}")
+    return current_session_id
+
+
+def _print_model_choices(console: Console) -> None:
+    console.print("Available models:")
+    for index, model in enumerate(DEEPSEEK_MODEL_CATALOG, 1):
+        console.print(f"{index}. {model.name} - {model.description}")
+    console.print("Reasoning modes:")
+    for index, (value, _label) in enumerate(REASONING_MODE_CHOICES, 1):
+        console.print(f"{index}. {value}")
+
+
+def _print_model_usage(console: Console, palette: UiPalette) -> None:
+    console.print(
+        f"[{palette.error}]Usage:[/] /model | /model list | "
+        "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
+        "/model reasoning none|high|max"
+    )
+
+
+def _prompt_for_model_selection(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    if input_func is None:
+        return pick_model(default)
+    _print_model_choices(console)
+    value = input_func("Model number or name").strip()
+    if not value:
+        return None
+    return _model_from_selection(value)
+
+
+def _prompt_for_reasoning_mode_selection(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    if input_func is None:
+        return pick_reasoning_mode(default)
+    _print_reasoning_choices(console)
+    value = input_func("Thinking strength number or name").strip()
+    if not value:
+        return None
+    return _reasoning_mode_from_selection(value)
+
+
+def _model_from_selection(value: str) -> str | None:
+    normalized = value.strip()
+    by_number = {str(index): model.name for index, model in enumerate(DEEPSEEK_MODEL_CATALOG, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    return normalized if is_supported_deepseek_model(normalized) else None
+
+
+def _reasoning_mode_from_selection(value: str) -> str | None:
+    normalized = value.strip().lower()
+    by_number = {str(index): mode for index, (mode, _label) in enumerate(REASONING_MODE_CHOICES, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    return normalized if is_valid_reasoning_mode(normalized) else None
+
+
+def _print_reasoning_choices(console: Console) -> None:
+    console.print("Thinking strength:")
+    for index, (value, label) in enumerate(REASONING_MODE_CHOICES, 1):
+        console.print(f"{index}. {label}")
 
 
 def _print_theme_choices(console: Console) -> None:
@@ -1038,10 +1243,20 @@ def _format_context_footer(
     if settings is None:
         return ""
 
+    parts = [
+        f"model {settings.model.name}",
+        f"thinking {settings.model.reasoning_mode}",
+    ]
+    if project_root is not None:
+        parts.append(f"cwd {format_home_relative_path(project_root)}")
+    else:
+        parts.append("cwd unknown")
+
     window_tokens = settings.context.window_tokens
     compact_threshold = settings.context.resolved_compact_threshold
     if window_tokens <= 0:
-        return ""
+        parts.append("context unknown")
+        return " · ".join(parts)
 
     used_tokens = _session_active_tokens(project_root, session_id)
     used_text = f"{used_tokens:,}" if used_tokens is not None else "unknown"
@@ -1056,12 +1271,12 @@ def _format_context_footer(
             if used_tokens is not None
             else ""
         )
-        parts = [f"context used {used_text} / {compact_threshold:,} to compact{compact_progress}"]
-        parts.append(f"window {window_tokens:,}")
+        context = f"context {used_text} / {compact_threshold:,} compact{compact_progress}; window {window_tokens:,}"
         if used_tokens is not None and used_tokens >= compact_threshold:
-            parts.append("compact next request")
+            context = f"{context}; compact next"
+        parts.append(context)
     else:
-        parts = [f"context used {used_text} / {window_tokens:,}{used_ratio}"]
+        parts.append(f"context {used_text} / {window_tokens:,}{used_ratio}")
 
     return " · ".join(parts)
 

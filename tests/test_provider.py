@@ -49,6 +49,30 @@ def test_provider_bundle_passes_explicit_reasoning_replay_hook():
     assert bundle.model.should_replay_reasoning_content is should_replay_deepseek_reasoning_content
 
 
+def test_provider_bundle_uses_selected_model_name():
+    settings = Settings(model=ModelConfig(api_key="sk-test", name="deepseek-v4-flash"))
+
+    bundle = build_provider_bundle(settings)
+
+    assert bundle.model.model == "deepseek-v4-flash"
+
+
+def test_model_settings_map_reasoning_modes_to_deepseek_body():
+    disabled = build_model_settings(
+        Settings(model=ModelConfig(api_key="sk-test", thinking=False))
+    ).extra_body
+    high = build_model_settings(
+        Settings(model=ModelConfig(api_key="sk-test", thinking=True, reasoning_effort="high"))
+    ).extra_body
+    max_effort = build_model_settings(
+        Settings(model=ModelConfig(api_key="sk-test", thinking=True, reasoning_effort="max"))
+    ).extra_body
+
+    assert disabled == {"thinking": {"type": "disabled"}}
+    assert high == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+    assert max_effort == {"thinking": {"type": "enabled"}, "reasoning_effort": "max"}
+
+
 @pytest.mark.asyncio
 async def test_deepy_model_sanitizes_replay_before_chat_completion_fetch(monkeypatch):
     from agents import OpenAIChatCompletionsModel

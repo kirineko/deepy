@@ -34,7 +34,8 @@ context state visible while the agent works.
 ## Highlights
 
 - DeepSeek-first model setup with `deepseek-v4-pro`, thinking enabled, and
-  `reasoning_effort=max` by default.
+  `reasoning_effort=max` by default; `/model` can switch between V4 Pro and V4
+  Flash with `none`, `high`, or `max` thinking strength.
 - OpenAI Agents SDK integration through `OpenAIChatCompletionsModel`.
 - Project-aware coding tools for reading files, modifying files, running shell
   commands, and showing readable diffs.
@@ -113,6 +114,8 @@ Deepy only uses TOML configuration. JSON config files are intentionally rejected
 api_key = "sk-..."
 name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
+thinking = true
+reasoning_effort = "max" # high or max when thinking is enabled
 
 [context]
 window_tokens = 1048576
@@ -121,6 +124,11 @@ compact_trigger_ratio = 0.8
 [ui]
 theme = "auto" # auto, dark, or light
 ```
+
+Supported interactive model choices are `deepseek-v4-pro` and
+`deepseek-v4-flash`. In `/model`, thinking strength `none` saves
+`thinking = false`; `high` and `max` save `thinking = true` with the matching
+`reasoning_effort`.
 
 WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it
 with your own SearXNG instance:
@@ -164,6 +172,7 @@ Inside the interactive terminal:
 
 ```text
 /skills   List available skills
+/model    Select model and thinking strength
 /new      Start a fresh conversation
 /resume   Pick a previous session
 /theme    Show or change UI theme

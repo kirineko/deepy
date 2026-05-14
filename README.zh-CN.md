@@ -32,7 +32,8 @@ Deepy 的核心目标是适配 DeepSeek V4 的 thinking 能力、长上下文、
 ## 主要特性
 
 - DeepSeek 优先：默认使用 `deepseek-v4-pro`，启用 thinking，并设置
-  `reasoning_effort=max`。
+  `reasoning_effort=max`；也可以用 `/model` 在 V4 Pro / V4 Flash 之间切换，
+  并选择 `none`、`high`、`max` 三档 thinking 强度。
 - 基于 OpenAI Agents SDK，通过 `OpenAIChatCompletionsModel` 调用 DeepSeek。
 - 面向项目的编程工具：读取文件、修改文件、运行 shell 命令、展示可读 diff。
 - 内置资料查阅能力：支持 WebSearch，也支持给定完整 URL 后直接 WebFetch。
@@ -104,6 +105,8 @@ Deepy 只支持 TOML 配置，不支持 JSON 配置。
 api_key = "sk-..."
 name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
+thinking = true
+reasoning_effort = "max" # thinking 开启时可选 high 或 max
 
 [context]
 window_tokens = 1048576
@@ -112,6 +115,10 @@ compact_trigger_ratio = 0.8
 [ui]
 theme = "auto" # auto, dark, light
 ```
+
+交互式 `/model` 当前支持 `deepseek-v4-pro` 和 `deepseek-v4-flash`。thinking
+强度选择 `none` 会保存为 `thinking = false`；选择 `high` 或 `max` 会保存为
+`thinking = true`，并写入对应的 `reasoning_effort`。
 
 WebSearch 默认使用 Deepy 托管的 SearXNG 搜索服务。你也可以改成自己的
 SearXNG 实例：
@@ -154,6 +161,7 @@ deepy run "summarize this project"
 
 ```text
 /skills   查看可用 skills
+/model    选择模型和 thinking 强度
 /new      开始新会话
 /resume   选择历史会话继续
 /theme    查看或切换 UI 主题

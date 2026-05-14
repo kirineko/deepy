@@ -99,8 +99,7 @@ def build_welcome_settings(
     settings = [
         WelcomeSetting("Version", _format_version_value(current_version, version_update)),
         WelcomeSetting("Model", model),
-        WelcomeSetting("Thinking", "on" if thinking_enabled else "off"),
-        WelcomeSetting("Reasoning", reasoning_effort),
+        WelcomeSetting("Reasoning", reasoning_effort if thinking_enabled else "none"),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
     if theme:

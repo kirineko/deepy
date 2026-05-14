@@ -25,6 +25,7 @@ def test_build_slash_commands_prefixes_skills_before_builtins():
     assert items[0].name == "skill-writer"
     assert [item.name for item in items if item.kind != "skill"] == [
         "skills",
+        "model",
         "new",
         "resume",
         "theme",
@@ -61,6 +62,7 @@ def test_find_exact_slash_command_returns_builtins():
 
     assert find_exact_slash_command(items, "/new").kind == "new"
     assert find_exact_slash_command(items, "/skills").kind == "skills"
+    assert find_exact_slash_command(items, "/model").kind == "model"
     assert find_exact_slash_command(items, "/theme").kind == "theme"
     assert find_exact_slash_command(items, "/reset").kind == "reset"
 

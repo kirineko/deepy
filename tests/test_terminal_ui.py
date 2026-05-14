@@ -8,7 +8,7 @@ import time
 
 from rich.console import Console
 
-from deepy.config import ContextConfig, Settings, UiConfig
+from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.sessions import DeepyJsonlSession, SessionEntry
@@ -17,6 +17,7 @@ import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.terminal import _collect_pending_question_response
+from deepy.ui.terminal import _format_context_footer
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_assistant_output
 from deepy.ui.terminal import _print_stream_event
@@ -495,6 +496,165 @@ def test_status_slash_command_prints_status(tmp_path):
     assert f"Project: {tmp_path}" in console.export_text()
 
 
+def test_model_slash_command_lists_models(tmp_path):
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(SlashCommand("model", "list"), console, tmp_path, "s1")
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Available models:" in rendered
+    assert "deepseek-v4-pro" in rendered
+    assert "deepseek-v4-flash" in rendered
+    assert "Reasoning modes:" in rendered
+    assert "none" in rendered
+    assert "high" in rendered
+    assert "max" in rendered
+
+
+def test_model_slash_command_sets_model_and_reasoning_directly(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("model", "set deepseek-v4-flash high"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(api_key="sk-test")),
+    )
+
+    rendered = console.export_text()
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "Saved model: deepseek-v4-flash · reasoning: high" in rendered
+    assert 'api_key = "sk-test"' in text
+    assert 'name = "deepseek-v4-flash"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "high"' in text
+
+
+def test_model_slash_command_sets_reasoning_none_directly(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("model", "reasoning none"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+    )
+
+    assert next_session == "s1"
+    assert "Saved model: deepseek-v4-pro · reasoning: none" in console.export_text()
+    assert 'thinking = false' in config.read_text(encoding="utf-8")
+
+
+def test_model_slash_command_rejects_invalid_values_without_changing_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("model", "set deepseek-chat medium"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+    )
+
+    assert next_session == "s1"
+    assert "Invalid model:" in console.export_text()
+    assert config.read_text(encoding="utf-8") == '[model]\nname = "deepseek-v4-pro"\n'
+
+
+def test_model_slash_command_uses_numbered_selection(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    console = Console(record=True)
+    answers = iter(["2", "1"])
+
+    next_session = _handle_slash_command(
+        SlashCommand("model"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(api_key="sk-test")),
+        input_func=lambda prompt: next(answers),
+    )
+
+    rendered = console.export_text()
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "Current model: deepseek-v4-pro · reasoning: max" in rendered
+    assert "Available models:" in rendered
+    assert "Thinking strength:" in rendered
+    assert "Saved model: deepseek-v4-flash · reasoning: none" in rendered
+    assert 'name = "deepseek-v4-flash"' in text
+    assert 'thinking = false' in text
+
+
+def test_model_slash_command_cancels_without_saving(tmp_path):
+    config = tmp_path / "config.toml"
+    original = '[model]\nname = "deepseek-v4-pro"\n'
+    config.write_text(original, encoding="utf-8")
+    console = Console(record=True)
+    answers = iter(["2", ""])
+
+    next_session = _handle_slash_command(
+        SlashCommand("model"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+        input_func=lambda prompt: next(answers),
+    )
+
+    assert next_session == "s1"
+    assert "Model unchanged." in console.export_text()
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_model_slash_command_uses_keyboard_pickers_when_no_input_func(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    console = Console(record=True)
+    monkeypatch.setattr(terminal, "pick_model", lambda current: "deepseek-v4-flash")
+    monkeypatch.setattr(terminal, "pick_reasoning_mode", lambda current: "high")
+
+    next_session = _handle_slash_command(
+        SlashCommand("model"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+    )
+
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "Saved model: deepseek-v4-flash · reasoning: high" in console.export_text()
+    assert 'name = "deepseek-v4-flash"' in text
+    assert 'reasoning_effort = "high"' in text
+
+
+def test_help_slash_command_includes_model(tmp_path):
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(SlashCommand("help"), console, tmp_path, "s1")
+
+    assert next_session == "s1"
+    assert "/model" in console.export_text()
+
+
 def test_theme_slash_command_shows_and_updates_theme(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
@@ -735,6 +895,28 @@ def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     assert "session" not in rendered
 
 
+def test_format_context_footer_shows_only_model_reasoning_cwd_and_context(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session._touch_index(active_tokens=200)
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "model deepseek-v4-flash" in toolbar
+    assert "thinking high" in toolbar
+    assert f"cwd {tmp_path}" in toolbar
+    assert "context 200 / 800 compact (25.0%); window 1,000" in toolbar
+    assert "Enter send" not in toolbar
+    assert "Shift+Enter" not in toolbar
+    assert "session" not in toolbar
+
+
 def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
     prompts = iter(["first", "/new", "second", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
@@ -774,9 +956,48 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     ]
     assert "Started a new session." in rendered
     assert "context used" not in rendered
-    assert "context used 0 / 800 to compact (0.0%)" in str(toolbars)
-    assert "context used 200 / 800 to compact (25.0%)" in str(toolbars)
-    assert "context used 50 / 800 to compact (6.2%)" in str(toolbars)
+    assert "Enter send" not in str(toolbars)
+    assert "model deepseek-v4-pro" in str(toolbars)
+    assert "thinking max" in str(toolbars)
+    assert f"cwd {tmp_path}" in str(toolbars)
+    assert "context 0 / 800 compact (0.0%); window 1,000" in str(toolbars)
+    assert "context 200 / 800 compact (25.0%); window 1,000" in str(toolbars)
+    assert "context 50 / 800 compact (6.2%); window 1,000" in str(toolbars)
+
+
+def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n'
+        '\n[ui]\ntheme = "dark"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True, width=160)
+    prompts = iter(["/model set deepseek-v4-flash high", "hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    observed: list[tuple[str, str]] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        settings = kwargs["settings"]
+        observed.append((settings.model.name, settings.model.reasoning_mode))
+        return RunSummary(output=f"answer {prompt}", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+
+    result = terminal.run_interactive(
+        Settings(
+            path=config,
+            model=ModelConfig(api_key="sk-test", name="deepseek-v4-pro"),
+            ui=UiConfig(theme="dark", theme_configured=True),
+        ),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert observed == [("deepseek-v4-flash", "high")]
 
 
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():

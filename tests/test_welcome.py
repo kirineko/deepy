@@ -70,10 +70,22 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
     assert [(item.label, item.value) for item in settings] == [
         ("Version", "0.1.0"),
         ("Model", "deepseek-v4-pro"),
-        ("Thinking", "on"),
         ("Reasoning", "max"),
         ("CWD", "~/project"),
     ]
+
+
+def test_build_welcome_settings_uses_none_when_thinking_is_disabled(tmp_path):
+    settings = build_welcome_settings(
+        model="deepseek-v4-pro",
+        thinking_enabled=False,
+        reasoning_effort="max",
+        project_root=Path("/tmp/home/project"),
+        current_version="0.1.0",
+        home=Path("/tmp/home"),
+    )
+
+    assert ("Reasoning", "none") in [(item.label, item.value) for item in settings]
 
 
 def test_build_welcome_settings_includes_theme_when_available(tmp_path):

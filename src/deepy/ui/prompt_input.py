@@ -21,8 +21,8 @@ from deepy.ui.styles import DARK_PALETTE, UiPalette
 
 DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
 CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
-PROMPT_TOOLBAR_BACKGROUND = "#24283b"
-PROMPT_TOOLBAR_FOREGROUND = "#d7def8"
+PROMPT_TOOLBAR_BACKGROUND = "#161821"
+PROMPT_TOOLBAR_FOREGROUND = "#a6adc8"
 PROMPT_TOOLBAR_HELP = "Enter send · Shift+Enter newline · / commands · Esc interrupt · Ctrl+D twice exit"
 PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
 PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
@@ -122,8 +122,6 @@ def build_prompt_toolbar(context_status: str = "") -> AnyFormattedText:
         return PROMPT_TOOLBAR
     return [
         ("class:toolbar.context", context_status),
-        ("class:toolbar.separator", " · "),
-        ("class:toolbar.help", PROMPT_TOOLBAR_HELP),
     ]
 
 

@@ -6,6 +6,7 @@ from deepy.config import (
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
     load_settings,
     settings_to_toml_dict,
+    update_config_model_settings,
     update_config_theme,
     ui_theme_from_selection,
 )
@@ -33,6 +34,7 @@ compact_trigger_ratio = 0.8
     assert settings.model.name == "deepseek-v4-pro"
     assert settings.model.thinking_enabled is True
     assert settings.model.reasoning_effort == "max"
+    assert settings.model.reasoning_mode == "max"
     assert settings.context.resolved_compact_threshold == 838861
 
 
@@ -43,6 +45,31 @@ def test_deepseek_thinking_default_is_case_insensitive(tmp_path):
     settings = load_settings(config, env={})
 
     assert settings.model.thinking_enabled is True
+    assert settings.model.reasoning_mode == "max"
+
+
+def test_supported_deepseek_model_loads_from_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\nname = "deepseek-v4-flash"\n', encoding="utf-8")
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.name == "deepseek-v4-flash"
+    assert settings.model.thinking_enabled is True
+    assert settings.model.reasoning_mode == "max"
+
+
+def test_existing_thinking_fields_resolve_reasoning_mode(tmp_path):
+    disabled = tmp_path / "disabled.toml"
+    disabled.write_text('[model]\nthinking = false\nreasoning_effort = "high"\n', encoding="utf-8")
+    high = tmp_path / "high.toml"
+    high.write_text('[model]\nthinking = true\nreasoning_effort = "high"\n', encoding="utf-8")
+    max_config = tmp_path / "max.toml"
+    max_config.write_text('[model]\nthinking = true\nreasoning_effort = "max"\n', encoding="utf-8")
+
+    assert load_settings(disabled, env={}).model.reasoning_mode == "none"
+    assert load_settings(high, env={}).model.reasoning_mode == "high"
+    assert load_settings(max_config, env={}).model.reasoning_mode == "max"
 
 
 def test_json_config_is_not_supported(tmp_path):
@@ -161,3 +188,53 @@ def test_update_config_theme_preserves_existing_values_and_permissions(tmp_path)
     assert 'searxng_url = "https://search.example"' in text
     assert '[ui]' in text
     assert 'theme = "light"' in text
+
+
+def test_update_config_model_settings_preserves_existing_values_and_permissions(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        (
+            '[model]\napi_key = "sk-test"\nbase_url = "https://api.deepseek.com"\n\n'
+            '[context]\nwindow_tokens = 1048576\n\n'
+            '[ui]\ntheme = "dark"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    update_config_model_settings(config, model="deepseek-v4-flash", reasoning_mode="high")
+
+    text = config.read_text(encoding="utf-8")
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'api_key = "sk-test"' in text
+    assert 'base_url = "https://api.deepseek.com"' in text
+    assert 'window_tokens = 1048576' in text
+    assert 'theme = "dark"' in text
+    assert 'name = "deepseek-v4-flash"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "high"' in text
+
+
+def test_update_config_model_settings_saves_none_with_existing_fields(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n',
+        encoding="utf-8",
+    )
+
+    update_config_model_settings(config, reasoning_mode="none")
+
+    text = config.read_text(encoding="utf-8")
+    assert 'name = "deepseek-v4-pro"' in text
+    assert 'thinking = false' in text
+
+
+def test_update_config_model_settings_rejects_invalid_values_without_changing_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Model must be one of"):
+        update_config_model_settings(config, model="deepseek-chat")
+    with pytest.raises(ValueError, match="Reasoning mode must be one of"):
+        update_config_model_settings(config, reasoning_mode="medium")
+
+    assert config.read_text(encoding="utf-8") == '[model]\nname = "deepseek-v4-pro"\n'

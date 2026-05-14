@@ -138,16 +138,16 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
     assert session.message == PROMPT_MESSAGE
     assert session.kwargs["placeholder"] == PROMPT_PLACEHOLDER
     assert session.kwargs["bottom_toolbar"] == PROMPT_TOOLBAR
-    assert PROMPT_TOOLBAR_BACKGROUND == "#24283b"
-    assert PROMPT_TOOLBAR_FOREGROUND == "#d7def8"
+    assert PROMPT_TOOLBAR_BACKGROUND == "#161821"
+    assert PROMPT_TOOLBAR_FOREGROUND == "#a6adc8"
 
 
-def test_build_prompt_toolbar_adds_context_status_before_help():
-    toolbar = build_prompt_toolbar("context used 100 / 1,000 (10.0%)")
+def test_build_prompt_toolbar_only_shows_status():
+    status = "model deepseek-v4-pro · thinking max · cwd ~/repo · context 100 / 1,000 (10.0%)"
+    toolbar = build_prompt_toolbar(status)
 
     assert isinstance(toolbar, list)
-    assert toolbar[0] == ("class:toolbar.context", "context used 100 / 1,000 (10.0%)")
-    assert "Enter send" in toolbar[-1][1]
+    assert toolbar == [("class:toolbar.context", status)]
 
 
 def test_build_prompt_key_bindings_registers_escape_interrupt():

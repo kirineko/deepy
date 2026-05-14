@@ -14,6 +14,7 @@ from deepy.skills import discover_skills
 class StatusReport:
     project_root: Path
     model: str
+    reasoning_mode: str
     api_key_configured: bool
     context_window_tokens: int
     compact_threshold_tokens: int
@@ -27,6 +28,7 @@ def build_status_report(project_root: Path, settings: Settings) -> StatusReport:
     return StatusReport(
         project_root=root,
         model=settings.model.name,
+        reasoning_mode=settings.model.reasoning_mode,
         api_key_configured=bool(settings.model.api_key),
         context_window_tokens=settings.context.window_tokens,
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
@@ -41,6 +43,7 @@ def format_status_report(report: StatusReport) -> str:
         [
             f"Project: {report.project_root}",
             f"Model: {report.model}",
+            f"Reasoning: {report.reasoning_mode}",
             f"API key: {'configured' if report.api_key_configured else 'missing'}",
             f"Context: {report.context_window_tokens} tokens",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
@@ -56,6 +59,7 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
     return {
         "project_root": str(report.project_root),
         "model": report.model,
+        "reasoning_mode": report.reasoning_mode,
         "api_key_configured": report.api_key_configured,
         "context_window_tokens": report.context_window_tokens,
         "compact_threshold_tokens": report.compact_threshold_tokens,

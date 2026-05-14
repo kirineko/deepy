@@ -221,6 +221,7 @@ def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
     assert code == 0
     out = capsys.readouterr().out
     assert f"Project: {tmp_path}" in out
+    assert "Reasoning: max" in out
     assert "API key: configured" in out
 
 
@@ -234,6 +235,7 @@ def test_status_command_prints_json(tmp_path, capsys, monkeypatch):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["project_root"] == str(tmp_path)
+    assert payload["reasoning_mode"] == "max"
     assert payload["api_key_configured"] is True
 
 
