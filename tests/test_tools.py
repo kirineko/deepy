@@ -578,6 +578,30 @@ def test_write_preserves_existing_utf16le_encoding(tmp_path):
     assert target.read_text(encoding="utf-16") == "one\ntwo\n"
 
 
+def test_read_decodes_gbk_compatible_text(tmp_path):
+    target = tmp_path / "gbk.txt"
+    target.write_bytes("城市=北京\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("gbk.txt"))
+
+    assert payload["ok"] is True
+    assert "1: 城市=北京" in payload["output"]
+    assert payload["metadata"]["encoding"] == "gb18030"
+
+
+def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
+    target = tmp_path / "utf8.txt"
+    target.write_text("城市=北京\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.read("utf8.txt"))
+
+    assert payload["ok"] is True
+    assert "1: 城市=北京" in payload["output"]
+    assert payload["metadata"]["encoding"] == "utf8"
+
+
 def test_write_repairs_json_object_content_for_json_files(tmp_path):
     target = tmp_path / "package.json"
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -628,6 +652,19 @@ def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     assert payload["metadata"]["encoding"] == "utf16le"
     assert target.read_bytes().startswith(b"\xff\xfe")
     assert target.read_text(encoding="utf-16") == "alpha\ngamma\n"
+
+
+def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path):
+    target = tmp_path / "gbk.txt"
+    target.write_bytes("城市=北京\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("gbk.txt"))
+    payload = decode(runtime.modify("gbk.txt", old="北京", new="上海"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "gb18030"
+    assert target.read_bytes().decode("gb18030") == "城市=上海\n"
 
 
 def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
@@ -714,8 +751,50 @@ def test_build_shell_command_uses_powershell_wrapper_for_powershell():
     assert invocation.args[:4] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
     assert "Get-Location" in script
     assert "$global:LASTEXITCODE" in script
+    assert "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)" in script
+    assert "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)" in script
     assert "__MARK__CWD=$__deepy_cwd" in script
     assert "/c/" not in script
+    assert invocation.env is not None
+    assert invocation.env["PYTHONUTF8"] == "1"
+    assert invocation.env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_build_shell_command_preserves_explicit_python_encoding_env_for_windows():
+    invocation = _build_shell_command(
+        "python script.py",
+        "__MARK__",
+        shell_path=r"C:\Program Files\PowerShell\7\pwsh.exe",
+        env={
+            "PSModulePath": r"C:\Users\foo\Documents\PowerShell\Modules",
+            "PYTHONUTF8": "0",
+            "PYTHONIOENCODING": "gbk",
+        },
+        platform_name="win32",
+        os_name="nt",
+    )
+
+    assert invocation.env is not None
+    assert invocation.env["PYTHONUTF8"] == "0"
+    assert invocation.env["PYTHONIOENCODING"] == "gbk"
+
+
+def test_build_shell_command_does_not_apply_windows_encoding_setup_to_posix():
+    invocation = _build_shell_command(
+        "printf ok",
+        "__MARK__",
+        shell_path="/bin/bash",
+        env={},
+        platform_name="linux",
+        os_name="posix",
+    )
+
+    script = invocation.args[-1]
+    assert invocation.runtime_environment.command_dialect == "posix"
+    assert "OutputEncoding" not in script
+    assert invocation.env == {}
+    assert "PYTHONUTF8" not in invocation.env
+    assert "PYTHONIOENCODING" not in invocation.env
 
 
 def test_build_shell_command_supports_cmd_detection():

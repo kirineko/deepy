@@ -208,6 +208,7 @@ class ShellInvocation:
     shell_path: str
     args: list[str]
     runtime_environment: RuntimeEnvironment
+    env: dict[str, str] | None = None
 
 
 def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[MatchOccurrence]:
@@ -1399,6 +1400,7 @@ class ToolRuntime:
                 process = subprocess.Popen(
                     [shell_invocation.shell_path, *shell_invocation.args],
                     cwd=self.cwd,
+                    env=shell_invocation.env,
                     text=True,
                     stdout=stdout_file,
                     stderr=stderr_file,
@@ -1750,8 +1752,7 @@ def _read_text_preserving_newlines(path: Path) -> str:
 def _read_text_metadata(path: Path) -> TextFileMetadata:
     data = path.read_bytes()
     encoding = _detect_text_encoding(data)
-    python_encoding = "utf-16" if encoding == "utf16le" else "utf-8"
-    text = data.decode(python_encoding, errors="replace")
+    text = data.decode(_python_text_encoding(encoding), errors="replace")
     return TextFileMetadata(
         content=text,
         encoding=encoding,
@@ -1762,12 +1763,32 @@ def _read_text_metadata(path: Path) -> TextFileMetadata:
 def _detect_text_encoding(data: bytes) -> str:
     if len(data) >= 2 and data[0] == 0xFF and data[1] == 0xFE:
         return "utf16le"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "utf8-sig"
+    try:
+        data.decode("utf-8", errors="strict")
+        return "utf8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        data.decode("gb18030", errors="strict")
+        return "gb18030"
+    except UnicodeDecodeError:
+        return "utf8"
+
+
+def _python_text_encoding(encoding: str) -> str:
+    if encoding == "utf16le":
+        return "utf-16"
+    if encoding == "utf8-sig":
+        return "utf-8-sig"
+    if encoding == "gb18030":
+        return "gb18030"
     return "utf8"
 
 
 def _write_text_with_encoding(path: Path, content: str, encoding: str) -> None:
-    python_encoding = "utf-16" if encoding == "utf16le" else "utf-8"
-    path.write_text(content, encoding=python_encoding)
+    path.write_text(content, encoding=_python_text_encoding(encoding))
 
 
 def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, object], str | None]:
@@ -2034,23 +2055,39 @@ def _build_shell_command(
         platform_name=platform_name,
         os_name=os_name,
     )
+    process_env = _build_shell_process_env(runtime_environment, env)
     if runtime_environment.command_dialect == "powershell":
         return ShellInvocation(
             shell_path=resolved_shell,
             args=_build_powershell_args(command, marker),
             runtime_environment=runtime_environment,
+            env=process_env,
         )
     if runtime_environment.command_dialect == "cmd":
         return ShellInvocation(
             shell_path=resolved_shell,
             args=_build_cmd_args(command, marker),
             runtime_environment=runtime_environment,
+            env=process_env,
         )
     return ShellInvocation(
         shell_path=resolved_shell,
         args=_build_posix_shell_args(command, marker, resolved_shell),
         runtime_environment=runtime_environment,
+        env=process_env,
     )
+
+
+def _build_shell_process_env(
+    runtime_environment: RuntimeEnvironment,
+    env: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    if runtime_environment.os_family != "windows":
+        return dict(env) if env is not None else None
+    process_env = dict(os.environ if env is None else env)
+    process_env.setdefault("PYTHONUTF8", "1")
+    process_env.setdefault("PYTHONIOENCODING", "utf-8")
+    return process_env
 
 
 def _build_posix_shell_args(command: str, marker: str, shell_path: str) -> list[str]:
@@ -2073,6 +2110,8 @@ def _build_posix_shell_args(command: str, marker: str, shell_path: str) -> list[
 def _build_powershell_args(command: str, marker: str) -> list[str]:
     script = "\n".join(
         [
+            "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
             "$global:LASTEXITCODE = $null",
             "try {",
             command,

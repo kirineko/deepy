@@ -20,6 +20,7 @@ from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
 from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
+from deepy.ui.prompt_input import install_windows_shift_enter_key_sequence_override
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import prompt_for_input
@@ -251,6 +252,46 @@ def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
     parser.flush()
 
     assert keys == [("Keys.Escape", SHIFT_ENTER_SEQUENCES[0]), ("Keys.ControlM", "")]
+
+
+def test_windows_shift_enter_console_input_maps_to_escape_enter():
+    from prompt_toolkit.key_binding.key_processor import KeyPress
+    from prompt_toolkit.keys import Keys
+
+    class FakeConsoleInputReader:
+        SHIFT_PRESSED = 0x0010
+
+        def _event_to_key_presses(self, event):
+            return [KeyPress(Keys.ControlM, "\r")]
+
+    class Event:
+        def __init__(self, control_key_state: int):
+            self.ControlKeyState = control_key_state
+
+    assert install_windows_shift_enter_key_sequence_override(
+        platform_name="win32",
+        console_input_reader_cls=FakeConsoleInputReader,
+    )
+    assert install_windows_shift_enter_key_sequence_override(
+        platform_name="win32",
+        console_input_reader_cls=FakeConsoleInputReader,
+    )
+
+    shifted = FakeConsoleInputReader()._event_to_key_presses(Event(0x0010))
+    plain = FakeConsoleInputReader()._event_to_key_presses(Event(0))
+
+    assert [key.key for key in shifted] == [Keys.Escape, Keys.ControlM]
+    assert [key.key for key in plain] == [Keys.ControlM]
+
+
+def test_windows_shift_enter_patch_is_noop_on_posix_platforms():
+    class FakeConsoleInputReader:
+        pass
+
+    assert not install_windows_shift_enter_key_sequence_override(
+        platform_name="darwin",
+        console_input_reader_cls=FakeConsoleInputReader,
+    )
 
 
 def test_text_width_counts_cjk_and_control_characters():

@@ -210,5 +210,5 @@ assets live outside the package directory and are not included in the wheel.
 
 ## Release Status
 
-Deepy `0.1.7` is released through GitHub and PyPI. Standalone binaries and npm
+Deepy `0.1.8` is released through GitHub and PyPI. Standalone binaries and npm
 wrappers can be added later, but the primary distribution is the Python CLI.

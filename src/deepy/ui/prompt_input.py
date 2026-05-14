@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Callable
 from unicodedata import normalize
 
@@ -32,6 +33,7 @@ SHIFT_ENTER_SEQUENCES = (
     "\x1b[27;2;13~",  # xterm modified-key format.
     "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
 )
+_WINDOWS_SHIFT_ENTER_PATCH_ATTR = "_deepy_shift_enter_patched"
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,60 @@ def install_shift_enter_key_sequence_overrides() -> None:
     prefix_cache = getattr(vt100_parser, "_IS_PREFIX_OF_LONGER_MATCH_CACHE", None)
     if hasattr(prefix_cache, "clear"):
         prefix_cache.clear()
+    install_windows_shift_enter_key_sequence_override()
+
+
+def install_windows_shift_enter_key_sequence_override(
+    *,
+    platform_name: str | None = None,
+    console_input_reader_cls: type | None = None,
+) -> bool:
+    resolved_platform = platform_name or sys.platform
+    if not resolved_platform.startswith("win"):
+        return False
+    if console_input_reader_cls is None:
+        try:
+            from prompt_toolkit.input import win32
+        except (AssertionError, ImportError):
+            return False
+        console_input_reader_cls = win32.ConsoleInputReader
+    if getattr(console_input_reader_cls, _WINDOWS_SHIFT_ENTER_PATCH_ATTR, False):
+        return True
+
+    from prompt_toolkit.key_binding.key_processor import KeyPress
+
+    original_handler = console_input_reader_cls._event_to_key_presses
+    shift_pressed = getattr(console_input_reader_cls, "SHIFT_PRESSED", 0x0010)
+
+    def patched_event_to_key_presses(self, ev):
+        key_presses = original_handler(self, ev)
+        if _is_windows_shift_enter_key_press(ev, key_presses, shift_pressed=shift_pressed):
+            return [KeyPress(Keys.Escape, ""), key_presses[0]]
+        return key_presses
+
+    setattr(
+        console_input_reader_cls,
+        "_deepy_original_event_to_key_presses",
+        original_handler,
+    )
+    console_input_reader_cls._event_to_key_presses = patched_event_to_key_presses
+    setattr(console_input_reader_cls, _WINDOWS_SHIFT_ENTER_PATCH_ATTR, True)
+    return True
+
+
+def _is_windows_shift_enter_key_press(
+    ev,
+    key_presses: list,
+    *,
+    shift_pressed: int,
+) -> bool:
+    if not key_presses or len(key_presses) != 1:
+        return False
+    control_key_state = getattr(ev, "ControlKeyState", 0)
+    if not control_key_state & shift_pressed:
+        return False
+    key = getattr(key_presses[0], "key", None)
+    return key in {Keys.ControlM, Keys.ControlJ, Keys.Enter}
 
 
 def prompt_for_input(
