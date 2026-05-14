@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import sys
 
 from deepy.config import Settings
 from deepy.config.settings import (
@@ -24,6 +26,10 @@ from deepy.tools.builtin import (
 
 def decode(payload: str) -> dict:
     return json.loads(payload)
+
+
+def repeat_x_command(count: int) -> str:
+    return f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * {count})\""
 
 
 def test_tool_result_shape_is_stable():
@@ -743,7 +749,7 @@ def test_shell_truncates_large_output(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.shell("printf 'x%.0s' {1..31000}"))
+    payload = decode(runtime.shell(repeat_x_command(31_000)))
 
     assert payload["ok"] is True
     assert len(payload["output"]) > MAX_BASH_OUTPUT_CHARS
@@ -757,7 +763,7 @@ def test_shell_caps_captured_output_before_formatting(tmp_path, monkeypatch):
     monkeypatch.setattr("deepy.tools.builtin.MAX_BASH_CAPTURE_CHARS", 10)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.shell("printf 'x%.0s' {1..25}"))
+    payload = decode(runtime.shell(repeat_x_command(25)))
 
     assert payload["ok"] is True
     assert payload["output"] == "x" * 10
