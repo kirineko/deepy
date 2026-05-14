@@ -10,11 +10,8 @@ from rich.text import Text
 
 from deepy.utils import json as json_utils
 from deepy.ui.styles import (
-    STYLE_ASSISTANT,
-    STYLE_MUTED,
-    STYLE_SYSTEM,
-    STYLE_TOOL,
-    STYLE_USER,
+    DARK_PALETTE,
+    UiPalette,
     status_style,
 )
 
@@ -23,13 +20,6 @@ MAX_SUMMARY_CHARS = 160
 MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
-STYLE_DIFF_ADDED = "#e5e7eb on #14532d"
-STYLE_DIFF_ADDED_GUTTER = "#cbd5e1 on #14532d"
-STYLE_DIFF_REMOVED = "#e5e7eb on #7f1d1d"
-STYLE_DIFF_REMOVED_GUTTER = "#cbd5e1 on #7f1d1d"
-STYLE_WRITE_PREVIEW_GUTTER = "#94a3b8 on #1f2937"
-STYLE_WRITE_PREVIEW_CONTENT = "#d7def8 on #1f2937"
-STYLE_WRITE_PREVIEW_REMOVED = "#fecaca on #7f1d1d"
 ROLE_TITLES = {
     "user": "You",
     "assistant": "Deepy",
@@ -151,7 +141,13 @@ def tool_diff_preview_lines(output: str) -> list[DiffPreviewLine]:
     return parse_diff_preview(diff) if diff else []
 
 
-def render_tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> Group | None:
+def render_tool_diff_preview(
+    output: str,
+    *,
+    max_lines: int = MAX_DIFF_LINES,
+    palette: UiPalette | None = None,
+) -> Group | None:
+    palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
     raw_diff = _tool_diff_text(view)
     if not raw_diff:
@@ -164,12 +160,12 @@ def render_tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) ->
         return None
     if view.name.lower() == "write":
         return Group(
-            render_diff_preview_header(preview, label="Wrote"),
-            *(render_write_preview_line(line) for line in preview.lines),
+            render_diff_preview_header(preview, label="Wrote", palette=palette),
+            *(render_write_preview_line(line, palette=palette) for line in preview.lines),
         )
     return Group(
-        render_diff_preview_header(preview, label="Edited"),
-        *(render_diff_preview_line(line) for line in preview.lines),
+        render_diff_preview_header(preview, label="Edited", palette=palette),
+        *(render_diff_preview_line(line, palette=palette) for line in preview.lines),
     )
 
 
@@ -183,41 +179,49 @@ def parse_diff_preview_view(diff_preview: str, *, path: str | None = None) -> Di
     )
 
 
-def render_diff_preview_header(preview: DiffPreview, *, label: str) -> Text:
+def render_diff_preview_header(
+    preview: DiffPreview,
+    *,
+    label: str,
+    palette: UiPalette | None = None,
+) -> Text:
+    palette = palette or DARK_PALETTE
     if preview.path:
         label = f"{label} {preview.path}"
     label = f"{label} (+{preview.added} -{preview.removed})"
-    return Text(f"• {label}", style="bold bright_blue")
+    return Text(f"• {label}", style=f"bold {palette.info}")
 
 
-def render_diff_preview_line(line: DiffPreviewLine) -> Text:
+def render_diff_preview_line(line: DiffPreviewLine, *, palette: UiPalette | None = None) -> Text:
+    palette = palette or DARK_PALETTE
     content = line.content if line.content else " "
     old_lineno = _line_number_text(line.old_lineno)
     new_lineno = _line_number_text(line.new_lineno)
     if line.kind == "added":
         return Text.assemble(
-            (f"{old_lineno} {new_lineno} + ", STYLE_DIFF_ADDED_GUTTER),
-            (content, STYLE_DIFF_ADDED),
+            (f"{old_lineno} {new_lineno} + ", palette.diff_added_gutter),
+            (content, palette.diff_added),
         )
     if line.kind == "removed":
         return Text.assemble(
-            (f"{old_lineno} {new_lineno} - ", STYLE_DIFF_REMOVED_GUTTER),
-            (content, STYLE_DIFF_REMOVED),
+            (f"{old_lineno} {new_lineno} - ", palette.diff_removed_gutter),
+            (content, palette.diff_removed),
         )
     return Text.assemble(
-        (f"{old_lineno} {new_lineno}   ", STYLE_MUTED),
-        (content, STYLE_MUTED),
+        (f"{old_lineno} {new_lineno}   ", palette.diff_context),
+        (content, palette.diff_context),
     )
 
 
-def render_write_preview_line(line: DiffPreviewLine) -> Text:
+def render_write_preview_line(line: DiffPreviewLine, *, palette: UiPalette | None = None) -> Text:
+    palette = palette or DARK_PALETTE
     content = line.content if line.content else " "
     lineno = line.new_lineno if line.new_lineno is not None else line.old_lineno
     marker = "-" if line.kind == "removed" else " "
-    gutter_style = (
-        STYLE_DIFF_REMOVED_GUTTER if line.kind == "removed" else STYLE_WRITE_PREVIEW_GUTTER
+    gutter_style = palette.diff_removed_gutter if line.kind == "removed" else palette.write_preview_gutter
+    content_style = (
+        palette.write_preview_removed if line.kind == "removed" else palette.write_preview_content
     )
-    content_style = STYLE_WRITE_PREVIEW_REMOVED if line.kind == "removed" else STYLE_WRITE_PREVIEW_CONTENT
     return Text.assemble(
         (f"{_line_number_text(lineno)} {marker} ", gutter_style),
         (content, content_style),
@@ -338,10 +342,11 @@ def is_invisible_execution(content: str) -> bool:
     return isinstance(parsed, dict) and parsed.get("name") == "bash" and parsed.get("ok") is not True
 
 
-def render_tool_output(output: str) -> Group:
+def render_tool_output(output: str, *, palette: UiPalette | None = None) -> Group:
+    palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
-    parts: list[Any] = [Text(view.summary, style=status_style(view.ok))]
-    diff = render_tool_diff_preview(output)
+    parts: list[Any] = [Text(view.summary, style=status_style(view.ok, palette))]
+    diff = render_tool_diff_preview(output, palette=palette)
     if diff:
         parts.append(diff)
     return Group(*parts)
@@ -351,24 +356,26 @@ def render_message(
     message: dict[str, Any],
     *,
     project_root: str | None = None,
+    palette: UiPalette | None = None,
 ) -> Any:
+    palette = palette or DARK_PALETTE
     role = _string_or_default(message.get("role"), "message")
     content = _message_content_text(message.get("content"))
     if role == "tool":
-        return render_tool_output(content)
+        return render_tool_output(content, palette=palette)
 
     title = ROLE_TITLES.get(role, role.title())
     if role == "assistant":
-        return Panel(Text(content), title=title, border_style=STYLE_ASSISTANT, expand=False)
+        return Panel(Text(content), title=title, border_style=palette.assistant, expand=False)
     if role == "user":
-        return Panel(Text(content), title=title, border_style=STYLE_USER, expand=False)
+        return Panel(Text(content), title=title, border_style=palette.user, expand=False)
     if role == "system":
         label = _system_message_label(content)
-        return Panel(Text(content), title=label, border_style=STYLE_SYSTEM, expand=False)
+        return Panel(Text(content), title=label, border_style=palette.system, expand=False)
     params_snippet = build_tool_params_snippet(message.get("function"), project_root=project_root)
     if params_snippet:
-        return Panel(Text(params_snippet), title=title, border_style=STYLE_TOOL, expand=False)
-    return Panel(Text(content), title=title, border_style="dim", expand=False)
+        return Panel(Text(params_snippet), title=title, border_style=palette.tool, expand=False)
+    return Panel(Text(content), title=title, border_style=palette.muted, expand=False)
 
 
 def _tool_diff_text(view: ToolOutputView) -> str | None:

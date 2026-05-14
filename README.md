@@ -43,8 +43,8 @@ context state visible while the agent works.
 - Session history, `/resume`, `/new`, automatic context tracking, and compacting
   for long project work.
 - TOML-only private configuration at `~/.deepy/config.toml`.
-- Terminal UI with Markdown rendering, DeepSeek thinking display, per-turn usage,
-  context window status, and version update checks.
+- Theme-aware terminal UI with Markdown rendering, DeepSeek thinking display,
+  per-turn usage, context window status, and version update checks.
 
 ## See It Work
 
@@ -109,11 +109,17 @@ Deepy only uses TOML configuration. JSON config files are intentionally rejected
 
 ```toml
 # ~/.deepy/config.toml
+[model]
 api_key = "sk-..."
-model = "deepseek-v4-pro"
+name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
-context_window_tokens = 1048576
-compact_threshold = 0.8
+
+[context]
+window_tokens = 1048576
+compact_trigger_ratio = 0.8
+
+[ui]
+theme = "auto" # auto, dark, or light
 ```
 
 WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it
@@ -130,11 +136,21 @@ You can also initialize config non-interactively:
 deepy config init --api-key sk-... --model deepseek-v4-pro
 ```
 
+If your terminal uses a light background and parts of the UI look low contrast,
+set the UI theme explicitly:
+
+```bash
+deepy config theme light
+```
+
 ## Common Commands
 
 ```bash
 deepy --version
 deepy config setup
+deepy config reset
+deepy config theme
+deepy config theme light
 deepy doctor
 deepy doctor --live --json
 deepy status
@@ -150,6 +166,8 @@ Inside the interactive terminal:
 /skills   List available skills
 /new      Start a fresh conversation
 /resume   Pick a previous session
+/theme    Show or change UI theme
+/reset    Delete config and run setup again
 /         Open the command menu
 Esc       Interrupt the current model turn
 Ctrl+D    Press twice to quit
@@ -180,6 +198,6 @@ assets live outside the package directory and are not included in the wheel.
 
 ## Release Status
 
-Deepy is preparing its first public `0.1.4` release. The current release path is
+Deepy is preparing its first public `0.1.5` release. The current release path is
 GitHub + PyPI. Standalone binaries and npm wrappers can be added later, but the
 primary distribution is the Python CLI.

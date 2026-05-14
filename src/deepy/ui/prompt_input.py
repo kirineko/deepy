@@ -16,6 +16,7 @@ from prompt_toolkit.styles import Style
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.slash_commands import SlashCommandItem
+from deepy.ui.styles import DARK_PALETTE, UiPalette
 
 
 DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
@@ -26,17 +27,7 @@ PROMPT_TOOLBAR_HELP = "Enter send · Shift+Enter newline · / commands · Esc in
 PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
 PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
 PROMPT_TOOLBAR: AnyFormattedText = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
-PROMPT_STYLE = Style.from_dict(
-    {
-        "prompt": "ansicyan bold",
-        "placeholder": "#8a90aa",
-        "toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
-        "toolbar.context": f"bg:{PROMPT_TOOLBAR_BACKGROUND} #8bd5ca bold",
-        "toolbar.separator": f"bg:{PROMPT_TOOLBAR_BACKGROUND} #6c7086",
-        "toolbar.help": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
-        "bottom-toolbar": f"bg:{PROMPT_TOOLBAR_BACKGROUND} {PROMPT_TOOLBAR_FOREGROUND}",
-    }
-)
+PROMPT_STYLE = None
 SHIFT_ENTER_SEQUENCES = (
     "\x1b[27;2;13~",  # xterm modified-key format.
     "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
@@ -54,6 +45,7 @@ def create_prompt_session(
     slash_commands: list[SlashCommandItem] | None = None,
     history_path: Path | None = None,
     on_interrupt: Callable[[], None] | None = None,
+    palette: UiPalette | None = None,
 ) -> PromptSession[str]:
     install_shift_enter_key_sequence_overrides()
     path = history_path or DEFAULT_PROMPT_HISTORY
@@ -66,7 +58,7 @@ def create_prompt_session(
         complete_while_typing=True,
         multiline=True,
         key_bindings=build_prompt_key_bindings(on_interrupt=on_interrupt),
-        style=PROMPT_STYLE,
+        style=prompt_style(palette),
     )
 
 
@@ -133,6 +125,24 @@ def build_prompt_toolbar(context_status: str = "") -> AnyFormattedText:
         ("class:toolbar.separator", " · "),
         ("class:toolbar.help", PROMPT_TOOLBAR_HELP),
     ]
+
+
+def prompt_style(palette: UiPalette | None = None) -> Style:
+    palette = palette or DARK_PALETTE
+    return Style.from_dict(
+        {
+            "prompt": palette.prompt,
+            "placeholder": palette.placeholder,
+            "toolbar": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
+            "toolbar.context": f"bg:{palette.toolbar_background} {palette.toolbar_context}",
+            "toolbar.separator": f"bg:{palette.toolbar_background} {palette.toolbar_separator}",
+            "toolbar.help": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
+            "bottom-toolbar": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
+        }
+    )
+
+
+PROMPT_STYLE = prompt_style()
 
 
 def format_selected_skills_status(skills: list[SkillInfo]) -> str:

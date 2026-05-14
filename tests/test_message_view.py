@@ -20,6 +20,7 @@ from deepy.ui.message_view import render_tool_diff_preview
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
 from deepy.ui.message_view import tool_diff_preview_lines
+from deepy.ui.styles import LIGHT_PALETTE
 
 
 def test_format_tool_output_summary_uses_path_detail():
@@ -190,6 +191,20 @@ def test_render_diff_preview_line_uses_background_for_changes():
     assert "#14532d" in str(added.spans)
 
 
+def test_render_diff_preview_line_uses_light_theme_contrast():
+    removed = render_diff_preview_line(
+        DiffPreviewLine(marker="-", content="old", kind="removed", old_lineno=12),
+        palette=LIGHT_PALETTE,
+    )
+    added = render_diff_preview_line(
+        DiffPreviewLine(marker="+", content="new", kind="added", new_lineno=13),
+        palette=LIGHT_PALETTE,
+    )
+
+    assert "#fee2e2" in str(removed.spans)
+    assert "#dcfce7" in str(added.spans)
+
+
 def test_render_write_preview_line_has_no_background_for_content():
     output = json.dumps(
         {
@@ -211,6 +226,27 @@ def test_render_write_preview_line_has_no_background_for_content():
     assert "Wrote file (+1 -0)" in lines[0].plain
     assert lines[1].plain == "   1   let x = 1;"
     assert "#1f2937" in str(lines[1].spans)
+
+
+def test_render_write_preview_line_uses_light_theme_background():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "file",
+                "diff": "--- /dev/null\n+++ b/file\n@@ -0,0 +1,1 @@\n+let x = 1;\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    rendered = render_tool_diff_preview(output, palette=LIGHT_PALETTE)
+    assert rendered is not None
+    lines = list(rendered.renderables)
+
+    assert "#f8fafc" in str(lines[1].spans)
 
 
 def test_render_write_preview_does_not_truncate_large_writes():

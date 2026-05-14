@@ -8,7 +8,7 @@ import time
 
 from rich.console import Console
 
-from deepy.config import ContextConfig, Settings
+from deepy.config import ContextConfig, Settings, UiConfig
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.sessions import DeepyJsonlSession, SessionEntry
@@ -495,6 +495,133 @@ def test_status_slash_command_prints_status(tmp_path):
     assert f"Project: {tmp_path}" in console.export_text()
 
 
+def test_theme_slash_command_shows_and_updates_theme(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+
+    shown_session = _handle_slash_command(
+        SlashCommand("theme"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+        input_func=lambda prompt: "3",
+    )
+    updated_session = _handle_slash_command(
+        SlashCommand("theme", "light"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert shown_session == "s1"
+    assert updated_session == "s1"
+    assert "Current theme: dark" in rendered
+    assert "saved:" not in rendered
+    assert "resolved:" not in rendered
+    assert "Available themes:" in rendered
+    assert "Saved UI theme: light" in rendered
+    assert "Restart Deepy to apply the theme everywhere." in rendered
+    assert 'theme = "light"' in config.read_text(encoding="utf-8")
+
+
+def test_theme_slash_command_uses_keyboard_picker_when_no_input_func(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "light"\n', encoding="utf-8")
+    console = Console(record=True)
+    monkeypatch.setattr(terminal, "pick_theme", lambda current: "dark")
+
+    next_session = _handle_slash_command(
+        SlashCommand("theme"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="light", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Current theme: light" in rendered
+    assert "Saved UI theme: dark" in rendered
+    assert 'theme = "dark"' in config.read_text(encoding="utf-8")
+
+
+def test_theme_slash_command_keeps_theme_when_selection_is_empty(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("theme"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+        input_func=lambda prompt: "",
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Available themes:" in rendered
+    assert "Theme unchanged." in rendered
+    assert config.read_text(encoding="utf-8") == '[ui]\ntheme = "dark"\n'
+
+
+def test_theme_slash_command_rejects_invalid_value(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("theme", "solarized"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    assert next_session == "s1"
+    assert "Usage:" in console.export_text()
+    assert config.read_text(encoding="utf-8") == '[ui]\ntheme = "dark"\n'
+
+
+def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+    answers = iter(["sk-reset", "deepseek-v4-flash", "https://api.deepseek.com", "3"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Removed" in rendered
+    assert "config.toml" in rendered
+    assert "Starting Deepy configuration setup..." in rendered
+    assert "https://platform.deepseek.com/api_keys" in rendered
+    assert config.stat().st_mode & 0o777 == 0o600
+    text = config.read_text(encoding="utf-8")
+    assert "old-key" not in text
+    assert 'api_key = "sk-reset"' in text
+    assert 'name = "deepseek-v4-flash"' in text
+    assert 'theme = "light"' in text
+
+
 def test_exit_slash_command_prints_exit_summary(tmp_path):
     console = Console(record=True, width=200)
 
@@ -724,6 +851,75 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     rendered = console.export_text()
     assert result == 0
     assert "Press Ctrl+D again to exit." in rendered
+
+
+def test_run_interactive_prompts_for_missing_theme_before_welcome(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    console = Console(record=True, width=160)
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="auto": "light")
+
+    result = terminal.run_interactive(
+        Settings(path=config, ui=UiConfig(theme="auto", theme_configured=False)),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    rendered = console.export_text()
+    assert "Theme" in rendered
+    assert "light" in rendered
+    assert 'theme = "light"' in config.read_text(encoding="utf-8")
+
+
+def test_run_interactive_prompts_for_theme_when_config_file_is_missing(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    console = Console(record=True, width=160)
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="auto": "dark")
+
+    result = terminal.run_interactive(
+        Settings(path=config, ui=UiConfig(theme="auto", theme_configured=False)),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert 'theme = "dark"' in config.read_text(encoding="utf-8")
+
+
+def test_run_interactive_skips_theme_prompt_when_theme_exists(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "light"\n', encoding="utf-8")
+    console = Console(record=True, width=160)
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(
+        terminal,
+        "_prompt_theme_choice",
+        lambda default="auto": (_ for _ in ()).throw(AssertionError("unexpected theme prompt")),
+    )
+
+    result = terminal.run_interactive(
+        Settings(path=config, ui=UiConfig(theme="light", theme_configured=True)),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "Theme" in console.export_text()
 
 
 def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, monkeypatch):

@@ -19,6 +19,8 @@ BUILTIN_SLASH_COMMANDS = (
     SlashCommandItem("skills", "skills", "/skills", "List available skills"),
     SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
     SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue"),
+    SlashCommandItem("theme", "theme", "/theme", "Show or change UI theme"),
+    SlashCommandItem("reset", "reset", "/reset", "Delete config and run setup again"),
     SlashCommandItem("exit", "exit", "/exit", "Quit Deepy"),
 )
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -10,8 +9,21 @@ from typing import Sequence
 import tomli_w
 
 from . import __version__
-from .config import Settings, load_settings, settings_to_toml_dict
-from .config.settings import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_WEB_SEARCH_SEARXNG_URL
+from .config import (
+    Settings,
+    load_settings,
+    settings_to_toml_dict,
+    ui_theme_from_selection,
+    ui_theme_number,
+    update_config_theme,
+    write_config,
+)
+from .config.settings import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_UI_THEME,
+    UI_THEMES,
+)
 from .errors import format_error_display
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
@@ -20,6 +32,7 @@ from .skills import discover_skills, find_skill, format_skills_for_terminal, rea
 from .status import build_status_report, format_status_report, status_report_to_dict
 from .usage import TokenUsage, format_usage_line, usage_from_run_result
 from .ui import run_interactive
+from .ui.styles import resolve_ui_palette
 from .utils import json as json_utils
 
 
@@ -42,9 +55,13 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--api-key", help="DeepSeek API key.")
     init_parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name.")
     init_parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible base URL.")
+    init_parser.add_argument("--theme", default=DEFAULT_UI_THEME, help="UI theme: auto, dark, or light.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
     setup_parser = config_sub.add_parser("setup", help="Interactively configure Deepy.")
     setup_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
+    config_sub.add_parser("reset", help="Delete local config and run interactive setup again.")
+    theme_parser = config_sub.add_parser("theme", help="Show or update terminal UI theme.")
+    theme_parser.add_argument("theme", nargs="?", help="Theme to save: auto, dark, or light.")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate local Deepy setup.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
@@ -101,6 +118,7 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
         api_key=args.api_key or "",
         model=args.model,
         base_url=args.base_url,
+        theme=args.theme,
     )
     print(f"Wrote {config_path}")
     return 0
@@ -110,7 +128,7 @@ def _cmd_config_setup(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
     if config_path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
-    if config_path.exists() and not args.force:
+    if config_path.exists():
         existing = load_settings(config_path)
     else:
         existing = Settings(path=config_path)
@@ -119,9 +137,24 @@ def _cmd_config_setup(args: argparse.Namespace) -> int:
     api_key = _prompt_config_value("API key", default=existing.model.api_key or "", is_password=True)
     model = _prompt_config_value("Model", default=existing.model.name)
     base_url = _prompt_config_value("Base URL", default=existing.model.base_url)
-    _write_config(config_path, api_key=api_key, model=model, base_url=base_url)
+    theme = _prompt_theme_value(default=existing.ui.theme)
+    _write_config(config_path, api_key=api_key, model=model, base_url=base_url, theme=theme)
     print(f"Wrote {config_path}")
     return 0
+
+
+def _cmd_config_reset(args: argparse.Namespace) -> int:
+    config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
+    if config_path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    if config_path.exists():
+        config_path.unlink()
+        print(f"Removed {config_path}")
+    else:
+        print(f"No existing config at {config_path}")
+    print("Starting Deepy configuration setup...")
+    setup_args = argparse.Namespace(config=args.config, force=True)
+    return _cmd_config_setup(setup_args)
 
 
 def _prompt_config_value(label: str, *, default: str, is_password: bool = False) -> str:
@@ -136,36 +169,33 @@ def _prompt_config_value(label: str, *, default: str, is_password: bool = False)
     return value or default
 
 
-def _write_config(config_path: Path, *, api_key: str, model: str, base_url: str) -> None:
-    payload = {
-        "model": {
-            "name": model,
-            "base_url": base_url,
-            "api_key": api_key,
-            "thinking": True,
-            "reasoning_effort": "max",
-        },
-        "context": {
-            "window_tokens": 1_048_576,
-            "compact_trigger_ratio": 0.8,
-            "compact_prompt_token_threshold": 838_861,
-        },
-        "logging": {
-            "debug": False,
-        },
-        "notify": {
-            "enabled": False,
-            "command": "",
-        },
-        "tools": {
-            "web_search": {
-                "searxng_url": DEFAULT_WEB_SEARCH_SEARXNG_URL,
-            },
-        },
-    }
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
-    os.chmod(config_path, 0o600)
+def _prompt_theme_value(*, default: str = DEFAULT_UI_THEME) -> str:
+    print("UI theme:")
+    print("1. auto  Detect when possible; falls back to dark")
+    print("2. dark  Optimized for dark terminal backgrounds")
+    print("3. light Optimized for light terminal backgrounds")
+    value = _prompt_config_value("UI theme number", default=ui_theme_number(default))
+    return ui_theme_from_selection(value, default=default)
+
+
+def _write_config(config_path: Path, *, api_key: str, model: str, base_url: str, theme: str) -> None:
+    write_config(config_path, api_key=api_key, model=model, base_url=base_url, theme=theme)
+
+
+def _cmd_config_theme(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    if args.theme is None:
+        palette = resolve_ui_palette(settings.ui.theme)
+        print(f"saved: {settings.ui.theme}")
+        print(f"resolved: {palette.name}")
+        return 0
+    if args.theme not in UI_THEMES:
+        print("Invalid theme. Usage: deepy config theme [auto|dark|light]", file=sys.stderr)
+        return 1
+    config_path = settings.path or (args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml")
+    update_config_theme(config_path, args.theme)
+    print(f"Saved UI theme: {args.theme}")
+    return 0
 
 
 def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
@@ -385,6 +415,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_config_init(args)
         if args.config_command == "setup":
             return _cmd_config_setup(args)
+        if args.config_command == "reset":
+            return _cmd_config_reset(args)
+        if args.config_command == "theme":
+            return _cmd_config_theme(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
     if args.command == "run":
@@ -403,6 +437,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Deepy needs a DeepSeek API key before starting interactive mode.")
         setup_args = argparse.Namespace(config=args.config, force=True)
         _cmd_config_setup(setup_args)
+        settings = load_settings(args.config)
+    if settings.path is not None and not settings.ui.theme_configured:
+        theme = _prompt_theme_value(default=settings.ui.theme)
+        update_config_theme(settings.path, theme)
         settings = load_settings(args.config)
     return run_interactive(settings)
 

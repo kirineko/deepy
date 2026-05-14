@@ -11,7 +11,7 @@ from rich.text import Text
 
 from deepy.skills import SkillInfo
 from deepy.update_check import VersionUpdate
-from deepy.ui.styles import STYLE_ACCENT, STYLE_ASSISTANT, STYLE_INFO, STYLE_MUTED
+from deepy.ui.styles import DARK_PALETTE, UiPalette
 from deepy.ui.slash_commands import (
     BUILTIN_SLASH_COMMANDS,
     format_slash_command_description,
@@ -93,6 +93,8 @@ def build_welcome_settings(
     current_version: str,
     version_update: VersionUpdate | None = None,
     home: str | Path | None = None,
+    theme: str | None = None,
+    resolved_theme: str | None = None,
 ) -> list[WelcomeSetting]:
     settings = [
         WelcomeSetting("Version", _format_version_value(current_version, version_update)),
@@ -101,6 +103,9 @@ def build_welcome_settings(
         WelcomeSetting("Reasoning", reasoning_effort),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
+    if theme:
+        value = theme if not resolved_theme or resolved_theme == theme else f"{theme} -> {resolved_theme}"
+        settings.append(WelcomeSetting("Theme", value))
     if version_update is not None:
         settings.append(WelcomeSetting("Update", version_update.install_hint))
     return settings
@@ -115,24 +120,30 @@ def _format_version_value(current_version: str, version_update: VersionUpdate | 
     )
 
 
-def build_deepy_ascii_logo() -> Text:
+def build_deepy_ascii_logo(*, palette: UiPalette | None = None) -> Text:
+    palette = palette or DARK_PALETTE
     logo = Text()
     for index, line in enumerate(DEEPY_ASCII_LOGO):
         if index:
             logo.append("\n")
-        logo.append(line, style=f"bold {STYLE_ACCENT}" if "Deepy" in line else STYLE_INFO)
+        logo.append(line, style=f"bold {palette.accent}" if "Deepy" in line else palette.info)
     return logo
 
 
-def _build_section(title: str, rows: list[WelcomeSetting | WelcomeTip]) -> Table:
+def _build_section(
+    title: str,
+    rows: list[WelcomeSetting | WelcomeTip],
+    *,
+    palette: UiPalette,
+) -> Table:
     section = Table.grid()
     section.add_column()
-    section.add_row(Text(title, style="bold bright_white"))
+    section.add_row(Text(title, style=palette.markdown_bold))
     section.add_row(Text(""))
 
     body = Table.grid(padding=(0, 2))
-    body.add_column(style=STYLE_ACCENT, no_wrap=True)
-    body.add_column(style="bright_white")
+    body.add_column(style=palette.accent, no_wrap=True)
+    body.add_column(style=palette.markdown_bold)
     for row in rows:
         body.add_row(row.label, row.description if isinstance(row, WelcomeTip) else row.value)
     section.add_row(body)
@@ -149,7 +160,11 @@ def build_welcome_panel(
     current_version: str,
     version_update: VersionUpdate | None = None,
     home: str | Path | None = None,
+    theme: str | None = None,
+    resolved_theme: str | None = None,
+    palette: UiPalette | None = None,
 ) -> Panel:
+    palette = palette or DARK_PALETTE
     settings = build_welcome_settings(
         model=model,
         thinking_enabled=thinking_enabled,
@@ -158,6 +173,8 @@ def build_welcome_panel(
         current_version=current_version,
         version_update=version_update,
         home=home,
+        theme=theme,
+        resolved_theme=resolved_theme,
     )
     tips = build_welcome_tips(skills)
 
@@ -166,18 +183,18 @@ def build_welcome_panel(
     hero.add_column(ratio=1)
 
     intro = Text()
-    intro.append("Deepy\n", style=f"bold {STYLE_ASSISTANT}")
-    intro.append("Terminal coding agent for DeepSeek.\n", style="bright_white")
-    intro.append("Read, edit, run tools, and keep project context.", style=STYLE_MUTED)
+    intro.append("Deepy\n", style=f"bold {palette.assistant}")
+    intro.append("Terminal coding agent for DeepSeek.\n", style=palette.markdown_bold)
+    intro.append("Read, edit, run tools, and keep project context.", style=palette.muted)
 
-    hero.add_row(build_deepy_ascii_logo(), intro)
+    hero.add_row(build_deepy_ascii_logo(palette=palette), intro)
 
     body = Table.grid(padding=(0, 4), expand=False)
     body.add_column()
     body.add_column()
     body.add_row(
-        _build_section("Session", settings),
-        _build_section("Commands", tips[:10]),
+        _build_section("Session", settings, palette=palette),
+        _build_section("Commands", tips[:10], palette=palette),
     )
 
     return Panel(
@@ -187,6 +204,6 @@ def build_welcome_panel(
             body,
         ),
         title="Deepy is ready",
-        border_style=STYLE_INFO,
+        border_style=palette.panel_border,
         expand=False,
     )

@@ -45,6 +45,44 @@ def test_render_markdown_handles_plain_text_unchanged():
     assert render_markdown(text).plain == text
 
 
+def test_render_markdown_formats_pipe_tables():
+    result = render_markdown(
+        "| Name | Role |\n"
+        "| --- | --- |\n"
+        "| Deepy | Terminal Agent |\n"
+        "| Search | Web fallback |"
+    ).plain
+
+    assert "┌" in result
+    assert "┬" in result
+    assert "Name" in result
+    assert "Terminal Agent" in result
+    assert "| --- | --- |" not in result
+
+
+def test_render_markdown_wraps_wide_table_cells_to_fit_width():
+    result = render_markdown(
+        "| Item | Detail |\n"
+        "| --- | --- |\n"
+        "| Markdown | This cell contains a long explanation that should wrap cleanly |",
+        width=42,
+    ).plain
+
+    table_lines = [line for line in result.splitlines() if line.startswith(("┌", "│", "├", "└"))]
+    assert table_lines
+    assert all(len(line) <= 42 for line in table_lines)
+    assert "long" in result
+    assert "wrap" in result
+
+
+def test_render_markdown_formats_horizontal_rules():
+    result = render_markdown("before\n---\nafter", width=32).plain
+
+    assert "before" in result
+    assert "─" * 32 in result
+    assert "after" in result
+
+
 def test_split_by_fences_handles_unclosed_code_block():
     segments = split_by_fences("before\n```py\nprint(1)")
 

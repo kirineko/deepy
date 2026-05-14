@@ -48,11 +48,13 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert "[notify]" in text
     assert "[tools.web_search]" in text
     assert 'searxng_url = "https://s.kirineko.tech/"' in text
+    assert "[ui]" in text
+    assert 'theme = "auto"' in text
 
 
 def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    answers = iter(["sk-live", "deepseek-v4-flash", "https://api.deepseek.com"])
+    answers = iter(["sk-live", "deepseek-v4-flash", "https://api.deepseek.com", "3"])
     prompts: list[dict[str, object]] = []
 
     class FakePromptSession:
@@ -71,6 +73,58 @@ def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypat
     text = config.read_text(encoding="utf-8")
     assert 'api_key = "sk-live"' in text
     assert 'name = "deepseek-v4-flash"' in text
+    assert 'theme = "light"' in text
+
+
+def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    answers = iter(["sk-reset", "deepseek-v4-pro", "https://api.deepseek.com", "3"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "reset"])
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert f"Removed {config}" in output
+    assert "Starting Deepy configuration setup..." in output
+    assert config.stat().st_mode & 0o777 == 0o600
+    text = config.read_text(encoding="utf-8")
+    assert "old-key" not in text
+    assert 'api_key = "sk-reset"' in text
+    assert 'theme = "light"' in text
+
+
+def test_config_theme_shows_and_updates_theme(tmp_path, capsys):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+
+    show_code = main(["--config", str(config), "config", "theme"])
+    update_code = main(["--config", str(config), "config", "theme", "light"])
+
+    output = capsys.readouterr().out
+    assert show_code == 0
+    assert update_code == 0
+    assert "saved: auto" in output
+    assert "resolved: dark" in output
+    assert "Saved UI theme: light" in output
+    assert 'theme = "light"' in config.read_text(encoding="utf-8")
+
+
+def test_config_theme_rejects_invalid_value_without_changing_config(tmp_path, capsys):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+
+    code = main(["--config", str(config), "config", "theme", "solarized"])
+
+    assert code == 1
+    assert "Invalid theme" in capsys.readouterr().err
+    assert config.read_text(encoding="utf-8") == '[ui]\ntheme = "dark"\n'
 
 
 def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):

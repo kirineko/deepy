@@ -6,13 +6,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Self
 
+import tomli_w
+
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_048_576
 DEFAULT_COMPACT_TRIGGER_RATIO = 0.8
 DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD = 838_861
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
+DEFAULT_UI_THEME = "auto"
 REASONING_EFFORTS = {"high", "max"}
+UI_THEMES = {"auto", "dark", "light"}
+UI_THEME_OPTIONS = (("1", "auto"), ("2", "dark"), ("3", "light"))
 
 
 def default_config_path() -> Path:
@@ -162,12 +167,26 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True)
+class UiConfig:
+    theme: str = DEFAULT_UI_THEME
+    theme_configured: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
+        theme = raw.get("theme")
+        if isinstance(theme, str) and theme.strip() in UI_THEMES:
+            return cls(theme=theme.strip(), theme_configured=True)
+        return cls()
+
+
+@dataclass(frozen=True)
 class Settings:
     model: ModelConfig = field(default_factory=ModelConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     path: Path | None = None
 
     @classmethod
@@ -184,6 +203,7 @@ class Settings:
             logging=LoggingConfig.from_mapping(_as_mapping(raw.get("logging"))),
             notify=NotifyConfig.from_mapping(_as_mapping(raw.get("notify"))),
             tools=ToolsConfig.from_mapping(_as_mapping(raw.get("tools"))),
+            ui=UiConfig.from_mapping(_as_mapping(raw.get("ui"))),
             path=path,
         )
 
@@ -208,6 +228,8 @@ def load_settings(
 def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) -> dict[str, Any]:
     data = _drop_empty(asdict(settings))
     data.pop("path", None)
+    if "ui" in data:
+        data["ui"].pop("theme_configured", None)
     api_key = settings.model.api_key
     if api_key:
         data["model"]["api_key"] = api_key if reveal_secret else mask_secret(api_key)
@@ -216,6 +238,99 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
         settings.context.resolved_compact_threshold
     )
     return _drop_empty(data)
+
+
+def is_valid_ui_theme(value: str) -> bool:
+    return value in UI_THEMES
+
+
+def ui_theme_number(theme: str) -> str:
+    for number, value in UI_THEME_OPTIONS:
+        if value == theme:
+            return number
+    return "1"
+
+
+def ui_theme_from_selection(value: str, *, default: str = DEFAULT_UI_THEME) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        return default if is_valid_ui_theme(default) else DEFAULT_UI_THEME
+    if normalized in UI_THEMES:
+        return normalized
+    by_number = dict(UI_THEME_OPTIONS)
+    selected = by_number.get(normalized)
+    if selected is not None:
+        return selected
+    return default if is_valid_ui_theme(default) else DEFAULT_UI_THEME
+
+
+def write_config(
+    config_path: Path,
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+    theme: str,
+) -> None:
+    if not is_valid_ui_theme(theme):
+        raise ValueError("UI theme must be one of: auto, dark, light.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    payload = {
+        "model": {
+            "name": model,
+            "base_url": base_url,
+            "api_key": api_key,
+            "thinking": True,
+            "reasoning_effort": "max",
+        },
+        "context": {
+            "window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+            "compact_trigger_ratio": DEFAULT_COMPACT_TRIGGER_RATIO,
+            "compact_prompt_token_threshold": DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD,
+        },
+        "logging": {
+            "debug": False,
+        },
+        "notify": {
+            "enabled": False,
+            "command": "",
+        },
+        "tools": {
+            "web_search": {
+                "searxng_url": DEFAULT_WEB_SEARCH_SEARXNG_URL,
+            },
+        },
+        "ui": {
+            "theme": theme,
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def update_config_theme(config_path: Path, theme: str) -> None:
+    if not is_valid_ui_theme(theme):
+        raise ValueError("UI theme must be one of: auto, dark, light.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw: dict[str, Any]
+    if path.exists():
+        with path.open("rb") as fh:
+            loaded = tomllib.load(fh)
+        raw = dict(loaded)
+    else:
+        raw = {}
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["theme"] = theme
+    raw["ui"] = ui_map
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomli_w.dumps(raw), encoding="utf-8")
+    os.chmod(path, 0o600)
 
 
 def _drop_empty(value: Any) -> Any:

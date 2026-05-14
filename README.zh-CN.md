@@ -38,7 +38,7 @@ Deepy 的核心目标是适配 DeepSeek V4 的 thinking 能力、长上下文、
 - 内置资料查阅能力：支持 WebSearch，也支持给定完整 URL 后直接 WebFetch。
 - 支持 session 历史、`/resume`、`/new`、上下文状态显示和自动 compact。
 - 只使用 TOML 配置，默认保存到 `~/.deepy/config.toml`。
-- Rich 终端 UI：Markdown 渲染、thinking 展示、每轮 usage、上下文窗口状态、版本更新检测。
+- 适配主题的 Rich 终端 UI：Markdown 渲染、thinking 展示、每轮 usage、上下文窗口状态、版本更新检测。
 
 ## 效果预览
 
@@ -100,11 +100,17 @@ Deepy 只支持 TOML 配置，不支持 JSON 配置。
 
 ```toml
 # ~/.deepy/config.toml
+[model]
 api_key = "sk-..."
-model = "deepseek-v4-pro"
+name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
-context_window_tokens = 1048576
-compact_threshold = 0.8
+
+[context]
+window_tokens = 1048576
+compact_trigger_ratio = 0.8
+
+[ui]
+theme = "auto" # auto, dark, light
 ```
 
 WebSearch 默认使用 Deepy 托管的 SearXNG 搜索服务。你也可以改成自己的
@@ -121,11 +127,20 @@ searxng_url = "https://your-searxng.example/"
 deepy config init --api-key sk-... --model deepseek-v4-pro
 ```
 
+如果你的终端是浅色背景，Deepy 的部分文字对比度不够，可以显式切换 UI 主题：
+
+```bash
+deepy config theme light
+```
+
 ## 常用命令
 
 ```bash
 deepy --version
 deepy config setup
+deepy config reset
+deepy config theme
+deepy config theme light
 deepy doctor
 deepy doctor --live --json
 deepy status
@@ -141,6 +156,8 @@ deepy run "summarize this project"
 /skills   查看可用 skills
 /new      开始新会话
 /resume   选择历史会话继续
+/theme    查看或切换 UI 主题
+/reset    删除配置并重新引导 setup
 /         打开命令菜单
 Esc       中断当前模型回合
 Ctrl+D    连按两次退出
@@ -170,5 +187,5 @@ wheel。
 
 ## 发布状态
 
-Deepy 正在准备第一个公开 `0.1.4` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
+Deepy 正在准备第一个公开 `0.1.5` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
 文件和 npm wrapper 可以后续再加，第一版以 Python CLI 为主。

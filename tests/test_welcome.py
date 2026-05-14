@@ -76,6 +76,20 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
     ]
 
 
+def test_build_welcome_settings_includes_theme_when_available(tmp_path):
+    settings = build_welcome_settings(
+        model="deepseek-v4-pro",
+        thinking_enabled=True,
+        reasoning_effort="max",
+        project_root=tmp_path,
+        current_version="0.1.0",
+        theme="auto",
+        resolved_theme="dark",
+    )
+
+    assert ("Theme", "auto -> dark") in [(item.label, item.value) for item in settings]
+
+
 def test_build_welcome_settings_shows_available_update(tmp_path):
     settings = build_welcome_settings(
         model="deepseek-v4-pro",
@@ -119,6 +133,8 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
             skills=[],
             current_version="0.1.0",
             home=tmp_path.parent,
+            theme="light",
+            resolved_theme="light",
         )
     )
 
@@ -129,4 +145,6 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
     assert "0.1.0" in rendered
     assert "deepseek-v4-pro" in rendered
     assert "Reasoning" in rendered
+    assert "Theme" in rendered
+    assert "light" in rendered
     assert "/resume" in rendered

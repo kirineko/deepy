@@ -27,6 +27,8 @@ def test_build_slash_commands_prefixes_skills_before_builtins():
         "skills",
         "new",
         "resume",
+        "theme",
+        "reset",
         "exit",
     ]
 
@@ -59,6 +61,8 @@ def test_find_exact_slash_command_returns_builtins():
 
     assert find_exact_slash_command(items, "/new").kind == "new"
     assert find_exact_slash_command(items, "/skills").kind == "skills"
+    assert find_exact_slash_command(items, "/theme").kind == "theme"
+    assert find_exact_slash_command(items, "/reset").kind == "reset"
 
 
 def test_find_exact_slash_command_returns_matching_skill():

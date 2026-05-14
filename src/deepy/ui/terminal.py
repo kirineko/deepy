@@ -28,7 +28,15 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from deepy import __version__
-from deepy.config import Settings
+from deepy.config import (
+    Settings,
+    UI_THEMES,
+    load_settings,
+    ui_theme_from_selection,
+    ui_theme_number,
+    update_config_theme,
+    write_config,
+)
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
@@ -61,13 +69,12 @@ from deepy.ui.session_picker import format_resume_session_choices
 from deepy.ui.session_picker import pick_resume_session
 from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.styles import (
-    STYLE_ASSISTANT,
-    STYLE_ERROR,
-    STYLE_INFO,
-    STYLE_MUTED,
-    STYLE_USER,
+    DARK_PALETTE,
+    UiPalette,
+    resolve_ui_palette,
     status_style,
 )
+from deepy.ui.theme_picker import THEME_CHOICES, pick_theme
 from deepy.ui.welcome import build_welcome_panel
 from deepy.usage import TokenUsage, format_usage_line
 from deepy.utils import json as json_utils
@@ -110,6 +117,8 @@ def run_interactive(
     output = console or Console()
     session_id: str | None = None
     version_update = _check_startup_version_update(version_update_checker)
+    settings = _ensure_interactive_theme(settings)
+    palette = resolve_ui_palette(settings.ui.theme)
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
@@ -120,6 +129,7 @@ def run_interactive(
     )
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
+        palette=palette,
     )
     output.print(
         build_welcome_panel(
@@ -130,6 +140,9 @@ def run_interactive(
             skills=discover_skills(root),
             current_version=__version__,
             version_update=version_update,
+            theme=settings.ui.theme,
+            resolved_theme=palette.name,
+            palette=palette,
         )
     )
 
@@ -144,7 +157,7 @@ def run_interactive(
                 output.print()
                 return 0
             ctrl_d_exit_pending = True
-            output.print(f"[{STYLE_MUTED}]Press Ctrl+D again to exit.[/]")
+            output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
             continue
         except KeyboardInterrupt:
             output.print()
@@ -155,7 +168,7 @@ def run_interactive(
                 output.print()
                 return 0
             ctrl_d_exit_pending = True
-            output.print(f"[{STYLE_MUTED}]Press Ctrl+D again to exit.[/]")
+            output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
             continue
 
         ctrl_d_exit_pending = False
@@ -171,11 +184,19 @@ def run_interactive(
                 session_id,
                 loaded_skill_names,
                 settings=settings,
+                palette=palette,
             )
             if next_session == "__exit__":
                 return 0
+            if slash.name in {"theme", "reset"}:
+                settings = load_theme_settings(settings)
+                palette = resolve_ui_palette(settings.ui.theme)
+                prompt_session = create_prompt_session(
+                    slash_commands=build_slash_commands(discover_skills(root)),
+                    palette=palette,
+                )
             session_id = next_session
-            if slash.name in {"new", "resume"}:
+            if slash.name in {"new", "resume", "reset"}:
                 context_status = _format_context_footer(
                     session_id,
                     project_root=root,
@@ -183,7 +204,7 @@ def run_interactive(
                 )
             continue
 
-        _print_user_input(output, text)
+        _print_user_input(output, text, palette=palette)
         summary = _run_once_with_status(
             output,
             run_once,
@@ -192,12 +213,13 @@ def run_interactive(
             settings=settings,
             session_id=session_id,
             skill_names=list(loaded_skill_names),
+            palette=palette,
         )
         session_id = summary.session_id
         if summary.status == "waiting_for_user":
             response = _collect_pending_question_response(output, summary.pending_questions)
             if response:
-                _print_user_input(output, response)
+                _print_user_input(output, response, palette=palette)
                 summary = _run_once_with_status(
                     output,
                     run_once,
@@ -206,10 +228,11 @@ def run_interactive(
                     settings=settings,
                     session_id=session_id,
                     skill_names=list(loaded_skill_names),
+                    palette=palette,
                 )
                 session_id = summary.session_id
-        _print_assistant_output(output, summary.output)
-        _print_usage_footer(output, summary, settings=settings, project_root=root)
+        _print_assistant_output(output, summary.output, palette=palette)
+        _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
         context_status = _format_context_footer(
             summary.session_id,
             project_root=root,
@@ -228,12 +251,36 @@ def _check_startup_version_update(
         return None
 
 
+def _ensure_interactive_theme(settings: Settings) -> Settings:
+    if settings.path is None or settings.ui.theme_configured:
+        return settings
+    theme = _prompt_theme_choice(settings.ui.theme)
+    update_config_theme(settings.path, theme)
+    return load_settings(settings.path)
+
+
+def _prompt_theme_choice(default: str = "auto") -> str:
+    _print_theme_choices(Console())
+    value = Prompt.ask("UI theme number", default=ui_theme_number(default))
+    return ui_theme_from_selection(value, default=default)
+
+
+def load_theme_settings(settings: Settings) -> Settings:
+    if settings.path is None:
+        return settings
+    try:
+        return load_settings(settings.path)
+    except Exception:
+        return settings
+
+
 def _run_once_with_status(
     console: Console,
     run_once: RunOnce,
     prompt: str,
     **kwargs: object,
 ) -> RunSummary:
+    palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
     project_root = kwargs.get("project_root")
@@ -249,12 +296,14 @@ def _run_once_with_status(
 
     kwargs["should_interrupt"] = should_interrupt
 
-    with console.status(_working_status_text(started_at), spinner="dots") as status:
+    active_palette = palette if isinstance(palette, UiPalette) else DARK_PALETTE
+    with console.status(_working_status_text(started_at, palette=active_palette), spinner="dots") as status:
         renderer = TerminalStreamRenderer(
             console,
             project_root=project_root_text,
             status=status,
             status_started_at=started_at,
+            palette=active_palette,
         )
         stop_status_refresh = threading.Event()
         status_thread = threading.Thread(
@@ -365,10 +414,12 @@ class TerminalStreamRenderer:
         project_root: str | None = None,
         status: Any | None = None,
         status_started_at: float | None = None,
+        palette: UiPalette | None = None,
     ) -> None:
         self.console = console
         self.project_root = project_root
         self.status = status
+        self.palette = palette or DARK_PALETTE
         self.status_started_at = (
             status_started_at if status_started_at is not None else time.monotonic()
         )
@@ -384,6 +435,7 @@ class TerminalStreamRenderer:
             project_root=self.project_root,
             pending_tool_calls=self.pending_tool_calls,
             reasoning_sink=self,
+            palette=self.palette,
         )
 
     def add_reasoning(self, text: str) -> None:
@@ -403,7 +455,13 @@ class TerminalStreamRenderer:
         if detail is not None:
             self.status_detail = detail
         if self.status is not None:
-            self.status.update(_working_status_text(self.status_started_at, self.status_detail))
+            self.status.update(
+                _working_status_text(
+                    self.status_started_at,
+                    self.status_detail,
+                    palette=self.palette,
+                )
+            )
 
     def flush(self) -> None:
         if self.reasoning_flushed:
@@ -413,9 +471,9 @@ class TerminalStreamRenderer:
             return
         self.console.print(
             Text.assemble(
-                ("• ", STYLE_MUTED),
-                ("Thinking  ", f"bold {STYLE_MUTED}"),
-                (summary, STYLE_MUTED),
+                ("• ", self.palette.muted),
+                ("Thinking  ", f"bold {self.palette.muted}"),
+                (summary, self.palette.muted),
             )
         )
         self.reasoning_flushed = True
@@ -429,9 +487,11 @@ def _handle_slash_command(
     loaded_skill_names: list[str] | None = None,
     settings: Settings | None = None,
     input_func: InputFunc | None = None,
+    palette: UiPalette | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
+    palette = palette or resolve_ui_palette(settings.ui.theme)
     if command.name in {"exit", "quit"}:
         _print_exit_summary(console, project_root, current_session_id, settings)
         return "__exit__"
@@ -441,6 +501,8 @@ def _handle_slash_command(
         console.print("/skill NAME Show a skill document")
         console.print("/use NAME   Load a skill for subsequent prompts")
         console.print("/status     Show project status")
+        console.print("/theme      Show or change UI theme")
+        console.print("/reset      Delete config and run setup again")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
         console.print("/new        Start a new session")
@@ -456,7 +518,7 @@ def _handle_slash_command(
         if command.argument:
             selected = resolve_session_selection(entries, command.argument)
             session_id = selected.id if selected is not None else command.argument
-            _resume_session(console, project_root, session_id)
+            _resume_session(console, project_root, session_id, palette=palette)
             return session_id
         if not entries:
             console.print("No sessions found.")
@@ -474,10 +536,10 @@ def _handle_slash_command(
             invalid_selection = bool(session_id) and selected is None
         if selected is None:
             message = "Invalid session selection." if invalid_selection else "Resume canceled."
-            style = STYLE_ERROR if invalid_selection else STYLE_MUTED
+            style = palette.error if invalid_selection else palette.muted
             console.print(f"[{style}]{message}[/]")
             return current_session_id
-        _resume_session(console, project_root, selected.id)
+        _resume_session(console, project_root, selected.id, palette=palette)
         return selected.id
     if command.name == "sessions":
         entries = list_session_entries(project_root)
@@ -493,39 +555,175 @@ def _handle_slash_command(
     if command.name == "status":
         console.print(format_status_report(build_status_report(project_root, settings)))
         return current_session_id
+    if command.name == "theme":
+        return _handle_theme_command(
+            command,
+            console,
+            current_session_id,
+            settings,
+            palette,
+            input_func=input_func,
+        )
+    if command.name == "reset":
+        return _handle_reset_command(console, current_session_id, settings, palette)
     if command.name == "skills":
         console.print(format_skills_for_terminal(discover_skills(project_root)))
         return current_session_id
     if command.name == "skill":
         if not command.argument:
-            console.print(f"[{STYLE_ERROR}]Usage:[/] /skill NAME")
+            console.print(f"[{palette.error}]Usage:[/] /skill NAME")
             return current_session_id
         skill = find_skill(project_root, command.argument)
         if skill is None:
-            console.print(f"[{STYLE_ERROR}]Skill not found:[/] {command.argument}")
+            console.print(f"[{palette.error}]Skill not found:[/] {command.argument}")
             return current_session_id
         console.print(read_skill_body(skill) or "(empty skill)")
         return current_session_id
     if command.name == "use":
         if not command.argument:
-            console.print(f"[{STYLE_ERROR}]Usage:[/] /use NAME")
+            console.print(f"[{palette.error}]Usage:[/] /use NAME")
             return current_session_id
         skill = find_skill(project_root, command.argument)
         if skill is None:
-            console.print(f"[{STYLE_ERROR}]Skill not found:[/] {command.argument}")
+            console.print(f"[{palette.error}]Skill not found:[/] {command.argument}")
             return current_session_id
         if skill.name not in loaded_skill_names:
             loaded_skill_names.append(skill.name)
         console.print(f"Loaded skill: {skill.name}")
         return current_session_id
 
-    console.print(f"[{STYLE_ERROR}]Unknown command:[/] /{command.name}")
+    console.print(f"[{palette.error}]Unknown command:[/] /{command.name}")
     return current_session_id
 
 
-def _resume_session(console: Console, project_root: Path, session_id: str) -> None:
-    console.print(Text.assemble(("Resuming session ", STYLE_MUTED), (session_id, STYLE_INFO)))
-    _print_session_history(console, project_root, session_id)
+def _handle_theme_command(
+    command: SlashCommand,
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    theme = command.argument
+    if not theme:
+        console.print(f"Current theme: {settings.ui.theme}")
+        selected = _prompt_for_theme_selection(
+            settings.ui.theme,
+            console=console,
+            input_func=input_func,
+        )
+        if selected is None:
+            console.print("Theme unchanged.")
+            return current_session_id
+        theme = selected
+    if theme not in UI_THEMES:
+        console.print(f"[{palette.error}]Usage:[/] /theme auto|dark|light")
+        return current_session_id
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot persist theme: config path is unknown.[/]")
+        return current_session_id
+    update_config_theme(settings.path, theme)
+    console.print(f"Saved UI theme: {theme}")
+    console.print("Restart Deepy to apply the theme everywhere.")
+    return current_session_id
+
+
+def _print_theme_choices(console: Console) -> None:
+    console.print("Available themes:")
+    for index, (_theme, label) in enumerate(THEME_CHOICES, 1):
+        console.print(f"{index}. {label}")
+
+
+def _prompt_for_theme_selection(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    if input_func is None:
+        return pick_theme(default)
+    _print_theme_choices(console)
+    value = input_func("Theme number or name").strip()
+    if not value:
+        return None
+    return _theme_from_selection(value)
+
+
+def _theme_from_selection(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if normalized in UI_THEMES:
+        return normalized
+    return {"1": "auto", "2": "dark", "3": "light"}.get(normalized)
+
+
+def _handle_reset_command(
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+) -> str | None:
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot reset config: config path is unknown.[/]")
+        return current_session_id
+    if settings.path.exists():
+        settings.path.unlink()
+        console.print(f"Removed {settings.path}")
+    else:
+        console.print(f"No existing config at {settings.path}")
+    console.print("Starting Deepy configuration setup...")
+    _run_interactive_config_setup(settings.path, previous=settings, console=console)
+    console.print(f"Wrote {settings.path}")
+    return current_session_id
+
+
+def _run_interactive_config_setup(
+    config_path: Path,
+    *,
+    previous: Settings,
+    console: Console,
+) -> None:
+    console.print("DeepSeek API keys: https://platform.deepseek.com/api_keys")
+    api_key = _prompt_config_value("API key", default="", is_password=True)
+    model = _prompt_config_value("Model", default=previous.model.name)
+    base_url = _prompt_config_value("Base URL", default=previous.model.base_url)
+    theme = _prompt_theme_config_value(default=previous.ui.theme, console=console)
+    write_config(
+        config_path,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        theme=theme,
+    )
+
+
+def _prompt_theme_config_value(*, default: str, console: Console) -> str:
+    _print_theme_choices(console)
+    value = _prompt_config_value("UI theme number", default=ui_theme_number(default))
+    return ui_theme_from_selection(value, default=default)
+
+
+def _prompt_config_value(label: str, *, default: str, is_password: bool = False) -> str:
+    from prompt_toolkit import PromptSession
+
+    prompt = f"{label}"
+    if default and not is_password:
+        prompt += f" [{default}]"
+    prompt += ": "
+    value = PromptSession().prompt(prompt, default="" if is_password else default, is_password=is_password)
+    value = value.strip()
+    return value or default
+
+
+def _resume_session(
+    console: Console,
+    project_root: Path,
+    session_id: str,
+    *,
+    palette: UiPalette | None = None,
+) -> None:
+    palette = palette or DARK_PALETTE
+    console.print(Text.assemble(("Resuming session ", palette.muted), (session_id, palette.info)))
+    _print_session_history(console, project_root, session_id, palette=palette)
 
 
 def _build_resume_session_previews(
@@ -547,16 +745,23 @@ def _build_resume_session_previews(
     return previews
 
 
-def _print_session_history(console: Console, project_root: Path, session_id: str) -> None:
+def _print_session_history(
+    console: Console,
+    project_root: Path,
+    session_id: str,
+    *,
+    palette: UiPalette | None = None,
+) -> None:
+    palette = palette or DARK_PALETTE
     items = _load_session_items(project_root, session_id)
     if not items:
-        console.print(f"[{STYLE_MUTED}]No visible history for this session.[/]")
+        console.print(f"[{palette.muted}]No visible history for this session.[/]")
         return
 
-    console.print(Text("History", style=f"bold {STYLE_MUTED}"))
-    renderer = TerminalStreamRenderer(console, project_root=str(project_root))
+    console.print(Text("History", style=f"bold {palette.muted}"))
+    renderer = TerminalStreamRenderer(console, project_root=str(project_root), palette=palette)
     for item in items:
-        _print_history_item(console, item, renderer)
+        _print_history_item(console, item, renderer, palette=palette)
     renderer.flush()
 
 
@@ -564,7 +769,10 @@ def _print_history_item(
     console: Console,
     item: dict[str, Any],
     renderer: TerminalStreamRenderer,
+    *,
+    palette: UiPalette | None = None,
 ) -> None:
+    palette = palette or DARK_PALETTE
     item_type = _item_type(item)
     role = _role(item)
 
@@ -586,7 +794,7 @@ def _print_history_item(
 
     if role == "user":
         renderer.flush()
-        _print_user_input(console, _item_text(item))
+        _print_user_input(console, _item_text(item), palette=palette)
         return
 
     if role == "assistant":
@@ -594,7 +802,7 @@ def _print_history_item(
         tool_calls = _chat_tool_calls(item)
         if text.strip():
             renderer.flush()
-            _print_assistant_output(console, text)
+            _print_assistant_output(console, text, palette=palette)
         for tool_call in tool_calls:
             renderer(_history_tool_call_event(tool_call))
         return
@@ -808,15 +1016,17 @@ def _print_usage_footer(
     *,
     settings: Settings | None = None,
     project_root: Path | None = None,
+    palette: UiPalette | None = None,
 ) -> None:
+    palette = palette or DARK_PALETTE
     if summary.usage.known:
         duration = _format_duration_ms(summary.duration_ms) if summary.duration_ms > 0 else ""
         prefix = f"time {duration} · " if duration else ""
         console.print(
-            f"[{STYLE_MUTED}]turn API usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
+            f"[{palette.muted}]turn API usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
         )
     elif summary.duration_ms > 0:
-        console.print(f"[{STYLE_MUTED}]turn time[/] {_format_duration_ms(summary.duration_ms)}")
+        console.print(f"[{palette.muted}]turn time[/] {_format_duration_ms(summary.duration_ms)}")
 
 
 def _format_context_footer(
@@ -882,15 +1092,21 @@ def _refresh_working_status(
         renderer.update_status()
 
 
-def _working_status_text(started_at: float, detail: str = "") -> Text:
+def _working_status_text(
+    started_at: float,
+    detail: str = "",
+    *,
+    palette: UiPalette | None = None,
+) -> Text:
+    palette = palette or DARK_PALETTE
     elapsed = _format_duration_ms(int((time.monotonic() - started_at) * 1000)) or "0s"
     text = Text.assemble(
-        ("Working ", f"bold {STYLE_MUTED}"),
-        (f"({elapsed} · esc to interrupt)", STYLE_MUTED),
+        ("Working ", f"bold {palette.muted}"),
+        (f"({elapsed} · esc to interrupt)", palette.muted),
     )
     if detail:
-        text.append(" · ", style=STYLE_MUTED)
-        text.append(detail, style=STYLE_MUTED)
+        text.append(" · ", style=palette.muted)
+        text.append(detail, style=palette.muted)
     return text
 
 
@@ -906,7 +1122,8 @@ def _format_duration_ms(duration_ms: int) -> str:
     return f"{remaining_seconds}s"
 
 
-def _print_user_input(console: Console, text: str) -> None:
+def _print_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> None:
+    palette = palette or DARK_PALETTE
     if not text.strip():
         return
     lines = text.rstrip().splitlines() or [text.rstrip()]
@@ -914,19 +1131,25 @@ def _print_user_input(console: Console, text: str) -> None:
     for index, line in enumerate(lines):
         if index:
             rendered.append("\n")
-            rendered.append("  ", style=STYLE_USER)
+            rendered.append("  ", style=palette.user)
         else:
-            rendered.append("> ", style=STYLE_USER)
-        rendered.append(line, style=STYLE_USER)
+            rendered.append("> ", style=palette.user)
+        rendered.append(line, style=palette.user)
     console.print(rendered)
 
 
-def _print_assistant_output(console: Console, text: str) -> None:
+def _print_assistant_output(
+    console: Console,
+    text: str,
+    *,
+    palette: UiPalette | None = None,
+) -> None:
+    palette = palette or DARK_PALETTE
     if not text.strip():
         return
     console.print()
-    console.print(f"[bold {STYLE_ASSISTANT}]Deepy[/]")
-    console.print(render_markdown(text.rstrip()))
+    console.print(f"[bold {palette.assistant}]Deepy[/]")
+    console.print(render_markdown(text.rstrip(), palette=palette, width=console.width))
 
 
 def _print_stream_event(
@@ -936,7 +1159,9 @@ def _print_stream_event(
     project_root: str | None = None,
     pending_tool_calls: dict[str, ToolCallDisplay] | None = None,
     reasoning_sink: TerminalStreamRenderer | None = None,
+    palette: UiPalette | None = None,
 ) -> None:
+    palette = palette or DARK_PALETTE
     if event.kind in {"text_delta", "message"}:
         return
     if event.kind == "reasoning_delta":
@@ -959,7 +1184,7 @@ def _print_stream_event(
                 if reasoning_sink is not None:
                     reasoning_sink.set_tool_status(summary)
                 return
-        console.print(_status_line(summary, STYLE_INFO))
+        console.print(_status_line(summary, palette.info))
         return
     if event.kind == "tool_output":
         if reasoning_sink is not None:
@@ -969,8 +1194,8 @@ def _print_stream_event(
         call = pending_tool_calls.pop(call_id, None) if pending_tool_calls is not None else None
         call_summary = call.summary if call is not None else view.name
         summary = format_tool_progress_summary(call_summary, event.text)
-        console.print(_status_line(summary, status_style(view.ok)))
-        diff = render_tool_diff_preview(event.text)
+        console.print(_status_line(summary, status_style(view.ok, palette)))
+        diff = render_tool_diff_preview(event.text, palette=palette)
         if diff:
             console.print(diff)
         return
