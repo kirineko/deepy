@@ -226,6 +226,11 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         or settings.context.resolved_compact_threshold > 0,
         str(settings.context.resolved_compact_threshold),
     )
+    check(
+        "reserved_context",
+        settings.context.reserved_context_tokens > 0,
+        str(settings.context.reserved_context_tokens),
+    )
 
     try:
         build_provider_bundle(settings)

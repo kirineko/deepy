@@ -3,6 +3,8 @@ from __future__ import annotations
 from .settings import (
     ContextConfig,
     DEEPSEEK_MODEL_CATALOG,
+    DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
+    DEFAULT_RESERVED_CONTEXT_TOKENS,
     DEFAULT_UI_THEME,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
     DeepSeekModelInfo,
@@ -30,6 +32,8 @@ from .settings import (
 __all__ = [
     "ContextConfig",
     "DEEPSEEK_MODEL_CATALOG",
+    "DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES",
+    "DEFAULT_RESERVED_CONTEXT_TOKENS",
     "DEFAULT_UI_THEME",
     "DEFAULT_WEB_SEARCH_SEARXNG_URL",
     "DeepSeekModelInfo",

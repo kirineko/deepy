@@ -12,6 +12,7 @@ StreamKind = Literal[
     "message",
     "agent_updated",
     "usage",
+    "status",
     "raw_response",
     "unknown",
 ]

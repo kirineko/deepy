@@ -12,7 +12,8 @@ DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_048_576
 DEFAULT_COMPACT_TRIGGER_RATIO = 0.8
-DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD = 838_861
+DEFAULT_RESERVED_CONTEXT_TOKENS = 50_000
+DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES = 2
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 DEFAULT_UI_THEME = "auto"
 REASONING_EFFORTS = {"high", "max"}
@@ -134,7 +135,9 @@ class ModelConfig:
 class ContextConfig:
     window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
     compact_trigger_ratio: float = DEFAULT_COMPACT_TRIGGER_RATIO
-    compact_prompt_token_threshold: int | None = None
+    reserved_context_tokens: int = DEFAULT_RESERVED_CONTEXT_TOKENS
+    compact_preserve_recent_messages: int = DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES
+    compact_preserve_recent_tokens: int | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
@@ -142,18 +145,30 @@ class ContextConfig:
         ratio = _as_float(raw.get("compact_trigger_ratio"), DEFAULT_COMPACT_TRIGGER_RATIO)
         if ratio <= 0 or ratio > 1:
             ratio = DEFAULT_COMPACT_TRIGGER_RATIO
-        threshold = raw.get("compact_prompt_token_threshold")
-        compact_threshold = _as_int(threshold, 0) if threshold is not None else None
+        reserved_context_tokens = _as_int(
+            raw.get("reserved_context_tokens"),
+            DEFAULT_RESERVED_CONTEXT_TOKENS,
+        )
+        preserve_recent_messages = _as_int(
+            raw.get("compact_preserve_recent_messages"),
+            DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
+        )
+        preserve_recent_tokens_raw = raw.get("compact_preserve_recent_tokens")
+        preserve_recent_tokens = (
+            _as_int(preserve_recent_tokens_raw, 0)
+            if preserve_recent_tokens_raw is not None
+            else None
+        )
         return cls(
             window_tokens=window_tokens,
             compact_trigger_ratio=ratio,
-            compact_prompt_token_threshold=compact_threshold or None,
+            reserved_context_tokens=reserved_context_tokens,
+            compact_preserve_recent_messages=preserve_recent_messages,
+            compact_preserve_recent_tokens=preserve_recent_tokens or None,
         )
 
     @property
     def resolved_compact_threshold(self) -> int:
-        if self.compact_prompt_token_threshold:
-            return self.compact_prompt_token_threshold
         return int(self.window_tokens * self.compact_trigger_ratio + 0.999999)
 
 
@@ -265,9 +280,6 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
     if api_key:
         data["model"]["api_key"] = api_key if reveal_secret else mask_secret(api_key)
     data["model"]["thinking"] = settings.model.thinking_enabled
-    data["context"]["compact_prompt_token_threshold"] = (
-        settings.context.resolved_compact_threshold
-    )
     return _drop_empty(data)
 
 
@@ -327,7 +339,8 @@ def write_config(
         "context": {
             "window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
             "compact_trigger_ratio": DEFAULT_COMPACT_TRIGGER_RATIO,
-            "compact_prompt_token_threshold": DEFAULT_COMPACT_PROMPT_TOKEN_THRESHOLD,
+            "reserved_context_tokens": DEFAULT_RESERVED_CONTEXT_TOKENS,
+            "compact_preserve_recent_messages": DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
         },
         "logging": {
             "debug": False,

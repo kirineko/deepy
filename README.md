@@ -120,6 +120,8 @@ reasoning_effort = "max" # high or max when thinking is enabled
 [context]
 window_tokens = 1048576
 compact_trigger_ratio = 0.8
+reserved_context_tokens = 50000
+compact_preserve_recent_messages = 2
 
 [ui]
 theme = "auto" # auto, dark, or light
@@ -175,6 +177,7 @@ Inside the interactive terminal:
 /model    Select model and thinking strength
 /new      Start a fresh conversation
 /resume   Pick a previous session
+/compact  Compact the active session context
 /theme    Show or change UI theme
 /reset    Delete config and run setup again
 /         Open the command menu

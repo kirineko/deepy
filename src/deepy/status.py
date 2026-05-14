@@ -18,6 +18,7 @@ class StatusReport:
     api_key_configured: bool
     context_window_tokens: int
     compact_threshold_tokens: int
+    reserved_context_tokens: int
     session_count: int
     skill_count: int
     runtime_context: str
@@ -32,6 +33,7 @@ def build_status_report(project_root: Path, settings: Settings) -> StatusReport:
         api_key_configured=bool(settings.model.api_key),
         context_window_tokens=settings.context.window_tokens,
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
+        reserved_context_tokens=settings.context.reserved_context_tokens,
         session_count=len(list_session_entries(root)),
         skill_count=len(discover_skills(root)),
         runtime_context=build_runtime_context(root),
@@ -47,6 +49,7 @@ def format_status_report(report: StatusReport) -> str:
             f"API key: {'configured' if report.api_key_configured else 'missing'}",
             f"Context: {report.context_window_tokens} tokens",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
+            f"Reserved context: {report.reserved_context_tokens} tokens",
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
             "",
@@ -63,6 +66,7 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "api_key_configured": report.api_key_configured,
         "context_window_tokens": report.context_window_tokens,
         "compact_threshold_tokens": report.compact_threshold_tokens,
+        "reserved_context_tokens": report.reserved_context_tokens,
         "session_count": report.session_count,
         "skill_count": report.skill_count,
         "runtime_context": report.runtime_context,

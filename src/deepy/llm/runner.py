@@ -17,6 +17,7 @@ from deepy.utils import json as json_utils
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
 from .agent import build_deepy_agent
+from .compaction import ContextCompactionError, ensure_context_ready
 from .context import build_session_input_callback
 from .events import DeepyStreamEvent, normalize_stream_event
 from .provider import ProviderBundle, build_provider_bundle
@@ -71,6 +72,34 @@ async def run_prompt_once(
         if session_id
         else DeepyJsonlSession.create(root)
     )
+    started_at = time.time()
+    try:
+        readiness = await ensure_context_ready(
+            session,
+            resolved_settings,
+            provider=resolved_provider,
+            additional_input=prompt,
+        )
+    except ContextCompactionError as exc:
+        duration_ms = int((time.time() - started_at) * 1000) if "started_at" in locals() else 0
+        return RunSummary(
+            output=f"Context compaction failed: {exc}",
+            session_id=session.session_id,
+            complete=False,
+            status="context_compaction_failed",
+            duration_ms=duration_ms,
+        )
+    if readiness.compacted and emit_event is not None:
+        compaction = readiness.compaction
+        detail = (
+            f"Auto-compacted context {readiness.before_tokens:,} -> {readiness.after_tokens:,} tokens"
+            if compaction is None
+            else (
+                f"Auto-compacted context {compaction.before_tokens:,} -> "
+                f"{compaction.after_tokens:,} tokens"
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="status", text=detail))
     run_config = RunConfig(
         workflow_name="Deepy",
         trace_include_sensitive_data=False,
@@ -78,7 +107,6 @@ async def run_prompt_once(
         session_input_callback=build_session_input_callback(resolved_settings),
     )
 
-    started_at = time.time()
     chunks: list[str] = []
     result: Any | None = None
     interrupted = False

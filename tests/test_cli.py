@@ -43,7 +43,9 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert config.stat().st_mode & 0o777 == 0o600
     text = config.read_text(encoding="utf-8")
     assert 'api_key = "sk-test"' in text
-    assert "compact_prompt_token_threshold = 838861" in text
+    assert "reserved_context_tokens = 50000" in text
+    assert "compact_preserve_recent_messages = 2" in text
+    assert "compact_prompt_token_threshold" not in text
     assert "[logging]" in text
     assert "[notify]" in text
     assert "[tools.web_search]" in text

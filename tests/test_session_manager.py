@@ -34,23 +34,54 @@ async def test_session_manager_creates_and_replies_to_active_session(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_session_manager_append_and_compact_session(tmp_path):
+async def test_session_manager_append_and_compact_session(monkeypatch, tmp_path):
+    async def fake_run_compaction_model(items, settings, *, provider=None, focus_instruction=None):
+        assert [item["content"] for item in items] == ["one"]
+        assert focus_instruction == "keep decisions"
+        from deepy.usage import TokenUsage
+
+        return "Summary of one.", TokenUsage(completion_tokens=4, total_tokens=4)
+
+    monkeypatch.setattr("deepy.llm.compaction.run_compaction_model", fake_run_compaction_model)
     manager = DeepySessionManager(project_root=tmp_path, deepy_home=tmp_path / "home")
 
-    await manager.append_sdk_items("s1", [{"role": "user", "content": "hello"}])
+    await manager.append_sdk_items(
+        "s1",
+        [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+        ],
+    )
     assert list_session_entries(tmp_path, deepy_home=tmp_path / "home")[0].id == "s1"
 
-    await manager.compact_session("s1")
+    result = await manager.compact_session("s1", focus_instruction="keep decisions")
 
     from deepy.sessions import DeepyJsonlSession
 
     items = await DeepyJsonlSession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
-    assert items == [
-        {
-            "role": "system",
-            "content": "Earlier conversation history was compacted by Deepy. Compacted item count: 1.",
-        }
+    assert result.compacted is True
+    assert result.archive_path is not None
+    assert result.archive_path.exists()
+    assert "Previous context has been compacted" in items[0]["content"]
+    assert items[1:] == [
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_manager_compact_keeps_short_session_unchanged(tmp_path):
+    manager = DeepySessionManager(project_root=tmp_path, deepy_home=tmp_path / "home")
+
+    await manager.append_sdk_items("s1", [{"role": "user", "content": "hello"}])
+    result = await manager.compact_session("s1")
+
+    assert result.compacted is False
+    from deepy.sessions import DeepyJsonlSession
+
+    items = await DeepyJsonlSession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
+    assert items == [{"role": "user", "content": "hello"}]
 
 
 def test_session_manager_interrupts_active_session_and_clears_processes(monkeypatch, tmp_path):

@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from deepy.config import (
+    DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
+    DEFAULT_RESERVED_CONTEXT_TOKENS,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
     load_settings,
     settings_to_toml_dict,
@@ -36,6 +38,32 @@ compact_trigger_ratio = 0.8
     assert settings.model.reasoning_effort == "max"
     assert settings.model.reasoning_mode == "max"
     assert settings.context.resolved_compact_threshold == 838861
+    assert settings.context.reserved_context_tokens == DEFAULT_RESERVED_CONTEXT_TOKENS
+    assert settings.context.compact_preserve_recent_messages == DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES
+
+
+def test_context_compaction_policy_values_ignore_unknown_legacy_threshold(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[context]
+window_tokens = 200000
+compact_trigger_ratio = 0.75
+reserved_context_tokens = 40000
+compact_preserve_recent_messages = 4
+compact_preserve_recent_tokens = 12000
+compact_prompt_token_threshold = 1
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.context.resolved_compact_threshold == 150000
+    assert settings.context.reserved_context_tokens == 40000
+    assert settings.context.compact_preserve_recent_messages == 4
+    assert settings.context.compact_preserve_recent_tokens == 12000
+    assert not hasattr(settings.context, "compact_prompt_token_threshold")
 
 
 def test_deepseek_thinking_default_is_case_insensitive(tmp_path):
@@ -137,6 +165,8 @@ def test_settings_to_toml_masks_api_key(tmp_path):
     data = settings_to_toml_dict(load_settings(config, env={}))
 
     assert data["model"]["api_key"] == "sk-1...7890"
+    assert "reserved_context_tokens" in data["context"]
+    assert "compact_prompt_token_threshold" not in data["context"]
 
 
 def test_loads_ui_theme_values(tmp_path):

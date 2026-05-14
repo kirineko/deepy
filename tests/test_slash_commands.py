@@ -28,6 +28,7 @@ def test_build_slash_commands_prefixes_skills_before_builtins():
         "model",
         "new",
         "resume",
+        "compact",
         "theme",
         "reset",
         "exit",

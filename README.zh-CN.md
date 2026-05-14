@@ -111,6 +111,8 @@ reasoning_effort = "max" # thinking 开启时可选 high 或 max
 [context]
 window_tokens = 1048576
 compact_trigger_ratio = 0.8
+reserved_context_tokens = 50000
+compact_preserve_recent_messages = 2
 
 [ui]
 theme = "auto" # auto, dark, light
@@ -164,6 +166,7 @@ deepy run "summarize this project"
 /model    选择模型和 thinking 强度
 /new      开始新会话
 /resume   选择历史会话继续
+/compact  压缩当前会话上下文
 /theme    查看或切换 UI 主题
 /reset    删除配置并重新引导 setup
 /         打开命令菜单

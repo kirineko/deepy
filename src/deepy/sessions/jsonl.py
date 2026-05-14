@@ -24,6 +24,9 @@ class SessionEntry:
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
     usage: dict[str, Any] | None = None
+    last_usage_tokens: int | None = None
+    pending_tokens: int = 0
+    last_usage_record_count: int | None = None
 
 
 def project_code(project_root: Path) -> str:
@@ -106,7 +109,7 @@ class DeepyJsonlSession:
             self._loaded_items = sanitize_sdk_items_for_replay(
                 [*self._loaded_items, *(dict(item) for item in items)]
             )
-        self._touch_index(active_tokens=self._estimate_active_tokens())
+        self._touch_index_after_append(items)
 
     async def pop_item(self) -> dict[str, Any] | None:
         records = self._load_records()
@@ -118,14 +121,25 @@ class DeepyJsonlSession:
             for record in records:
                 fh.write(json_utils.dumps(record) + "\n")
         self._loaded_items = [item for item in (_sdk_item_from_record(record) for record in records) if item]
-        self._touch_index(active_tokens=self._estimate_active_tokens(records))
+        state = self.context_token_state(records)
+        self._touch_index(
+            active_tokens=state.active_tokens,
+            last_usage_tokens=state.last_usage_tokens,
+            pending_tokens=state.pending_tokens,
+            last_usage_record_count=state.last_usage_record_count,
+        )
         return _sdk_item_from_record(popped)
 
     async def clear_session(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("", encoding="utf-8")
         self._loaded_items = []
-        self._touch_index(active_tokens=0)
+        self._touch_index(
+            active_tokens=0,
+            last_usage_tokens=0,
+            pending_tokens=0,
+            last_usage_record_count=0,
+        )
 
     def record_usage(self, usage: TokenUsage | dict[str, Any] | None) -> None:
         normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
@@ -133,7 +147,75 @@ class DeepyJsonlSession:
             return
         previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
         accumulated = merge_usage(previous.get("usage") if previous else None, normalized)
-        self._touch_index(usage=accumulated.to_dict())
+        record_count = len(self._load_records())
+        self._touch_index(
+            active_tokens=normalized.prompt_tokens,
+            usage=accumulated.to_dict(),
+            last_usage_tokens=normalized.prompt_tokens,
+            pending_tokens=0,
+            last_usage_record_count=record_count,
+        )
+
+    def context_token_state(
+        self,
+        records: list[dict[str, Any]] | None = None,
+    ) -> "ContextTokenState":
+        source = records if records is not None else self._load_records()
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        if previous:
+            last_usage_tokens = _optional_int(previous.get("lastUsageTokens"))
+            last_usage_record_count = _optional_int(previous.get("lastUsageRecordCount"))
+            if last_usage_tokens is not None and last_usage_record_count is not None:
+                bounded_count = max(0, min(last_usage_record_count, len(source)))
+                pending_tokens = sum(_estimate_record_tokens(record) for record in source[bounded_count:])
+                return ContextTokenState(
+                    active_tokens=last_usage_tokens + pending_tokens,
+                    last_usage_tokens=last_usage_tokens,
+                    pending_tokens=pending_tokens,
+                    last_usage_record_count=bounded_count,
+                    estimated=True,
+                )
+        active_tokens = self._estimate_active_tokens(source)
+        return ContextTokenState(
+            active_tokens=active_tokens,
+            last_usage_tokens=None,
+            pending_tokens=0,
+            last_usage_record_count=None,
+            estimated=True,
+        )
+
+    async def replace_items(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        active_tokens: int | None = None,
+    ) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        now = _now_ms()
+        records = [
+            {
+                "id": uuid.uuid4().hex,
+                "session_id": self.session_id,
+                "role": _role_from_item(item),
+                "content": _content_from_item(item),
+                "created_at": now,
+                "meta": {"sdk_item": item},
+            }
+            for item in items
+        ]
+        with self.path.open("w", encoding="utf-8") as fh:
+            for record in records:
+                fh.write(json_utils.dumps(record) + "\n")
+        self._loaded_items = sanitize_sdk_items_for_replay([dict(item) for item in items])
+        estimated_tokens = (
+            active_tokens if active_tokens is not None else self._estimate_active_tokens(records)
+        )
+        self._touch_index(
+            active_tokens=estimated_tokens,
+            last_usage_tokens=estimated_tokens,
+            pending_tokens=0,
+            last_usage_record_count=len(records),
+        )
 
     def _record_from_sdk_item(self, item: dict[str, Any]) -> dict[str, Any]:
         now = _now_ms()
@@ -182,6 +264,9 @@ class DeepyJsonlSession:
         *,
         active_tokens: int | None = None,
         usage: dict[str, Any] | None = None,
+        last_usage_tokens: int | None = None,
+        pending_tokens: int | None = None,
+        last_usage_record_count: int | None = None,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         index_path = self.path.parent / "sessions-index.json"
@@ -198,6 +283,33 @@ class DeepyJsonlSession:
                 "activeTokens": active_tokens
                 if active_tokens is not None
                 else _coerce_int(previous.get("activeTokens"), 0),
+                **(
+                    {"lastUsageTokens": last_usage_tokens}
+                    if last_usage_tokens is not None
+                    else (
+                        {"lastUsageTokens": previous["lastUsageTokens"]}
+                        if "lastUsageTokens" in previous
+                        else {}
+                    )
+                ),
+                **(
+                    {"pendingTokens": pending_tokens}
+                    if pending_tokens is not None
+                    else (
+                        {"pendingTokens": previous["pendingTokens"]}
+                        if "pendingTokens" in previous
+                        else {}
+                    )
+                ),
+                **(
+                    {"lastUsageRecordCount": last_usage_record_count}
+                    if last_usage_record_count is not None
+                    else (
+                        {"lastUsageRecordCount": previous["lastUsageRecordCount"]}
+                        if "lastUsageRecordCount" in previous
+                        else {}
+                    )
+                ),
                 "createdAt": _coerce_int(previous.get("createdAt"), now),
                 "updatedAt": now,
                 **({"usage": usage} if usage is not None else {}),
@@ -214,6 +326,33 @@ class DeepyJsonlSession:
             "sessions": sessions[:MAX_SESSION_INDEX_ENTRIES],
         }
         index_path.write_text(json_utils.dumps_pretty(payload) + "\n", encoding="utf-8")
+
+    def _touch_index_after_append(self, appended_items: list[dict[str, Any]]) -> None:
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        if previous and _optional_int(previous.get("lastUsageTokens")) is not None:
+            last_usage_tokens = _optional_int(previous.get("lastUsageTokens")) or 0
+            previous_pending = _coerce_int(previous.get("pendingTokens"), 0)
+            pending_tokens = previous_pending + sum(estimate_tokens_for_item(item) for item in appended_items)
+            self._touch_index(
+                active_tokens=last_usage_tokens + pending_tokens,
+                last_usage_tokens=last_usage_tokens,
+                pending_tokens=pending_tokens,
+                last_usage_record_count=_coerce_int(
+                    previous.get("lastUsageRecordCount"),
+                    max(0, len(self._load_records()) - len(appended_items)),
+                ),
+            )
+            return
+        self._touch_index(active_tokens=self._estimate_active_tokens())
+
+
+@dataclass(frozen=True)
+class ContextTokenState:
+    active_tokens: int
+    last_usage_tokens: int | None = None
+    pending_tokens: int = 0
+    last_usage_record_count: int | None = None
+    estimated: bool = True
 
 
 def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> list[SessionEntry]:
@@ -239,6 +378,9 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 updated_at=_coerce_int(item.get("updatedAt"), 0),
                 processes=_normalize_processes(item.get("processes")),
                 usage=usage if isinstance(usage, dict) else None,
+                last_usage_tokens=_optional_int(item.get("lastUsageTokens")),
+                pending_tokens=_coerce_int(item.get("pendingTokens"), 0),
+                last_usage_record_count=_optional_int(item.get("lastUsageRecordCount")),
             )
         )
     return entries
@@ -280,6 +422,12 @@ def _coerce_int(value: Any, default: int) -> int:
     if isinstance(value, bool):
         return default
     return value if isinstance(value, int) else default
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 def _normalize_processes(value: Any) -> dict[str, dict[str, str]] | None:

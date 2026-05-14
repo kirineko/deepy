@@ -90,9 +90,47 @@ COMPACT_MESSAGE_KEYS = (
 )
 
 
-def build_compact_prompt(session_messages: list[dict[str, Any]]) -> str:
+def build_compact_prompt(
+    session_messages: list[dict[str, Any]],
+    *,
+    focus_instruction: str | None = None,
+) -> str:
     jsonl = "\n".join(_compact_message_json(message) for message in session_messages)
-    return f"{COMPACT_PROMPT_BASE}\n\nconversation below:\n\n```jsonl\n{jsonl}\n```"
+    focus = ""
+    if focus_instruction and focus_instruction.strip():
+        focus = (
+            "\n\nUser focus instruction:\n"
+            "The user explicitly requested this focus for compaction. Prioritize it without "
+            "dropping current task state:\n"
+            f"{focus_instruction.strip()}"
+        )
+    return f"{COMPACT_PROMPT_BASE}{focus}\n\nconversation below:\n\n```jsonl\n{jsonl}\n```"
+
+
+def build_compact_summary_message(summary: str) -> dict[str, str]:
+    stripped = strip_compact_analysis(summary).strip()
+    return {
+        "role": "user",
+        "content": (
+            "Previous context has been compacted by Deepy. Continue from this summary:\n\n"
+            f"{stripped}"
+        ),
+    }
+
+
+def strip_compact_analysis(text: str) -> str:
+    result = text
+    while True:
+        start = result.find("<analysis>")
+        end = result.find("</analysis>")
+        if start == -1 or end == -1 or end < start:
+            break
+        result = result[:start] + result[end + len("</analysis>") :]
+    summary_start = result.find("<summary>")
+    summary_end = result.find("</summary>")
+    if summary_start != -1 and summary_end != -1 and summary_end > summary_start:
+        result = result[summary_start + len("<summary>") : summary_end]
+    return result.strip()
 
 
 def _compact_message_json(message: dict[str, Any]) -> str:

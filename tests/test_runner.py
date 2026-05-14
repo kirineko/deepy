@@ -14,6 +14,7 @@ from openai import APIStatusError, BadRequestError
 
 from deepy.config import ContextConfig, Settings
 from deepy.config.settings import LoggingConfig, NotifyConfig
+from deepy.llm.compaction import ContextCompactionError, ContextReadiness
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import DEFAULT_MAX_TURNS, format_deepseek_api_error, run_prompt_once
 
@@ -314,15 +315,15 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_run_prompt_once_wires_compacting_session_input_callback(monkeypatch, tmp_path):
-    compacted_inputs: list[list[dict[str, object]]] = []
+async def test_run_prompt_once_session_input_callback_does_not_trim(monkeypatch, tmp_path):
+    prepared_inputs: list[list[dict[str, object]]] = []
 
     class FakeRunner:
         @staticmethod
         def run_streamed(agent, input, max_turns, run_config, session):
             history = [{"role": "user", "content": "old " * 1000}]
             new_input = [{"role": "user", "content": "current"}]
-            compacted_inputs.append(run_config.session_input_callback(history, new_input))
+            prepared_inputs.append(run_config.session_input_callback(history, new_input))
             return FakeStream()
 
     monkeypatch.setattr("agents.Runner", FakeRunner)
@@ -330,14 +331,80 @@ async def test_run_prompt_once_wires_compacting_session_input_callback(monkeypat
     await run_prompt_once(
         "say hello",
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=100, compact_trigger_ratio=0.5)),
+        settings=Settings(
+            context=ContextConfig(
+                window_tokens=10_000,
+                compact_trigger_ratio=0.5,
+                reserved_context_tokens=100,
+            )
+        ),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
     )
 
-    compacted = compacted_inputs[0]
-    assert compacted[0]["role"] == "system"
-    assert "compacted by Deepy" in str(compacted[0]["content"])
-    assert compacted[-1] == {"role": "user", "content": "current"}
+    prepared = prepared_inputs[0]
+    assert prepared == [
+        {"role": "user", "content": "old " * 1000},
+        {"role": "user", "content": "current"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_runs_auto_compaction_before_model_call(monkeypatch, tmp_path):
+    calls: list[str] = []
+    emitted: list[str] = []
+
+    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None):
+        calls.append(additional_input)
+        return ContextReadiness(
+            session_id=session.session_id,
+            before_tokens=900,
+            after_tokens=200,
+            compacted=True,
+        )
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            calls.append("model")
+            return FakeStream()
+
+    monkeypatch.setattr("deepy.llm.runner.ensure_context_ready", fake_ensure_context_ready)
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "continue",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        emit_event=lambda event: emitted.append(event.text) if event.kind == "status" else None,
+    )
+
+    assert calls == ["continue", "model"]
+    assert emitted == ["Auto-compacted context 900 -> 200 tokens"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_blocks_when_pre_run_compaction_fails(monkeypatch, tmp_path):
+    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None):
+        raise ContextCompactionError("too large")
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            raise AssertionError("model request should be blocked")
+
+    monkeypatch.setattr("deepy.llm.runner.ensure_context_ready", fake_ensure_context_ready)
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "continue",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.status == "context_compaction_failed"
+    assert "too large" in summary.output
 
 
 @pytest.mark.asyncio

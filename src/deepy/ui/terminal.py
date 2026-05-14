@@ -42,8 +42,10 @@ from deepy.config import (
     write_config,
 )
 from deepy.llm.events import DeepyStreamEvent
+from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.sessions.manager import DeepySessionManager
 from deepy.skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import build_status_report, format_status_report
 from deepy.update_check import VersionUpdate
@@ -203,7 +205,7 @@ def run_interactive(
                     palette=palette,
                 )
             session_id = next_session
-            if slash.name in {"new", "resume", "reset", "model"}:
+            if slash.name in {"new", "resume", "reset", "model", "compact"}:
                 context_status = _format_context_footer(
                     session_id,
                     project_root=root,
@@ -521,6 +523,7 @@ def _handle_slash_command(
         console.print("/reset      Delete config and run setup again")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
+        console.print("/compact \\[focus] Compact active session context")
         console.print("/new        Start a new session")
         console.print("/exit       Quit")
         return current_session_id
@@ -571,6 +574,15 @@ def _handle_slash_command(
     if command.name == "status":
         console.print(format_status_report(build_status_report(project_root, settings)))
         return current_session_id
+    if command.name == "compact":
+        return _handle_compact_command(
+            command,
+            console,
+            project_root,
+            current_session_id,
+            settings,
+            palette,
+        )
     if command.name == "model":
         return _handle_model_command(
             command,
@@ -618,6 +630,54 @@ def _handle_slash_command(
         return current_session_id
 
     console.print(f"[{palette.error}]Unknown command:[/] /{command.name}")
+    return current_session_id
+
+
+def _handle_compact_command(
+    command: SlashCommand,
+    console: Console,
+    project_root: Path,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+) -> str | None:
+    if not current_session_id:
+        console.print(f"[{palette.muted}]No active session to compact.[/]")
+        return current_session_id
+    session = DeepyJsonlSession.open(project_root, current_session_id)
+    try:
+        items = asyncio.run(session.get_items())
+    except Exception as exc:
+        console.print(f"[{palette.error}]Failed to read session:[/] {exc}")
+        return current_session_id
+    if not items:
+        console.print(f"[{palette.muted}]The context is empty.[/]")
+        return current_session_id
+    console.print(f"[{palette.muted}]Compacting context...[/]")
+    manager = DeepySessionManager(project_root=project_root, settings=settings, active_session_id=current_session_id)
+    try:
+        result = asyncio.run(
+            manager.compact_session(
+                current_session_id,
+                focus_instruction=command.argument or None,
+            )
+        )
+    except ContextCompactionError as exc:
+        console.print(f"[{palette.error}]Compact failed:[/] {exc}")
+        console.print(f"[{palette.muted}]Original session left unchanged.[/]")
+        return current_session_id
+    except Exception as exc:
+        console.print(f"[{palette.error}]Compact failed:[/] {exc}")
+        console.print(f"[{palette.muted}]Original session left unchanged.[/]")
+        return current_session_id
+    if not result.compacted:
+        console.print(f"[{palette.muted}]{result.message or 'There is no context to compact.'}[/]")
+        return current_session_id
+    console.print(
+        f"[{palette.info}]Context compacted:[/] "
+        f"{result.before_tokens:,} -> {result.after_tokens:,} tokens · "
+        f"preserved {result.preserved_item_count} items"
+    )
     return current_session_id
 
 
@@ -1267,8 +1327,9 @@ def _format_context_footer(
         parts.append("context unknown")
         return " · ".join(parts)
 
-    used_tokens = _session_active_tokens(project_root, session_id)
-    used_text = f"{used_tokens:,}" if used_tokens is not None else "unknown"
+    session_entry = _session_entry(project_root, session_id)
+    used_tokens = session_entry.active_tokens if session_entry is not None else (0 if not session_id else None)
+    used_text = _format_token_count_short(used_tokens) if used_tokens is not None else "unknown"
     used_ratio = (
         f" ({used_tokens / window_tokens * 100:.1f}%)"
         if used_tokens is not None
@@ -1280,19 +1341,27 @@ def _format_context_footer(
             if used_tokens is not None
             else ""
         )
-        context = f"context {used_text} / {compact_threshold:,} compact{compact_progress}; window {window_tokens:,}"
+        pending_text = (
+            f" · pending ~{_format_token_count_short(session_entry.pending_tokens)}"
+            if session_entry is not None and session_entry.pending_tokens > 0
+            else ""
+        )
+        context = (
+            f"ctx ~{used_text}/{_format_token_count_short(compact_threshold)}"
+            f"{compact_progress} · win {_format_token_count_short(window_tokens)}{pending_text}"
+        )
         if used_tokens is not None and used_tokens >= compact_threshold:
-            context = f"{context}; compact next"
+            context = f"{context} · compact next"
         parts.append(context)
     else:
-        parts.append(f"context {used_text} / {window_tokens:,}{used_ratio}")
+        parts.append(f"ctx {used_text}/{_format_token_count_short(window_tokens)}{used_ratio}")
 
     return " · ".join(parts)
 
 
-def _session_active_tokens(project_root: Path | None, session_id: str | None) -> int | None:
+def _session_entry(project_root: Path | None, session_id: str | None) -> SessionEntry | None:
     if not session_id:
-        return 0
+        return None
     if project_root is None:
         return None
     try:
@@ -1300,7 +1369,19 @@ def _session_active_tokens(project_root: Path | None, session_id: str | None) ->
     except Exception:
         return None
     entry = next((item for item in entries if item.id == session_id), None)
-    return entry.active_tokens if entry is not None else None
+    return entry
+
+
+def _format_token_count_short(value: int) -> str:
+    if value < 1_000:
+        return str(value)
+    if value < 1_000_000:
+        return f"{round(value / 1_000):g}K"
+    scaled = value / 1_000_000
+    if scaled >= 10:
+        return f"{round(scaled):g}M"
+    rounded = round(scaled, 1)
+    return f"{rounded:g}M"
 
 
 def _format_turn_usage_line(usage: TokenUsage) -> str:
@@ -1426,6 +1507,9 @@ def _print_stream_event(
     if event.kind == "agent_updated":
         return
     if event.kind == "usage":
+        return
+    if event.kind == "status":
+        console.print(_status_line(event.text, palette.info))
         return
 
 

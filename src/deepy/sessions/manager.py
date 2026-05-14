@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from deepy.config import Settings, load_settings
+from deepy.llm.compaction import CompactionResult, compact_session
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.utils import json as json_utils
@@ -69,26 +70,23 @@ class DeepySessionManager:
         )
         await session.add_items(items)
 
-    async def compact_session(self, session_id: str) -> None:
+    async def compact_session(
+        self,
+        session_id: str,
+        *,
+        focus_instruction: str | None = None,
+    ) -> CompactionResult:
         session = DeepyJsonlSession.open(
             self.project_root,
             session_id,
             deepy_home=self.deepy_home,
         )
-        items = await session.get_items()
-        if not items:
-            return
-        await session.clear_session()
-        await session.add_items(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Earlier conversation history was compacted by Deepy. "
-                        f"Compacted item count: {len(items)}."
-                    ),
-                }
-            ]
+        return await compact_session(
+            session,
+            self.settings or load_settings(),
+            provider=self.provider,
+            reason="manual",
+            focus_instruction=focus_instruction,
         )
 
     def interrupt_active_session(self) -> InterruptSummary | None:

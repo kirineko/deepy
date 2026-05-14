@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 from rich.console import Console
 
@@ -24,6 +25,7 @@ from deepy.ui.terminal import _print_stream_event
 from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
 from deepy.ui.terminal import _format_duration_ms
+from deepy.ui.terminal import _format_token_count_short
 from deepy.ui.terminal import _run_once_with_status
 from deepy.ui.terminal import _working_status_text
 from deepy.utils import json as json_utils
@@ -703,8 +705,51 @@ def test_help_slash_command_includes_model(tmp_path):
 
     next_session = _handle_slash_command(SlashCommand("help"), console, tmp_path, "s1")
 
+    rendered = console.export_text()
     assert next_session == "s1"
-    assert "/model" in console.export_text()
+    assert "/model" in rendered
+    assert "/compact [focus]" in rendered
+
+
+def test_compact_slash_command_without_active_session(tmp_path):
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(SlashCommand("compact"), console, tmp_path, None)
+
+    assert next_session is None
+    assert "No active session to compact." in console.export_text()
+
+
+def test_compact_slash_command_runs_manager_and_reports_success(monkeypatch, tmp_path):
+    async def fake_compact_session(self, session_id, *, focus_instruction=None):
+        assert session_id == "s1"
+        assert focus_instruction == "focus paths"
+        return SimpleNamespace(
+            compacted=True,
+            before_tokens=1000,
+            after_tokens=200,
+            preserved_item_count=2,
+            message="Context compacted.",
+        )
+
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
+    monkeypatch.setattr("deepy.sessions.manager.DeepySessionManager.compact_session", fake_compact_session)
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("compact", "focus paths"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Compacting context..." in rendered
+    assert "Context compacted:" in rendered
+    assert "1,000 -> 200 tokens" in rendered
 
 
 def test_theme_slash_command_shows_and_updates_theme(tmp_path):
@@ -918,6 +963,14 @@ def test_format_duration_ms_formats_minutes_and_hours():
     assert _format_duration_ms(3_660_000) == "1h 1m"
 
 
+def test_format_token_count_short_uses_compact_units():
+    assert _format_token_count_short(999) == "999"
+    assert _format_token_count_short(50_000) == "50K"
+    assert _format_token_count_short(838_861) == "839K"
+    assert _format_token_count_short(1_048_576) == "1M"
+    assert _format_token_count_short(1_500_000) == "1.5M"
+
+
 def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     console = Console(record=True)
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
@@ -963,7 +1016,7 @@ def test_format_context_footer_shows_only_model_reasoning_cwd_and_context(tmp_pa
     assert "model deepseek-v4-flash" in toolbar
     assert "thinking high" in toolbar
     assert f"cwd {tmp_path}" in toolbar
-    assert "context 200 / 800 compact (25.0%); window 1,000" in toolbar
+    assert "ctx ~200/800 (25.0%) · win 1K" in toolbar
     assert "Enter send" not in toolbar
     assert "Shift+Enter" not in toolbar
     assert "session" not in toolbar
@@ -1012,9 +1065,9 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "model deepseek-v4-pro" in str(toolbars)
     assert "thinking max" in str(toolbars)
     assert f"cwd {tmp_path}" in str(toolbars)
-    assert "context 0 / 800 compact (0.0%); window 1,000" in str(toolbars)
-    assert "context 200 / 800 compact (25.0%); window 1,000" in str(toolbars)
-    assert "context 50 / 800 compact (6.2%); window 1,000" in str(toolbars)
+    assert "ctx ~0/800 (0.0%) · win 1K" in str(toolbars)
+    assert "ctx ~200/800 (25.0%) · win 1K" in str(toolbars)
+    assert "ctx ~50/800 (6.2%) · win 1K" in str(toolbars)
 
 
 def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monkeypatch):

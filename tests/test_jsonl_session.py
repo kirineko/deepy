@@ -124,6 +124,46 @@ async def test_session_record_usage_accumulates_token_usage(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_token_state_tracks_usage_checkpoint_and_pending(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105})
+    await session.add_items([{"role": "assistant", "content": "x" * 400}])
+
+    state = session.context_token_state()
+    entry = list_session_entries(project, deepy_home=home)[0]
+
+    assert state.last_usage_tokens == 100
+    assert state.pending_tokens > 0
+    assert state.active_tokens == 100 + state.pending_tokens
+    assert entry.last_usage_tokens == 100
+    assert entry.pending_tokens == state.pending_tokens
+    assert entry.active_tokens == state.active_tokens
+
+
+@pytest.mark.asyncio
+async def test_replace_items_resets_checkpoint_to_compacted_estimate(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "hello"}])
+    await session.replace_items(
+        [{"role": "user", "content": "Previous context has been compacted."}],
+        active_tokens=12,
+    )
+
+    state = session.context_token_state()
+    assert state.active_tokens == 12
+    assert state.last_usage_tokens == 12
+    assert state.pending_tokens == 0
+    assert state.last_usage_record_count == 1
+
+
+@pytest.mark.asyncio
 async def test_open_existing_session_reads_same_jsonl(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"
