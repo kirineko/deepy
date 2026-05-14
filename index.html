@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 是一个 DeepSeek 终端编程 Agent，可在终端里阅读项目、编辑文件、运行命令、检索资料，并持续保留项目上下文。"
+      content="Deepy 是一个 DeepSeek 终端编程 Agent，可在终端里阅读项目、编辑文件、运行命令、抓取网页，并用可读 diff 预览审查改动。"
     >
     <title>Deepy - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.png">
@@ -18,7 +18,7 @@
         <span>Deepy</span>
       </a>
       <nav>
-        <a href="#release">0.1.6</a>
+        <a href="#release">0.1.7</a>
         <a href="#features">特性</a>
         <a href="#screenshots">截图</a>
         <a href="#install">安装</a>
@@ -28,20 +28,20 @@
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="terminal-mark">&gt; deepy 0.1.6</p>
+          <p class="terminal-mark">&gt; deepy 0.1.7</p>
           <h1 id="hero-title">DeepSeek Coding Agent</h1>
           <p class="hero-lede">
             在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并用可恢复的 compact
             机制管理长上下文。
           </p>
-          <div class="hero-metrics" aria-label="Deepy 0.1.6 关键能力">
-            <span><strong>/model</strong> 选择 V4 Pro / Flash</span>
-            <span><strong>/compact</strong> 手动压缩上下文</span>
-            <span><strong>auto compact</strong> 会话级自动压缩</span>
+          <div class="hero-metrics" aria-label="Deepy 0.1.7 关键能力">
+            <span><strong>WebFetch</strong> 抓取可读网页内容</span>
+            <span><strong>diff preview</strong> 整行背景与语法高亮</span>
+            <span><strong>/compact</strong> 可恢复长上下文</span>
           </div>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">使用 uv 安装</a>
-            <a class="button secondary" href="#release">查看 0.1.6</a>
+            <a class="button secondary" href="#release">查看 0.1.7</a>
             <a class="button secondary" href="https://github.com/kirineko/deepy">GitHub</a>
           </div>
         </div>
@@ -52,44 +52,103 @@
 
       <section class="release" id="release" aria-labelledby="release-title">
         <div class="section-heading compact">
-          <p class="terminal-mark">&gt; release 0.1.6</p>
-          <h2 id="release-title">最近几个版本的重点能力已经整合进主流程</h2>
+          <p class="terminal-mark">&gt; release 0.1.7</p>
+          <h2 id="release-title">网页抓取和代码改动预览更适合真实编程会话</h2>
           <p>
-            0.1.6 聚焦 Agent 长会话的可靠性：上下文压缩从临时裁剪重构为会话级状态机，
-            同时补齐模型选择、澄清问题、多平台 shell 和主题体验。
+            0.1.7 聚焦工具输出可读性：WebFetch 能从更多动态网页提取有用正文或描述，
+            write/edit diff 预览统一为终端宽度的整行背景，并对代码内容使用 Rich/Pygments
+            语法高亮。
           </p>
         </div>
         <div class="release-grid">
           <article>
             <span>01</span>
-            <h3>Durable context compaction</h3>
+            <h3>Readable WebFetch extraction</h3>
             <p>
-              `/compact [focus]` 会先生成模型总结，再归档原始 JSONL，并用 summary +
-              最近上下文重写 active session，`/resume` 可以直接从压缩后状态继续。
+              HTML 抓取会优先提取正文，并在正文不可用时回退到标准 description /
+              OpenGraph / Twitter 元数据，压缩响应也会先解码再解析。
             </p>
           </article>
           <article>
             <span>02</span>
-            <h3>Auto compact before model calls</h3>
+            <h3>Full-width diff preview</h3>
             <p>
-              根据有效上下文、pending 估算和 reserved 预算在请求前自动压缩。压缩失败时
-              阻断本轮请求，不再静默丢弃历史。
+              `write` 和 `edit` 使用统一的 diff 样式，新增和删除行的红绿背景会铺满终端宽度，
+              `+` / `-` marker 保持醒目但更柔和。
             </p>
           </article>
           <article>
             <span>03</span>
-            <h3>Model and thinking controls</h3>
+            <h3>Syntax-highlighted changes</h3>
             <p>
-              交互式 `/model` 可以在 DeepSeek V4 Pro / Flash 之间切换，并选择
-              `none`、`high` 或 `max` thinking 强度。
+              diff 里的新增和删除代码会根据文件路径推断语言，并用 Rich/Pygments 渲染 token
+              颜色，同时保留 old/new 行号和 diff 背景。
             </p>
           </article>
           <article>
             <span>04</span>
-            <h3>Cleaner terminal decisions</h3>
+            <h3>Dark and light theme coverage</h3>
             <p>
-              AskUserQuestion 支持同一轮内多次澄清，并隐藏内部 JSON 协议；Windows
-              PowerShell、light/dark/auto 主题和状态栏也更贴近日常使用。
+              变更预览覆盖 dark/light palette，宽字符 padding、超大 write 预览和实时流式
+              工具输出都有回归测试保护。
+            </p>
+          </article>
+        </div>
+        <div class="release-history" aria-label="历史版本">
+          <article>
+            <span>0.1.6</span>
+            <h3>长会话可靠性</h3>
+            <p>
+              上下文压缩从临时裁剪重构为会话级状态机；补齐 `/compact`、自动 compact、
+              `/model`、澄清问题、多平台 shell 和主题体验。
+            </p>
+          </article>
+          <article>
+            <span>0.1.5</span>
+            <h3>欢迎页和品牌打磨</h3>
+            <p>
+              优化 Deepy 启动画面、品牌呈现和发布文档，让首次进入终端会话时能更快看到
+              模型、工作目录和核心命令。
+            </p>
+          </article>
+          <article>
+            <span>0.1.4</span>
+            <h3>发行稳定化</h3>
+            <p>
+              延续 0.1.x CLI 发行节奏，整理安装、页面和包发布流程，为 PyPI 与 GitHub
+              Pages 的自动化发布打基础。
+            </p>
+          </article>
+          <article>
+            <span>0.1.3</span>
+            <h3>终端工作流完善</h3>
+            <p>
+              持续完善终端 UI、会话恢复、工具输出展示和 Agent 编程流程，让 Deepy 更接近
+              日常项目里的可用编码助手。
+            </p>
+          </article>
+          <article>
+            <span>0.1.2</span>
+            <h3>更新检查收敛</h3>
+            <p>
+              版本更新检查收敛到 PyPI 来源，减少多来源版本判断的不确定性，让启动提示更
+              可预测。
+            </p>
+          </article>
+          <article>
+            <span>0.1.1</span>
+            <h3>PyPI trusted publishing</h3>
+            <p>
+              增加 PyPI trusted publishing 工作流，开始把 Deepy 的发布路径从本地构建推进到
+              GitHub Actions 自动发布。
+            </p>
+          </article>
+          <article>
+            <span>0.1.0</span>
+            <h3>初始公开版本</h3>
+            <p>
+              发布 Deepy 的核心终端 Agent 体验：项目阅读、文件编辑、命令执行、WebSearch /
+              WebFetch、会话历史和 GitHub Pages 首页。
             </p>
           </article>
         </div>
@@ -216,7 +275,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.1.6</span>
+      <span>Deepy 0.1.7</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

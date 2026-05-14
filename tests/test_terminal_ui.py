@@ -405,6 +405,36 @@ def test_print_stream_event_renders_write_preview_after_status():
     assert "Edited" not in rendered
 
 
+def test_print_stream_event_passes_console_width_to_diff_preview(monkeypatch):
+    console = Console(record=True, width=72)
+    captured: dict[str, int | None] = {}
+    output = {
+        "ok": True,
+        "name": "edit",
+        "output": "Edited file",
+        "error": None,
+        "metadata": {
+            "path": "/repo/src/lib.rs",
+            "diff": "--- a//repo/src/lib.rs\n+++ b//repo/src/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+        },
+        "awaitUserResponse": False,
+    }
+
+    def fake_render_tool_diff_preview(text, *, palette=None, width=None):
+        del text, palette
+        captured["width"] = width
+        return None
+
+    monkeypatch.setattr(terminal, "render_tool_diff_preview", fake_render_tool_diff_preview)
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(kind="tool_output", text=json_utils.dumps(output)),
+    )
+
+    assert captured["width"] == 72
+
+
 def test_print_stream_event_write_call_summary_hides_content_argument():
     console = Console(record=True, width=120)
     pending = {}

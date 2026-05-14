@@ -14,8 +14,9 @@ def test_theme_palettes_expose_required_roles():
         assert palette.user
         assert palette.tool
         assert palette.diff_added
+        assert palette.diff_added_marker
         assert palette.diff_removed
-        assert palette.write_preview_content
+        assert palette.diff_removed_marker
         assert palette.toolbar_background
 
 

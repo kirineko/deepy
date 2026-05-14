@@ -4,8 +4,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from rich.cells import cell_len
 from rich.console import Group
 from rich.panel import Panel
+from rich.style import Style
+from rich.syntax import Syntax
 from rich.text import Text
 
 from deepy.utils import json as json_utils
@@ -19,6 +22,8 @@ from deepy.ui.styles import (
 MAX_SUMMARY_CHARS = 160
 MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
+MAX_SYNTAX_SAMPLE_CHARS = 4_000
+MAX_SYNTAX_SAMPLE_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
 ROLE_TITLES = {
     "user": "You",
@@ -146,6 +151,7 @@ def render_tool_diff_preview(
     *,
     max_lines: int = MAX_DIFF_LINES,
     palette: UiPalette | None = None,
+    width: int | None = None,
 ) -> Group | None:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
@@ -158,14 +164,11 @@ def render_tool_diff_preview(
     preview = parse_diff_preview_view(diff, path=view.path)
     if not preview.lines:
         return None
-    if view.name.lower() == "write":
-        return Group(
-            render_diff_preview_header(preview, label="Wrote", palette=palette),
-            *(render_write_preview_line(line, palette=palette) for line in preview.lines),
-        )
+    syntax = _diff_preview_syntax(preview, palette)
+    label = "Wrote" if view.name.lower() == "write" else "Edited"
     return Group(
-        render_diff_preview_header(preview, label="Edited", palette=palette),
-        *(render_diff_preview_line(line, palette=palette) for line in preview.lines),
+        render_diff_preview_header(preview, label=label, palette=palette),
+        *(render_diff_preview_line(line, palette=palette, width=width, syntax=syntax) for line in preview.lines),
     )
 
 
@@ -192,20 +195,36 @@ def render_diff_preview_header(
     return Text(f"• {label}", style=f"bold {palette.info}")
 
 
-def render_diff_preview_line(line: DiffPreviewLine, *, palette: UiPalette | None = None) -> Text:
+def render_diff_preview_line(
+    line: DiffPreviewLine,
+    *,
+    palette: UiPalette | None = None,
+    width: int | None = None,
+    syntax: Syntax | None = None,
+) -> Text:
     palette = palette or DARK_PALETTE
     content = line.content if line.content else " "
     old_lineno = _line_number_text(line.old_lineno)
     new_lineno = _line_number_text(line.new_lineno)
     if line.kind == "added":
-        return Text.assemble(
-            (f"{old_lineno} {new_lineno} + ", palette.diff_added_gutter),
-            (content, palette.diff_added),
+        return _pad_changed_diff_line(
+            Text.assemble(
+                (f"{old_lineno} {new_lineno} ", palette.diff_added_gutter),
+                ("+ ", palette.diff_added_marker),
+                _highlight_diff_content(content, syntax=syntax, style=palette.diff_added),
+            ),
+            width=width,
+            style=palette.diff_added,
         )
     if line.kind == "removed":
-        return Text.assemble(
-            (f"{old_lineno} {new_lineno} - ", palette.diff_removed_gutter),
-            (content, palette.diff_removed),
+        return _pad_changed_diff_line(
+            Text.assemble(
+                (f"{old_lineno} {new_lineno} ", palette.diff_removed_gutter),
+                ("- ", palette.diff_removed_marker),
+                _highlight_diff_content(content, syntax=syntax, style=palette.diff_removed),
+            ),
+            width=width,
+            style=palette.diff_removed,
         )
     return Text.assemble(
         (f"{old_lineno} {new_lineno}   ", palette.diff_context),
@@ -213,18 +232,80 @@ def render_diff_preview_line(line: DiffPreviewLine, *, palette: UiPalette | None
     )
 
 
-def render_write_preview_line(line: DiffPreviewLine, *, palette: UiPalette | None = None) -> Text:
-    palette = palette or DARK_PALETTE
-    content = line.content if line.content else " "
-    lineno = line.new_lineno if line.new_lineno is not None else line.old_lineno
-    marker = "-" if line.kind == "removed" else " "
-    gutter_style = palette.diff_removed_gutter if line.kind == "removed" else palette.write_preview_gutter
-    content_style = (
-        palette.write_preview_removed if line.kind == "removed" else palette.write_preview_content
-    )
-    return Text.assemble(
-        (f"{_line_number_text(lineno)} {marker} ", gutter_style),
-        (content, content_style),
+def _pad_changed_diff_line(text: Text, *, width: int | None, style: str) -> Text:
+    if width is None or width <= 0:
+        return text
+    padding = width - cell_len(text.plain)
+    if padding > 0:
+        text.append(" " * padding, style=style)
+    return text
+
+
+def _diff_preview_syntax(preview: DiffPreview, palette: UiPalette) -> Syntax | None:
+    lexer = _guess_diff_preview_lexer(preview)
+    if lexer is None:
+        return None
+    try:
+        return Syntax("", lexer, theme=_diff_syntax_theme(palette), line_numbers=False)
+    except Exception:
+        return None
+
+
+def _guess_diff_preview_lexer(preview: DiffPreview) -> str | None:
+    if not preview.path:
+        return None
+    sample_lines: list[str] = []
+    sample_size = 0
+    for line in preview.lines:
+        if line.kind not in {"added", "removed", "context"} or not line.content.strip():
+            continue
+        sample_lines.append(line.content)
+        sample_size += len(line.content) + 1
+        if len(sample_lines) >= MAX_SYNTAX_SAMPLE_LINES or sample_size >= MAX_SYNTAX_SAMPLE_CHARS:
+            break
+    sample = "\n".join(sample_lines)
+    if not sample.strip():
+        return None
+    try:
+        lexer = Syntax.guess_lexer(preview.path, sample)
+    except Exception:
+        return None
+    return lexer if lexer and lexer != "default" else None
+
+
+def _highlight_diff_content(
+    content: str,
+    *,
+    syntax: Syntax | None,
+    style: str,
+) -> Text:
+    if syntax is None or not content.strip():
+        return Text(content, style=style)
+    try:
+        highlighted = syntax.highlight(content)
+    except Exception:
+        return Text(content, style=style)
+
+    base = Style.parse(style)
+    text = Text(content, style=base)
+    for span in highlighted.spans:
+        text.stylize(_syntax_style_on_diff_background(span.style, base), span.start, span.end)
+    return text
+
+
+def _diff_syntax_theme(palette: UiPalette) -> str:
+    return "default" if palette.name == "light" else "monokai"
+
+
+def _syntax_style_on_diff_background(style: Style, base: Style) -> Style:
+    return Style(
+        color=style.color or base.color,
+        bgcolor=base.bgcolor,
+        bold=style.bold,
+        italic=style.italic,
+        underline=style.underline,
+        dim=style.dim,
+        strike=style.strike,
     )
 
 
@@ -342,11 +423,16 @@ def is_invisible_execution(content: str) -> bool:
     return isinstance(parsed, dict) and parsed.get("name") == "shell" and parsed.get("ok") is not True
 
 
-def render_tool_output(output: str, *, palette: UiPalette | None = None) -> Group:
+def render_tool_output(
+    output: str,
+    *,
+    palette: UiPalette | None = None,
+    width: int | None = None,
+) -> Group:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
     parts: list[Any] = [Text(view.summary, style=status_style(view.ok, palette))]
-    diff = render_tool_diff_preview(output, palette=palette)
+    diff = render_tool_diff_preview(output, palette=palette, width=width)
     if diff:
         parts.append(diff)
     return Group(*parts)
@@ -357,12 +443,13 @@ def render_message(
     *,
     project_root: str | None = None,
     palette: UiPalette | None = None,
+    width: int | None = None,
 ) -> Any:
     palette = palette or DARK_PALETTE
     role = _string_or_default(message.get("role"), "message")
     content = _message_content_text(message.get("content"))
     if role == "tool":
-        return render_tool_output(content, palette=palette)
+        return render_tool_output(content, palette=palette, width=width)
 
     title = ROLE_TITLES.get(role, role.title())
     if role == "assistant":

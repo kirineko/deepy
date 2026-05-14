@@ -32,12 +32,11 @@ class UiPalette:
     panel_border: str
     diff_added: str
     diff_added_gutter: str
+    diff_added_marker: str
     diff_removed: str
     diff_removed_gutter: str
+    diff_removed_marker: str
     diff_context: str
-    write_preview_gutter: str
-    write_preview_content: str
-    write_preview_removed: str
     prompt: str
     placeholder: str
     toolbar_background: str
@@ -69,14 +68,13 @@ DARK_PALETTE = UiPalette(
     system=STYLE_SYSTEM,
     tool=STYLE_TOOL,
     panel_border=STYLE_INFO,
-    diff_added="#e5e7eb on #14532d",
-    diff_added_gutter="#cbd5e1 on #14532d",
-    diff_removed="#e5e7eb on #7f1d1d",
-    diff_removed_gutter="#cbd5e1 on #7f1d1d",
+    diff_added="#e5e7eb on #1f3d2b",
+    diff_added_gutter="#cbd5e1 on #1f3d2b",
+    diff_added_marker="bold #86efac on #1f3d2b",
+    diff_removed="#e5e7eb on #4a2528",
+    diff_removed_gutter="#cbd5e1 on #4a2528",
+    diff_removed_marker="bold #fca5a5 on #4a2528",
     diff_context=STYLE_MUTED,
-    write_preview_gutter="#94a3b8 on #1f2937",
-    write_preview_content="#d7def8 on #1f2937",
-    write_preview_removed="#fecaca on #7f1d1d",
     prompt="ansicyan bold",
     placeholder="#8a90aa",
     toolbar_background="#161821",
@@ -108,14 +106,13 @@ LIGHT_PALETTE = UiPalette(
     system="#7e22ce",
     tool="#92400e",
     panel_border="#2563eb",
-    diff_added="#064e3b on #dcfce7",
-    diff_added_gutter="#065f46 on #bbf7d0",
-    diff_removed="#7f1d1d on #fee2e2",
-    diff_removed_gutter="#991b1b on #fecaca",
+    diff_added="#064e3b on #ecfdf5",
+    diff_added_gutter="#065f46 on #d1fae5",
+    diff_added_marker="bold #047857 on #d1fae5",
+    diff_removed="#7f1d1d on #fef2f2",
+    diff_removed_gutter="#991b1b on #fee2e2",
+    diff_removed_marker="bold #b91c1c on #fee2e2",
     diff_context="#374151",
-    write_preview_gutter="#475569 on #e2e8f0",
-    write_preview_content="#111827 on #f8fafc",
-    write_preview_removed="#7f1d1d on #fee2e2",
     prompt="#0369a1 bold",
     placeholder="#64748b",
     toolbar_background="#e2e8f0",

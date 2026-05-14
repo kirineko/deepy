@@ -1519,7 +1519,7 @@ def _print_stream_event(
         call_summary = call.summary if call is not None else view.name
         summary = format_tool_progress_summary(call_summary, event.text)
         console.print(_status_line(summary, status_style(view.ok, palette)))
-        diff = render_tool_diff_preview(event.text, palette=palette)
+        diff = render_tool_diff_preview(event.text, palette=palette, width=console.width)
         if diff:
             console.print(diff)
         return
