@@ -92,7 +92,12 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## shell" in prompt
     assert "Use `modify` for file changes" in prompt
     assert "Run shell commands using the Runtime context's command dialect" in prompt
+    assert "clarification would materially improve the result" in prompt
+    assert "reasonable assumption" in prompt
     assert "## modify" in prompt
+    assert "## AskUserQuestion" in prompt
+    assert "ambiguous intent" in prompt
+    assert "high-impact trade-offs" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt
     assert "Runtime context here." in prompt

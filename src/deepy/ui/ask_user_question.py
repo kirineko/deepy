@@ -49,7 +49,7 @@ def build_options(question: AskUserQuestionItem | None) -> list[AskUserQuestionO
             )
             for option in question.options
         ],
-        AskUserQuestionOptionEntry(label="Other", value=OTHER_VALUE, is_other=True),
+        AskUserQuestionOptionEntry(label="Other / custom answer", value=OTHER_VALUE, is_other=True),
     ]
 
 

@@ -298,6 +298,7 @@ def test_collect_pending_question_response_declines_empty_answer():
 
 
 def test_collect_pending_question_response_accepts_multi_select_text():
+    prompts: list[str] = []
     response = _collect_pending_question_response(
         Console(record=True),
         [
@@ -307,10 +308,11 @@ def test_collect_pending_question_response_accepts_multi_select_text():
                 "options": [{"label": "tests"}, {"label": "docs"}],
             }
         ],
-        input_func=lambda prompt: "1, lint",
+        input_func=lambda prompt: prompts.append(prompt) or "1, lint",
     )
 
     assert '"Which scopes?"="tests, lint"' in response
+    assert prompts == ["Answer numbers separated by commas, text, or empty to decline"]
 
 
 def test_print_stream_event_merges_tool_call_and_output():
@@ -449,6 +451,56 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
     assert "write src/lib.rs (4 lines, 34 chars)  ok" in rendered
     assert "println" not in rendered
     assert "fn main() {}" in rendered
+
+
+def test_print_stream_event_ask_user_question_hides_question_arguments():
+    console = Console(record=True, width=160)
+    pending = {}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="AskUserQuestion",
+            payload={
+                "call_id": "call-1",
+                "arguments": json_utils.dumps(
+                    {
+                        "questions": [
+                            {
+                                "question": "Which path?",
+                                "options": [{"label": "fast"}, {"label": "thorough"}],
+                            }
+                        ]
+                    }
+                ),
+            },
+        ),
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "AskUserQuestion",
+                    "output": "Waiting for user input.",
+                    "error": None,
+                    "metadata": {"kind": "ask_user_question", "questions": []},
+                    "awaitUserResponse": True,
+                }
+            ),
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "AskUserQuestion  ok - Waiting for user input." in rendered
+    assert "Which path?" not in rendered
+    assert "questions" not in rendered
 
 
 def test_print_user_input_uses_prompt_marker():
@@ -963,6 +1015,95 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "context 0 / 800 compact (0.0%); window 1,000" in str(toolbars)
     assert "context 200 / 800 compact (25.0%); window 1,000" in str(toolbars)
     assert "context 50 / 800 compact (6.2%); window 1,000" in str(toolbars)
+
+
+def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["start", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    calls: list[dict[str, object]] = []
+    collected_questions: list[str] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
+        if len(calls) == 1:
+            return RunSummary(
+                output="",
+                session_id="s1",
+                complete=False,
+                status="waiting_for_user",
+                pending_questions=[{"question": "First?", "options": [{"label": "Yes"}]}],
+            )
+        if len(calls) == 2:
+            return RunSummary(
+                output="",
+                session_id="s1",
+                complete=False,
+                status="waiting_for_user",
+                pending_questions=[{"question": "Second?", "options": [{"label": "No"}]}],
+            )
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    def fake_collect(console, pending_questions):
+        collected_questions.append(pending_questions[0]["question"])
+        return f"answer for {pending_questions[0]['question']}"
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+    monkeypatch.setattr(terminal, "_collect_pending_question_response", fake_collect)
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert collected_questions == ["First?", "Second?"]
+    assert [call["session_id"] for call in calls] == [None, "s1", "s1"]
+    assert [call["prompt"] for call in calls] == ["start", "answer for First?", "answer for Second?"]
+    rendered = console.export_text()
+    assert "done" in rendered
+    assert "> answer for First?" not in rendered
+    assert "> answer for Second?" not in rendered
+
+
+def test_run_interactive_stops_pending_question_loop_at_limit(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["start", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    calls: list[object] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        calls.append(prompt)
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[{"question": "Again?", "options": [{"label": "Yes"}]}],
+        )
+
+    monkeypatch.setattr(terminal, "MAX_CLARIFICATION_ROUNDS_PER_TURN", 1)
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+    monkeypatch.setattr(
+        terminal,
+        "_collect_pending_question_response",
+        lambda console, pending_questions: "answer",
+    )
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert calls == ["start", "answer"]
+    assert "Stopped after 1 clarification rounds." in console.export_text()
 
 
 def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypatch):

@@ -47,7 +47,9 @@ Core rules:
 - Use `modify` for file changes: `content` only creates new files; existing files use `old_string`/`new_string`.
 - After project generators create scaffold files, read and edit the generated block instead of replacing the file.
 - Run shell commands using the Runtime context's command dialect and path style: `powershell` -> PowerShell with Windows paths; `cmd` -> cmd; `posix` -> POSIX shell.
-- Ask only when blocked by missing intent or required approval.
+- Ask when clarification would materially improve the result: ambiguous intent, unclear scope,
+  user preferences, high-impact trade-offs, or required approval. For low-impact details,
+  proceed with a reasonable assumption and state it briefly.
 
 Tool protocol:
 Tool results are JSON strings: ok, name, output, error, metadata, awaitUserResponse.

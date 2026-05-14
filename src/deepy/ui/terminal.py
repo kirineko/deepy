@@ -89,6 +89,7 @@ from deepy.utils import json as json_utils
 RunOnce = Callable[..., Awaitable[RunSummary]]
 InputFunc = Callable[[str], str]
 VersionUpdateChecker = Callable[[str], VersionUpdate | None]
+MAX_CLARIFICATION_ROUNDS_PER_TURN = 5
 
 
 @dataclass(frozen=True)
@@ -222,21 +223,29 @@ def run_interactive(
             palette=palette,
         )
         session_id = summary.session_id
-        if summary.status == "waiting_for_user":
-            response = _collect_pending_question_response(output, summary.pending_questions)
-            if response:
-                _print_user_input(output, response, palette=palette)
-                summary = _run_once_with_status(
-                    output,
-                    run_once,
-                    response,
-                    project_root=root,
-                    settings=settings,
-                    session_id=session_id,
-                    skill_names=list(loaded_skill_names),
-                    palette=palette,
+        clarification_rounds = 0
+        while summary.status == "waiting_for_user":
+            if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
+                output.print(
+                    f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
+                    "clarification rounds. Please continue with a narrower request.[/]"
                 )
-                session_id = summary.session_id
+                break
+            response = _collect_pending_question_response(output, summary.pending_questions)
+            if not response:
+                break
+            clarification_rounds += 1
+            summary = _run_once_with_status(
+                output,
+                run_once,
+                response,
+                project_root=root,
+                settings=settings,
+                session_id=session_id,
+                skill_names=list(loaded_skill_names),
+                palette=palette,
+            )
+            session_id = summary.session_id
         _print_assistant_output(output, summary.output, palette=palette)
         _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
         context_status = _format_context_footer(
@@ -1437,7 +1446,7 @@ def _collect_pending_question_response(
     if not questions:
         return ""
     answers: dict[str, str] = {}
-    chooser = input_func or (lambda prompt: Prompt.ask(prompt, default=""))
+    chooser = input_func or (lambda prompt: console.input(f"{prompt}: "))
     for question in questions:
         answer = _prompt_for_question(console, question, chooser)
         if answer is None:
@@ -1456,7 +1465,12 @@ def _prompt_for_question(
     for index, option in enumerate(options, 1):
         detail = f" - {option.description}" if option.description else ""
         console.print(f"{index}. {option.label}{detail}")
-    raw_answer = input_func("Answer number, text, or empty to decline").strip()
+    prompt = (
+        "Answer numbers separated by commas, text, or empty to decline"
+        if question.multi_select
+        else "Answer number, text, or empty to decline"
+    )
+    raw_answer = input_func(prompt).strip()
     if not raw_answer:
         return None
     return _answer_question_from_text(question, raw_answer)

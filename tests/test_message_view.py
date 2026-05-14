@@ -412,6 +412,26 @@ def test_format_tool_call_summary_formats_modify_create_without_content_body():
     assert "println" not in summary
 
 
+def test_format_tool_call_summary_hides_ask_user_question_arguments():
+    summary = format_tool_call_summary(
+        "AskUserQuestion",
+        json.dumps(
+            {
+                "questions": [
+                    {
+                        "question": "Which path?",
+                        "options": [{"label": "fast"}, {"label": "thorough"}],
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert summary == "AskUserQuestion"
+    assert "Which path?" not in summary
+    assert "questions" not in summary
+
+
 def test_format_tool_progress_summary_merges_call_and_output_status():
     output = (
         '{"ok":true,"name":"read","output":"","error":null,'

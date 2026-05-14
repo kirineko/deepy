@@ -452,6 +452,9 @@ def _format_tool_params_snippet(
     *,
     project_root: str | None,
 ) -> str:
+    if tool_name == "AskUserQuestion":
+        return ""
+
     if tool_name in {"write", "modify"} and "content" in args:
         return _format_write_params_snippet(args, project_root=project_root)
 

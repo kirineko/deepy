@@ -160,7 +160,7 @@ def test_build_options_appends_other_option():
 
     assert [(option.label, option.value, option.description, option.is_other) for option in options] == [
         ("npm", "npm", "Use package-lock.json.", False),
-        ("Other", OTHER_VALUE, None, True),
+        ("Other / custom answer", OTHER_VALUE, None, True),
     ]
 
 
