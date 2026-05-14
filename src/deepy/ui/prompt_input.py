@@ -34,6 +34,7 @@ SHIFT_ENTER_SEQUENCES = (
     "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
 )
 _WINDOWS_SHIFT_ENTER_PATCH_ATTR = "_deepy_shift_enter_patched"
+_WINDOWS_SHIFT_ENTER_VT100_PATCH_ATTR = "_deepy_shift_enter_vt100_patched"
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,12 @@ def build_prompt_key_bindings(
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         event.current_buffer.insert_text("\n")
 
+    if is_windows_newline_fallback_enabled():
+
+        @bindings.add("c-j")
+        def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+            event.current_buffer.insert_text("\n")
+
     return bindings
 
 
@@ -111,16 +118,40 @@ def install_windows_shift_enter_key_sequence_override(
     *,
     platform_name: str | None = None,
     console_input_reader_cls: type | None = None,
+    vt100_console_input_reader_cls: type | None = None,
+    event_types: object | None = None,
+    key_event_record_cls: type | None = None,
 ) -> bool:
     resolved_platform = platform_name or sys.platform
     if not resolved_platform.startswith("win"):
         return False
-    if console_input_reader_cls is None:
+    if console_input_reader_cls is None and vt100_console_input_reader_cls is None:
         try:
             from prompt_toolkit.input import win32
         except (AssertionError, ImportError):
             return False
         console_input_reader_cls = win32.ConsoleInputReader
+        vt100_console_input_reader_cls = getattr(win32, "Vt100ConsoleInputReader", None)
+        if event_types is None:
+            event_types = getattr(win32, "EventTypes", None)
+        if key_event_record_cls is None:
+            key_event_record_cls = getattr(win32, "KEY_EVENT_RECORD", None)
+    patched = False
+    if console_input_reader_cls is not None:
+        patched = _patch_windows_console_input_reader(console_input_reader_cls) or patched
+    if vt100_console_input_reader_cls is not None:
+        patched = (
+            _patch_windows_vt100_console_input_reader(
+                vt100_console_input_reader_cls,
+                event_types=event_types,
+                key_event_record_cls=key_event_record_cls,
+            )
+            or patched
+        )
+    return patched
+
+
+def _patch_windows_console_input_reader(console_input_reader_cls: type) -> bool:
     if getattr(console_input_reader_cls, _WINDOWS_SHIFT_ENTER_PATCH_ATTR, False):
         return True
 
@@ -145,6 +176,46 @@ def install_windows_shift_enter_key_sequence_override(
     return True
 
 
+def _patch_windows_vt100_console_input_reader(
+    vt100_console_input_reader_cls: type,
+    *,
+    event_types: object | None,
+    key_event_record_cls: type | None,
+) -> bool:
+    if event_types is None or key_event_record_cls is None:
+        return False
+    if getattr(vt100_console_input_reader_cls, _WINDOWS_SHIFT_ENTER_VT100_PATCH_ATTR, False):
+        return True
+
+    original_get_keys = vt100_console_input_reader_cls._get_keys
+    shift_pressed = getattr(vt100_console_input_reader_cls, "SHIFT_PRESSED", 0x0010)
+
+    def patched_get_keys(self, read, input_records):
+        for index in range(read.value):
+            input_record = input_records[index]
+            if input_record.EventType not in event_types:
+                continue
+            event_name = event_types[input_record.EventType]
+            event = getattr(input_record.Event, event_name)
+            if not isinstance(event, key_event_record_cls) or not event.KeyDown:
+                continue
+            if _is_windows_shift_enter_event(event, shift_pressed=shift_pressed):
+                yield SHIFT_ENTER_SEQUENCES[0]
+                continue
+            u_char = event.uChar.UnicodeChar
+            if u_char != "\x00":
+                yield u_char
+
+    setattr(
+        vt100_console_input_reader_cls,
+        "_deepy_original_get_keys",
+        original_get_keys,
+    )
+    vt100_console_input_reader_cls._get_keys = patched_get_keys
+    setattr(vt100_console_input_reader_cls, _WINDOWS_SHIFT_ENTER_VT100_PATCH_ATTR, True)
+    return True
+
+
 def _is_windows_shift_enter_key_press(
     ev,
     key_presses: list,
@@ -158,6 +229,20 @@ def _is_windows_shift_enter_key_press(
         return False
     key = getattr(key_presses[0], "key", None)
     return key in {Keys.ControlM, Keys.ControlJ, Keys.Enter}
+
+
+def _is_windows_shift_enter_event(ev, *, shift_pressed: int) -> bool:
+    control_key_state = getattr(ev, "ControlKeyState", 0)
+    if not control_key_state & shift_pressed:
+        return False
+    u_char = getattr(getattr(ev, "uChar", None), "UnicodeChar", "")
+    virtual_key_code = getattr(ev, "VirtualKeyCode", None)
+    return u_char in {"\r", "\n"} or virtual_key_code == 13
+
+
+def is_windows_newline_fallback_enabled(platform_name: str | None = None) -> bool:
+    resolved_platform = platform_name or sys.platform
+    return resolved_platform.startswith("win")
 
 
 def prompt_for_input(

@@ -640,6 +640,34 @@ def test_edit_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"alpha\r\ngamma\r\n"
 
 
+def test_edit_matches_crlf_file_with_lf_old_string(tmp_path):
+    target = tmp_path / "unicode_demo.py"
+    target.write_bytes(
+        "def demo():\r\n    title = '中文和Unicode字符演示程序'\r\n    return title\r\n".encode(
+            "utf-8"
+        )
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("unicode_demo.py"))
+    payload = decode(
+        runtime.modify(
+            "unicode_demo.py",
+            old="def demo():\n    title = '中文和Unicode字符演示程序'",
+            new="def demo():\n    title = 'Unicode Character Demo Program'",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["matched_via"] == "line_endings"
+    assert payload["metadata"]["line_endings"] == "CRLF"
+    assert target.read_bytes() == (
+        b"def demo():\r\n"
+        b"    title = 'Unicode Character Demo Program'\r\n"
+        b"    return title\r\n"
+    )
+
+
 def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     target = tmp_path / "utf16.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-16")
@@ -665,6 +693,63 @@ def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path):
     assert payload["ok"] is True
     assert payload["metadata"]["encoding"] == "gb18030"
     assert target.read_bytes().decode("gb18030") == "城市=上海\n"
+
+
+def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path):
+    target = tmp_path / "gbk_crlf.txt"
+    target.write_bytes("标题=中文\r\n城市=北京\r\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("gbk_crlf.txt"))
+    payload = decode(
+        runtime.modify(
+            "gbk_crlf.txt",
+            old="标题=中文\n城市=北京",
+            new="Title=Chinese\nCity=Beijing",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["matched_via"] == "line_endings"
+    assert payload["metadata"]["encoding"] == "gb18030"
+    assert payload["metadata"]["line_endings"] == "CRLF"
+    assert target.read_bytes().decode("gb18030") == "Title=Chinese\r\nCity=Beijing\r\n"
+
+
+def test_edit_matches_crlf_file_with_lf_old_string_in_snippet_scope(tmp_path):
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"alpha\r\ntarget = 1\r\nomega\r\nbeta\r\ntarget = 1\r\ndone\r\n")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read("sample.txt", start_line=4, limit=2))
+    snippet_id = read_payload["metadata"]["snippet"]["id"]
+    payload = decode(
+        runtime.modify(
+            None,
+            old="beta\ntarget = 1",
+            new="beta\ntarget = 2",
+            snippet_id=snippet_id,
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["matched_via"] == "line_endings"
+    assert payload["metadata"]["read_scope_type"] == "snippet"
+    assert target.read_bytes() == b"alpha\r\ntarget = 1\r\nomega\r\nbeta\r\ntarget = 2\r\ndone\r\n"
+
+
+def test_edit_line_ending_tolerant_absent_text_still_reports_closest_match(tmp_path):
+    target = tmp_path / "near.txt"
+    target.write_bytes(b"alpha\r\nbeta = 1\r\ngamma\r\n")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("near.txt"))
+    payload = decode(runtime.modify("near.txt", old="bet = 1\nextra", new="beta = 2\nextra"))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "old_string not found in file."
+    assert "closest_match" in payload["metadata"]
+    assert payload["metadata"]["closest_match"]["strategy"] == "fuzzy_window"
 
 
 def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):

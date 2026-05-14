@@ -142,6 +142,13 @@ class MatchOccurrence:
 
 
 @dataclass(frozen=True)
+class EditMatchResult:
+    matches: list[MatchOccurrence]
+    matched_text: str
+    matched_via: str
+
+
+@dataclass(frozen=True)
 class ClosestMatch:
     text: str
     start_line: int
@@ -230,6 +237,63 @@ def _find_occurrences(text: str, needle: str, scope: tuple[int, int]) -> list[Ma
             )
         )
         search_index = found + len(needle)
+
+
+def _find_edit_occurrences(
+    text: str,
+    needle: str,
+    scope: tuple[int, int],
+    line_endings: str,
+    *,
+    matched_via: str = "exact",
+) -> EditMatchResult | None:
+    matches = _find_occurrences(text, needle, scope)
+    if matches:
+        return EditMatchResult(matches=matches, matched_text=needle, matched_via=matched_via)
+    normalized_needle = _normalize_line_endings(needle, line_endings)
+    if normalized_needle == needle:
+        return None
+    normalized_matches = _find_occurrences(text, normalized_needle, scope)
+    if not normalized_matches:
+        return None
+    return EditMatchResult(
+        matches=normalized_matches,
+        matched_text=normalized_needle,
+        matched_via=_line_ending_matched_via(matched_via),
+    )
+
+
+def _find_loose_escape_edit_occurrences(
+    text: str,
+    needle: str,
+    scope: tuple[int, int],
+    line_endings: str,
+) -> list[tuple[MatchOccurrence, float, str, str]]:
+    matches = [
+        (occurrence, score, matched_text, "loose_escape")
+        for occurrence, score, matched_text in _find_loose_escape_occurrences(text, needle, scope)
+    ]
+    normalized_needle = _normalize_line_endings(needle, line_endings)
+    if normalized_needle == needle:
+        return matches
+    matches.extend(
+        (
+            occurrence,
+            score,
+            matched_text,
+            "loose_escape_line_endings",
+        )
+        for occurrence, score, matched_text in _find_loose_escape_occurrences(
+            text,
+            normalized_needle,
+            scope,
+        )
+    )
+    return matches
+
+
+def _line_ending_matched_via(matched_via: str) -> str:
+    return "line_endings" if matched_via == "exact" else f"{matched_via}_line_endings"
 
 
 def _offset_to_line(text: str, offset: int) -> int:
@@ -1309,12 +1373,14 @@ class ToolRuntime:
             return ToolResult.error_result(name, error or "File is not writable.").to_json()
         text_metadata = _read_text_metadata(target)
         text = text_metadata.content
+        line_endings = text_metadata.line_endings
         scope = _edit_scope(text, snippet)
-        matches = _find_occurrences(text, old, scope)
-        matched_via = "exact"
+        match_result = _find_edit_occurrences(text, old, scope, line_endings)
+        matches = match_result.matches if match_result is not None else []
+        matched_via = match_result.matched_via if match_result is not None else "exact"
         replacement_new = new
         if not matches:
-            loose_matches = _find_loose_escape_occurrences(text, old, scope)
+            loose_matches = _find_loose_escape_edit_occurrences(text, old, scope, line_endings)
             if len(loose_matches) == 1 and loose_matches[0][1] == 1.0:
                 corrected = _correct_escaped_strings_with_llm(
                     self.settings,
@@ -1325,14 +1391,20 @@ class ToolRuntime:
                 )
                 if corrected is not None:
                     corrected_old, corrected_new = corrected
-                    corrected_matches = _find_occurrences(text, corrected_old, scope)
-                    if corrected_matches:
-                        matches = corrected_matches
+                    corrected_match_result = _find_edit_occurrences(
+                        text,
+                        corrected_old,
+                        scope,
+                        line_endings,
+                        matched_via="llm_escape_correction",
+                    )
+                    if corrected_match_result is not None:
+                        matches = corrected_match_result.matches
                         replacement_new = corrected_new
-                        matched_via = "llm_escape_correction"
+                        matched_via = corrected_match_result.matched_via
                 if not matches:
                     matches = [loose_matches[0][0]]
-                    matched_via = "loose_escape"
+                    matched_via = loose_matches[0][3]
         if not matches:
             closest_match = _find_closest_match(text, old, scope)
             metadata = {"scope": _format_scope_metadata(target, snippet, scope, text)}
@@ -1364,7 +1436,6 @@ class ToolRuntime:
                     ),
                 },
             ).to_json()
-        line_endings = text_metadata.line_endings
         normalized_new = _normalize_line_endings(replacement_new, line_endings)
         updated = _apply_replacements(text, matches, normalized_new, replace_all)
         _write_text_with_encoding(target, updated, text_metadata.encoding)

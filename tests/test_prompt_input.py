@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import deepy.ui.prompt_input as prompt_input
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
@@ -21,6 +22,7 @@ from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
 from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
 from deepy.ui.prompt_input import install_windows_shift_enter_key_sequence_override
+from deepy.ui.prompt_input import is_windows_newline_fallback_enabled
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import prompt_for_input
@@ -185,6 +187,45 @@ def test_prompt_key_bindings_enter_submits_and_escape_enter_inserts_newline():
     assert calls == ["submit", "\n"]
 
 
+def test_prompt_key_bindings_windows_ctrl_j_fallback_inserts_newline(monkeypatch):
+    monkeypatch.setattr(prompt_input.sys, "platform", "win32")
+    bindings = build_prompt_key_bindings()
+    calls: list[str] = []
+
+    class Buffer:
+        def validate_and_handle(self):
+            calls.append("submit")
+
+        def insert_text(self, text: str):
+            calls.append(text)
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
+    ctrl_j = next(binding for binding in bindings.bindings if key_values(binding) == ("c-j",))
+
+    enter.handler(Event())
+    ctrl_j.handler(Event())
+
+    assert calls == ["submit", "\n"]
+
+
+def test_prompt_key_bindings_ctrl_j_fallback_is_windows_only(monkeypatch):
+    monkeypatch.setattr(prompt_input.sys, "platform", "darwin")
+    bindings = build_prompt_key_bindings()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    assert not any(key_values(binding) == ("c-j",) for binding in bindings.bindings)
+    assert is_windows_newline_fallback_enabled("win32")
+    assert not is_windows_newline_fallback_enabled("linux")
+
+
 def test_prompt_key_bindings_ctrl_d_returns_exit_confirmation_when_empty():
     bindings = build_prompt_key_bindings()
     results: list[str] = []
@@ -245,13 +286,19 @@ def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
     from prompt_toolkit.input.vt100_parser import Vt100Parser
 
     install_shift_enter_key_sequence_overrides()
-    keys: list[tuple[str, str]] = []
-    parser = Vt100Parser(lambda key_press: keys.append((str(key_press.key), key_press.data)))
+    parsed: list[list[tuple[str, str]]] = []
 
-    parser.feed(SHIFT_ENTER_SEQUENCES[0])
-    parser.flush()
+    for sequence in SHIFT_ENTER_SEQUENCES:
+        keys: list[tuple[str, str]] = []
+        parser = Vt100Parser(lambda key_press: keys.append((str(key_press.key), key_press.data)))
+        parser.feed(sequence)
+        parser.flush()
+        parsed.append(keys)
 
-    assert keys == [("Keys.Escape", SHIFT_ENTER_SEQUENCES[0]), ("Keys.ControlM", "")]
+    assert parsed == [
+        [("Keys.Escape", sequence), ("Keys.ControlM", "")]
+        for sequence in SHIFT_ENTER_SEQUENCES
+    ]
 
 
 def test_windows_shift_enter_console_input_maps_to_escape_enter():
@@ -282,6 +329,63 @@ def test_windows_shift_enter_console_input_maps_to_escape_enter():
 
     assert [key.key for key in shifted] == [Keys.Escape, Keys.ControlM]
     assert [key.key for key in plain] == [Keys.ControlM]
+
+
+def test_windows_shift_enter_vt100_console_input_yields_supported_sequence():
+    class FakeKeyEvent:
+        def __init__(self, control_key_state: int, char: str = "\r", key_down: bool = True):
+            self.ControlKeyState = control_key_state
+            self.KeyDown = key_down
+            self.VirtualKeyCode = 13
+            self.uChar = type("UChar", (), {"UnicodeChar": char})()
+
+    class FakeEvent:
+        def __init__(self, key_event):
+            self.KeyEvent = key_event
+
+    class FakeInputRecord:
+        EventType = 1
+
+        def __init__(self, key_event):
+            self.Event = FakeEvent(key_event)
+
+    class FakeRead:
+        def __init__(self, value: int):
+            self.value = value
+
+    class FakeVt100ConsoleInputReader:
+        def _get_keys(self, read, input_records):
+            for record in input_records[: read.value]:
+                yield record.Event.KeyEvent.uChar.UnicodeChar
+
+    assert install_windows_shift_enter_key_sequence_override(
+        platform_name="win32",
+        vt100_console_input_reader_cls=FakeVt100ConsoleInputReader,
+        event_types={1: "KeyEvent"},
+        key_event_record_cls=FakeKeyEvent,
+    )
+    assert install_windows_shift_enter_key_sequence_override(
+        platform_name="win32",
+        vt100_console_input_reader_cls=FakeVt100ConsoleInputReader,
+        event_types={1: "KeyEvent"},
+        key_event_record_cls=FakeKeyEvent,
+    )
+
+    shifted = list(
+        FakeVt100ConsoleInputReader()._get_keys(
+            FakeRead(1),
+            [FakeInputRecord(FakeKeyEvent(0x0010))],
+        )
+    )
+    plain = list(
+        FakeVt100ConsoleInputReader()._get_keys(
+            FakeRead(1),
+            [FakeInputRecord(FakeKeyEvent(0))],
+        )
+    )
+
+    assert shifted == [SHIFT_ENTER_SEQUENCES[0]]
+    assert plain == ["\r"]
 
 
 def test_windows_shift_enter_patch_is_noop_on_posix_platforms():
