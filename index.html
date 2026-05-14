@@ -18,6 +18,7 @@
         <span>Deepy</span>
       </a>
       <nav>
+        <a href="#release">0.1.6</a>
         <a href="#features">特性</a>
         <a href="#screenshots">截图</a>
         <a href="#install">安装</a>
@@ -27,18 +28,70 @@
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="terminal-mark">&gt; deepy</p>
+          <p class="terminal-mark">&gt; deepy 0.1.6</p>
           <h1 id="hero-title">DeepSeek Coding Agent</h1>
           <p class="hero-lede">
-            在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并持续保留项目上下文。
+            在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并用可恢复的 compact
+            机制管理长上下文。
           </p>
+          <div class="hero-metrics" aria-label="Deepy 0.1.6 关键能力">
+            <span><strong>/model</strong> 选择 V4 Pro / Flash</span>
+            <span><strong>/compact</strong> 手动压缩上下文</span>
+            <span><strong>auto compact</strong> 会话级自动压缩</span>
+          </div>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">使用 uv 安装</a>
+            <a class="button secondary" href="#release">查看 0.1.6</a>
             <a class="button secondary" href="https://github.com/kirineko/deepy">GitHub</a>
           </div>
         </div>
         <div class="hero-visual" aria-label="Deepy 终端欢迎界面">
           <img src="asset/welcome.jpg" alt="Deepy 终端启动界面">
+        </div>
+      </section>
+
+      <section class="release" id="release" aria-labelledby="release-title">
+        <div class="section-heading compact">
+          <p class="terminal-mark">&gt; release 0.1.6</p>
+          <h2 id="release-title">最近几个版本的重点能力已经整合进主流程</h2>
+          <p>
+            0.1.6 聚焦 Agent 长会话的可靠性：上下文压缩从临时裁剪重构为会话级状态机，
+            同时补齐模型选择、澄清问题、多平台 shell 和主题体验。
+          </p>
+        </div>
+        <div class="release-grid">
+          <article>
+            <span>01</span>
+            <h3>Durable context compaction</h3>
+            <p>
+              `/compact [focus]` 会先生成模型总结，再归档原始 JSONL，并用 summary +
+              最近上下文重写 active session，`/resume` 可以直接从压缩后状态继续。
+            </p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Auto compact before model calls</h3>
+            <p>
+              根据有效上下文、pending 估算和 reserved 预算在请求前自动压缩。压缩失败时
+              阻断本轮请求，不再静默丢弃历史。
+            </p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Model and thinking controls</h3>
+            <p>
+              交互式 `/model` 可以在 DeepSeek V4 Pro / Flash 之间切换，并选择
+              `none`、`high` 或 `max` thinking 强度。
+            </p>
+          </article>
+          <article>
+            <span>04</span>
+            <h3>Cleaner terminal decisions</h3>
+            <p>
+              AskUserQuestion 支持同一轮内多次澄清，并隐藏内部 JSON 协议；Windows
+              PowerShell、light/dark/auto 主题和状态栏也更贴近日常使用。
+            </p>
+          </article>
         </div>
       </section>
 
@@ -64,6 +117,10 @@
             <strong>终端体验</strong>
             <span>渲染 Markdown、thinking、diff、每轮 usage 和上下文窗口状态。</span>
           </article>
+          <article>
+            <strong>长上下文可靠性</strong>
+            <span>用 pending token accounting、reserved budget 和可恢复归档保护长会话。</span>
+          </article>
         </div>
       </section>
 
@@ -75,7 +132,7 @@
 
         <article class="feature-row">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; 开发</p>
+            <p class="terminal-mark">&gt; code</p>
             <h3>编写代码并运行验证</h3>
             <p>
               让 Deepy 实现功能、补充测试、运行项目命令并总结结果。diff 会直接在终端中
@@ -87,7 +144,7 @@
 
         <article class="feature-row flipped">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; 总结</p>
+            <p class="terminal-mark">&gt; explain</p>
             <h3>把执行结果整理成说明</h3>
             <p>
               Deepy 可以把命令输出和项目文件整理成可读的 Markdown，包括项目结构、
@@ -99,7 +156,7 @@
 
         <article class="feature-row">
           <div class="feature-copy">
-            <p class="terminal-mark">&gt; 查资料</p>
+            <p class="terminal-mark">&gt; research</p>
             <h3>检索并抓取来源页面</h3>
             <p>
               WebSearch 用于查找最新资料；WebFetch 可以读取指定 URL，在需要精确网页
@@ -159,7 +216,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.1.4</span>
+      <span>Deepy 0.1.6</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

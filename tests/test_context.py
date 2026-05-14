@@ -4,7 +4,6 @@ from deepy.config.settings import ContextConfig, Settings
 from deepy.llm.context import (
     build_session_input_callback,
     estimate_tokens_for_item,
-    estimate_tokens_for_items,
     should_auto_compact,
 )
 from deepy.prompts import build_compact_prompt

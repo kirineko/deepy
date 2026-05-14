@@ -9,6 +9,7 @@
   --accent: #6ee7d8;
   --green: #a7f3a1;
   --yellow: #f6d675;
+  --orange: #ffb86b;
   --shadow: 0 24px 80px rgba(7, 10, 24, 0.38);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -131,6 +132,33 @@ h1 {
   font-weight: 650;
 }
 
+.hero-metrics {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 38rem;
+  margin-top: 1.6rem;
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.hero-metrics span {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2.65rem;
+  padding: 0 0.9rem;
+  border-left: 3px solid rgba(110, 231, 216, 0.78);
+  background: rgba(43, 48, 75, 0.5);
+}
+
+.hero-metrics strong {
+  color: var(--accent);
+  font-family:
+    "SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.9rem;
+}
+
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -174,9 +202,15 @@ h1 {
 }
 
 .intro,
+.release,
 .showcase,
 .install {
   padding: clamp(4rem, 7vw, 7rem) clamp(1rem, 5vw, 5rem);
+}
+
+.release {
+  border-top: 1px solid rgba(107, 140, 255, 0.16);
+  background: rgba(15, 18, 32, 0.18);
 }
 
 .intro {
@@ -230,6 +264,50 @@ h2 {
 .section-heading {
   max-width: 54rem;
   margin-bottom: clamp(2rem, 5vw, 4rem);
+}
+
+.section-heading.compact {
+  max-width: 62rem;
+}
+
+.release-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.release-grid article {
+  min-height: 18rem;
+  padding: 1.35rem;
+  border: 1px solid rgba(107, 140, 255, 0.24);
+  background:
+    linear-gradient(180deg, rgba(107, 140, 255, 0.11), rgba(43, 48, 75, 0.58)),
+    rgba(43, 48, 75, 0.62);
+}
+
+.release-grid span {
+  display: block;
+  margin-bottom: 2.4rem;
+  color: var(--orange);
+  font-family:
+    "SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.release-grid h3 {
+  margin-bottom: 0.85rem;
+  color: #f0f4ff;
+  font-size: clamp(1.2rem, 2vw, 1.65rem);
+  line-height: 1.15;
+}
+
+.release-grid p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+  font-weight: 600;
+  line-height: 1.65;
 }
 
 .feature-row {
@@ -341,6 +419,7 @@ footer a {
 
   .hero,
   .intro,
+  .release-grid,
   .install,
   .feature-row,
   .feature-row.flipped {
@@ -359,6 +438,7 @@ footer a {
 @media (max-width: 560px) {
   .hero,
   .intro,
+  .release,
   .showcase,
   .install {
     padding-left: 1rem;
@@ -371,5 +451,13 @@ footer a {
 
   .button {
     width: 100%;
+  }
+
+  .hero-metrics span {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: 0.75rem 0.9rem;
   }
 }

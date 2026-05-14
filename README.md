@@ -210,6 +210,5 @@ assets live outside the package directory and are not included in the wheel.
 
 ## Release Status
 
-Deepy is preparing its first public `0.1.5` release. The current release path is
-GitHub + PyPI. Standalone binaries and npm wrappers can be added later, but the
-primary distribution is the Python CLI.
+Deepy `0.1.6` is released through GitHub and PyPI. Standalone binaries and npm
+wrappers can be added later, but the primary distribution is the Python CLI.

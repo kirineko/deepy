@@ -198,5 +198,5 @@ wheel。
 
 ## 发布状态
 
-Deepy 正在准备第一个公开 `0.1.5` 版本。当前计划通过 GitHub 和 PyPI 发布。独立可执行
-文件和 npm wrapper 可以后续再加，第一版以 Python CLI 为主。
+Deepy `0.1.6` 通过 GitHub 和 PyPI 发布。独立可执行文件和 npm wrapper 可以后续再加，
+当前主要发行形态是 Python CLI。
