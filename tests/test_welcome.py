@@ -100,8 +100,11 @@ def test_build_welcome_settings_shows_available_update(tmp_path):
 def test_build_deepy_ascii_logo_contains_terminal_mark():
     rendered = build_deepy_ascii_logo().plain
 
+    assert ".----." in rendered
     assert ">_" in rendered
     assert "Deepy" in rendered
+    assert ".-''''-." not in rendered
+    assert "____" not in rendered
 
 
 def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
