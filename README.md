@@ -50,7 +50,7 @@ of hiding tool calls behind chat text.
 - **Local command mode**: type `!cmd` to run a non-interactive local shell command
   without sending it to the model; the result is still saved as context.
 - **Cross-platform shell handling**: POSIX shell, PowerShell, cmd, Windows paths,
-  UTF-8 output, CRLF editing, and pywinpty-backed local command mode.
+  UTF-8 output, CRLF editing, and non-interactive Windows local command mode.
 
 ## See It Work
 

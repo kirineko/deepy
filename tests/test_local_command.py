@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import io
 import shlex
 import sys
 
@@ -15,6 +16,18 @@ from deepy.ui.local_command import (
     shell_tool_result_json,
 )
 from deepy.utils import json as json_utils
+
+
+def _run_windows_test_command(command: str, tmp_path, **kwargs) -> LocalCommandResult:
+    return run_local_command(
+        command,
+        cwd=tmp_path,
+        shell_path="/bin/sh",
+        platform_name="win32",
+        os_name="nt",
+        env={"PATH": "/bin:/usr/bin"},
+        **kwargs,
+    )
 
 
 def test_parse_local_command_detects_bang_command():
@@ -124,7 +137,48 @@ def test_run_local_command_does_not_persist_cd_between_commands(tmp_path):
     assert second.output.strip() == str(tmp_path)
 
 
-def test_windows_runner_reports_missing_pywinpty(tmp_path, monkeypatch):
+def test_windows_runner_uses_pipe_success_captures_output(tmp_path):
+    result = _run_windows_test_command("printf ok", tmp_path)
+
+    assert result.ok
+    assert result.exit_code == 0
+    assert result.tty_mode == "pipe"
+    assert result.os_family == "windows"
+    assert result.output == "ok"
+
+
+def test_windows_runner_non_zero_exit(tmp_path):
+    result = _run_windows_test_command("exit 7", tmp_path)
+
+    assert not result.ok
+    assert result.exit_code == 7
+    assert result.tty_mode == "pipe"
+    assert result.error == "Command exited with code 7."
+
+
+def test_windows_runner_timeout_returns_partial_output(tmp_path):
+    script = "import time; print('started', flush=True); time.sleep(2)"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = _run_windows_test_command(command, tmp_path, timeout_ms=500)
+
+    assert not result.ok
+    assert result.timed_out
+    assert result.tty_mode == "pipe"
+    assert result.error == "Command timed out."
+    assert "started" in result.output
+
+
+def test_windows_runner_interruption_metadata(tmp_path):
+    result = _run_windows_test_command("sleep 2", tmp_path, should_interrupt=lambda: True)
+
+    assert not result.ok
+    assert result.interrupted
+    assert result.tty_mode == "pipe"
+    assert result.error == "Command interrupted."
+
+
+def test_windows_runner_does_not_require_pywinpty(tmp_path, monkeypatch):
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -134,8 +188,35 @@ def test_windows_runner_reports_missing_pywinpty(tmp_path, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
+    result = _run_windows_test_command("printf ok", tmp_path)
+
+    assert result.ok
+    assert result.tty_mode == "pipe"
+    assert result.output == "ok"
+
+
+def test_windows_runner_preserves_powershell_shell_args_without_shell_true(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        stdout = io.BytesIO(b"ok\r\n")
+
+        @staticmethod
+        def poll():
+            return 0
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    def fake_popen(args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr("deepy.ui.local_command.subprocess.Popen", fake_popen)
+
     result = run_local_command(
-        "echo hi",
+        "Write-Output ok",
         cwd=tmp_path,
         shell_path="powershell.exe",
         platform_name="win32",
@@ -143,9 +224,94 @@ def test_windows_runner_reports_missing_pywinpty(tmp_path, monkeypatch):
         env={"PSModulePath": "modules"},
     )
 
-    assert not result.ok
-    assert result.tty_mode == "unavailable"
-    assert "pywinpty" in (result.error or "")
+    assert result.ok
+    assert result.output == "ok\n"
+    assert calls[0]["args"] == [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Write-Output ok",
+    ]
+    assert "shell" not in calls[0]["kwargs"]
+
+
+def test_windows_runner_preserves_cmd_shell_args_without_shell_true(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        stdout = io.BytesIO(b"ok\r\n")
+
+        @staticmethod
+        def poll():
+            return 0
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    def fake_popen(args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr("deepy.ui.local_command.subprocess.Popen", fake_popen)
+
+    result = run_local_command(
+        "echo ok",
+        cwd=tmp_path,
+        shell_path="cmd.exe",
+        platform_name="win32",
+        os_name="nt",
+        env={"ComSpec": "cmd.exe"},
+    )
+
+    assert result.ok
+    assert result.output == "ok\n"
+    assert calls[0]["args"] == ["cmd.exe", "/d", "/s", "/c", "echo ok"]
+    assert "shell" not in calls[0]["kwargs"]
+
+
+def test_windows_runner_normalizes_and_sanitizes_output(tmp_path):
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write("
+        "b'\\x1b[31m' + '中文'.encode('utf-8') + b'\\x1b[0m\\r\\nnext\\rline\\x01'"
+        ")"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = _run_windows_test_command(command, tmp_path)
+
+    assert result.ok
+    assert result.output == "中文\nnext\nline"
+    assert result.display_output == "中文\nnext\nline"
+    assert result.context_output == "中文\nnext\nline"
+
+
+def test_shell_tool_result_json_sanitizes_windows_output(tmp_path):
+    result = LocalCommandResult(
+        command="echo dirty",
+        output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+        display_output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+        context_output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+        exit_code=0,
+        cwd=tmp_path,
+        shell_path="powershell.exe",
+        shell_kind="powershell",
+        command_dialect="powershell",
+        path_style="windows",
+        os_family="windows",
+        tty_mode="pipe",
+        duration_ms=1,
+        timeout_ms=1000,
+    )
+
+    payload = json_utils.loads(shell_tool_result_json(result))
+
+    assert payload["output"] == "中文\nnext"
+    assert "\x1b" not in payload["output"]
+    assert "\x01" not in payload["output"]
 
 
 def test_shell_tool_result_json_marks_local_command_metadata(tmp_path):
@@ -232,3 +398,27 @@ async def test_synthetic_shell_transcript_round_trips_through_session(tmp_path):
     entries = list_session_entries(tmp_path / "project", deepy_home=tmp_path / "home")
     assert entries[0].active_tokens > 0
     assert entries[0].usage is None
+
+
+@pytest.mark.asyncio
+async def test_windows_synthetic_shell_transcript_stores_sanitized_output(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    session = DeepyJsonlSession.create(project, deepy_home=tmp_path / "home", session_id="s1")
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write("
+        "b'\\x1b[31m' + '中文'.encode('utf-8') + b'\\x1b[0m\\r\\nnext\\x01'"
+        ")"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    result = _run_windows_test_command(command, project)
+    items = build_synthetic_shell_transcript_items(f"!{command}", result, call_id="call-local")
+
+    await session.add_items(items)
+
+    stored_items = await session.get_items()
+    payload = json_utils.loads(stored_items[2]["output"])
+    assert payload["output"] == "中文\nnext"
+    assert payload["metadata"]["ttyMode"] == "pipe"
+    assert "\x1b" not in payload["output"]

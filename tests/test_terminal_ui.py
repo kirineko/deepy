@@ -1366,6 +1366,50 @@ def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_p
     assert "ctx win " in str(toolbars[1])
 
 
+def test_run_interactive_local_command_renders_sanitized_windows_output(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["!echo dirty", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    def fake_prompt_for_input(session, **kwargs):
+        return next(prompts)
+
+    def fake_run_local_command(command, *, cwd, should_interrupt=None):
+        return LocalCommandResult(
+            command=command,
+            output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+            display_output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+            context_output="\x1b[31m中文\x1b[0m\r\nnext\x01",
+            exit_code=0,
+            cwd=cwd,
+            shell_path="powershell.exe",
+            shell_kind="powershell",
+            command_dialect="powershell",
+            path_style="windows",
+            os_family="windows",
+            tty_mode="pipe",
+            duration_ms=1,
+            timeout_ms=1000,
+        )
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+    monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "中文" in rendered
+    assert "next" in rendered
+    assert "\x1b" not in rendered
+    assert "[31m" not in rendered
+
+
 def test_run_interactive_empty_local_command_does_not_append_or_call_model(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
     prompts = iter(["!", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])

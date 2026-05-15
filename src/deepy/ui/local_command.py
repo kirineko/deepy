@@ -4,6 +4,7 @@ import errno
 import contextlib
 import os
 import queue
+import re
 import select
 import shutil
 import signal
@@ -29,6 +30,21 @@ DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 120_000
 DEFAULT_DISPLAY_OUTPUT_LIMIT = 30_000
 DEFAULT_CONTEXT_OUTPUT_LIMIT = 8_000
 _TRUNCATED_MARKER = "\n... output truncated ...\n"
+_ANSI_CONTROL_RE = re.compile(
+    r"""
+    \x1b
+    (?:
+        \[[0-?]*[ -/]*[@-~]
+        |\][^\x07\x1b]*(?:\x07|\x1b\\)
+        |P[^\x1b]*(?:\x1b\\)
+        |_[^\x1b]*(?:\x1b\\)
+        |\^[^\x1b]*(?:\x1b\\)
+        |[@-Z\\-_]
+    )
+    """,
+    re.VERBOSE,
+)
+_TERMINAL_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
 @dataclass(frozen=True)
@@ -97,7 +113,7 @@ def run_local_command(
     capture_limit = max(display_limit, context_limit) + len(_TRUNCATED_MARKER)
 
     if runtime.os_family == "windows":
-        return _run_windows_pty(
+        return _run_windows_pipes(
             command,
             cwd=cwd,
             env=process_env,
@@ -155,6 +171,8 @@ def shell_tool_result_json(
     output: str | None = None,
 ) -> str:
     rendered_output = result.context_output if output is None else output
+    if result.os_family == "windows":
+        rendered_output = _sanitize_terminal_output(rendered_output)
     metadata = _shell_metadata(result)
     if result.ok:
         return ToolResult.ok_result("shell", rendered_output, metadata=metadata).to_json()
@@ -270,7 +288,7 @@ def _run_posix_pty(
     )
 
 
-def _run_windows_pty(
+def _run_windows_pipes(
     command: str,
     *,
     cwd: Path,
@@ -284,70 +302,56 @@ def _run_windows_pty(
     started_at: float,
     should_interrupt: Callable[[], bool] | None,
 ) -> LocalCommandResult:
-    try:
-        from winpty import PtyProcess  # type: ignore[import-not-found]
-    except Exception:
-        error = "Windows local command mode requires the pywinpty package."
-        return _error_result(
-            command,
-            cwd=cwd,
-            runtime=runtime,
-            shell_path=shell_path,
-            timeout_ms=timeout_ms,
-            started_at=started_at,
-            tty_mode="unavailable",
-            error=error,
-        )
-
-    process = None
+    process: subprocess.Popen[bytes] | None = None
     timed_out = False
     interrupted = False
-    captured = ""
+    captured = bytearray()
     capture_truncated = False
-    output_queue: queue.Queue[str] = queue.Queue()
-    stop_reader = threading.Event()
+    output_queue: queue.Queue[bytes] = queue.Queue()
     try:
-        process = PtyProcess.spawn(
+        process = subprocess.Popen(
             [shell_path, *_shell_args(runtime, command)],
             cwd=str(cwd),
             env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
         )
-        reader = threading.Thread(
-            target=_read_windows_pty_output,
-            args=(process, output_queue, stop_reader),
-            daemon=True,
-        )
+        reader = threading.Thread(target=_read_pipe_output, args=(process, output_queue), daemon=True)
         reader.start()
         deadline = started_at + timeout_ms / 1000
         while True:
-            captured, drained_truncated = _drain_text_queue(
+            drained_truncated = _drain_bytes_queue(
                 output_queue,
                 captured,
                 capture_limit,
             )
             capture_truncated = capture_truncated or drained_truncated
-            if not process.isalive():
+            if process.poll() is not None:
                 break
             if callable(should_interrupt) and should_interrupt():
                 interrupted = True
-                process.terminate(force=True)
+                _terminate_windows_process(process)
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
-                process.terminate(force=True)
+                _terminate_windows_process(process)
                 break
             time.sleep(min(0.05, remaining))
-        stop_reader.set()
         reader.join(timeout=0.2)
-        captured, drained_truncated = _drain_text_queue(output_queue, captured, capture_limit)
-        capture_truncated = capture_truncated or drained_truncated
-        exit_code = process.exitstatus
-        output = captured
+        capture_truncated = (
+            capture_truncated or _drain_bytes_queue(output_queue, captured, capture_limit)
+        )
+        if len(captured) >= capture_limit:
+            capture_truncated = True
+        exit_code = process.poll()
+        output = _sanitize_terminal_output(_decode_output(bytes(captured)))
         error = _command_error(exit_code, timed_out=timed_out, interrupted=interrupted)
     except Exception as exc:
         exit_code = None
-        output = captured
+        output = _sanitize_terminal_output(_decode_output(bytes(captured)))
         error = str(exc)
 
     display_output, display_truncated = _limit_output(output, display_limit)
@@ -364,7 +368,7 @@ def _run_windows_pty(
         command_dialect=runtime.command_dialect,
         path_style=runtime.path_style,
         os_family=runtime.os_family,
-        tty_mode="winpty",
+        tty_mode="pipe",
         duration_ms=_elapsed_ms(started_at),
         timeout_ms=timeout_ms,
         timed_out=timed_out,
@@ -376,36 +380,36 @@ def _run_windows_pty(
     )
 
 
-def _read_windows_pty_output(
-    process: Any,
-    output_queue: queue.Queue[str],
-    stop_reader: threading.Event,
+def _read_pipe_output(
+    process: subprocess.Popen[bytes],
+    output_queue: queue.Queue[bytes],
 ) -> None:
-    while not stop_reader.is_set():
+    if process.stdout is None:
+        return
+    while True:
         try:
-            chunk = process.read(4096)
+            chunk = process.stdout.read(4096)
         except Exception:
             return
-        if chunk:
-            output_queue.put(chunk)
-        elif not process.isalive():
+        if not chunk:
             return
+        output_queue.put(chunk)
 
 
-def _drain_text_queue(
-    output_queue: queue.Queue[str],
-    captured: str,
+def _drain_bytes_queue(
+    output_queue: queue.Queue[bytes],
+    captured: bytearray,
     capture_limit: int,
-) -> tuple[str, bool]:
+) -> bool:
     truncated = False
     while True:
         try:
             chunk = output_queue.get_nowait()
         except queue.Empty:
-            return captured, truncated
+            return truncated
         if len(captured) < capture_limit:
             remaining = capture_limit - len(captured)
-            captured += chunk[:remaining]
+            captured.extend(chunk[:remaining])
             if len(chunk) > remaining:
                 truncated = True
         else:
@@ -472,6 +476,20 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             process.wait(timeout=0.2)
 
 
+def _terminate_windows_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    with contextlib.suppress(OSError):
+        process.terminate()
+    try:
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            process.kill()
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            process.wait(timeout=0.2)
+
+
 def _limit_output(output: str, limit: int) -> tuple[str, bool]:
     if limit <= 0:
         return (_TRUNCATED_MARKER if output else ""), bool(output)
@@ -485,7 +503,16 @@ def _limit_output(output: str, limit: int) -> tuple[str, bool]:
 
 
 def _decode_output(output: bytes) -> str:
-    return output.replace(b"\r\n", b"\n").replace(b"\r", b"\n").decode("utf-8", errors="replace")
+    return _normalize_line_endings(output.decode("utf-8", errors="replace"))
+
+
+def _sanitize_terminal_output(output: str) -> str:
+    normalized = _normalize_line_endings(output)
+    return _TERMINAL_CONTROL_CHAR_RE.sub("", _ANSI_CONTROL_RE.sub("", normalized))
+
+
+def _normalize_line_endings(output: str) -> str:
+    return output.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _command_error(exit_code: int | None, *, timed_out: bool, interrupted: bool) -> str | None:

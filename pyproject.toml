@@ -1,6 +1,6 @@
 [project]
 name = "deepy-cli"
-version = "0.1.12"
+version = "0.1.13"
 description = "Deepy - Vibe coding for DeepSeek models in your terminal"
 readme = "README.md"
 authors = [
@@ -23,7 +23,6 @@ dependencies = [
     "orjson>=3.10,<4",
     "pydantic>=2.12,<3",
     "prompt-toolkit>=3.0,<4",
-    "pywinpty>=2.0,<3; sys_platform == 'win32'",
     "rich>=13.9,<15",
     "tiktoken>=0.9,<1",
     "tomli-w>=1",
