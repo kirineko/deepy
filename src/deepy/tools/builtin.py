@@ -1582,6 +1582,37 @@ class ToolRuntime:
             awaitUserResponse=True,
         ).to_json()
 
+    def load_skill(self, name: str) -> str:
+        from deepy.skills import find_skill, read_skill_body
+
+        skill = find_skill(self.cwd, name)
+        if skill is None:
+            return ToolResult.error_result("load_skill", f"Skill not found: {name}").to_json()
+        body = read_skill_body(skill)
+        if not body:
+            return ToolResult.error_result("load_skill", f"Skill is empty: {skill.name}").to_json()
+        root = skill.path.parent
+        output = (
+            f"# Skill: {skill.name}\n\n"
+            f"Description: {skill.description or '(no description)'}\n\n"
+            f"Scope: {skill.scope}\n\n"
+            f"Skill root: {root}\n\n"
+            "All scripts, references, and assets in this skill are relative to the skill root.\n\n"
+            "---\n\n"
+            f"{body}"
+        )
+        return ToolResult.ok_result(
+            "load_skill",
+            output,
+            metadata={
+                "name": skill.name,
+                "description": skill.description,
+                "scope": skill.scope,
+                "path": str(skill.path),
+                "root": str(root),
+            },
+        ).to_json()
+
     def web_search(self, query: str) -> str:
         name = "WebSearch"
         if not query.strip():

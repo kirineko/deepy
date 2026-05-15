@@ -181,7 +181,7 @@ def test_selected_skill_helpers_format_dedupe_toggle_and_clear_slash_tokens():
     assert add_unique_skill([skill], other) == [skill, other]
     assert toggle_skill_selection([skill], skill) == []
     assert toggle_skill_selection([skill], other) == [skill, other]
-    assert remove_current_slash_token(PromptBufferState("use /skill-writer", 17)) == (
+    assert remove_current_slash_token(PromptBufferState("use /skill:skill-writer", 23)) == (
         PromptBufferState("use ", 4)
     )
 

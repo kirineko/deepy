@@ -154,7 +154,7 @@ def test_interactive_mode_requires_tty(monkeypatch, capsys):
 
 
 def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n",
@@ -171,7 +171,7 @@ def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):
 
 
 def test_skills_show_prints_skill_body(tmp_path, capsys, monkeypatch):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",

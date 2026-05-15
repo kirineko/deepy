@@ -18,8 +18,8 @@ def test_discover_skills_reads_user_and_project_skills_with_project_override(tmp
     home = tmp_path / "home"
     project = tmp_path / "project"
     user_skill = home / ".agents" / "skills" / "demo"
-    project_skill = project / ".deepy" / "skills" / "demo"
-    other_skill = project / ".deepy" / "skills" / "other"
+    project_skill = project / ".agents" / "skills" / "demo"
+    other_skill = project / ".agents" / "skills" / "other"
     user_skill.mkdir(parents=True)
     project_skill.mkdir(parents=True)
     other_skill.mkdir(parents=True)
@@ -35,15 +35,20 @@ def test_discover_skills_reads_user_and_project_skills_with_project_override(tmp
 
     skills = discover_skills(project, home=home)
 
-    assert [(skill.name, skill.description, skill.scope) for skill in skills] == [
+    project_and_user = [skill for skill in skills if skill.scope in {"project", "user"}]
+    assert [(skill.name, skill.description, skill.scope) for skill in project_and_user] == [
         ("demo", "Project version", "project"),
         ("other", "Other skill", "project"),
     ]
+    assert {skill.name for skill in skills if skill.scope == "builtin"} >= {
+        "skill-creator",
+        "skill-installer",
+    }
 
 
 def test_format_skills_for_prompt_groups_by_scope(tmp_path):
     project = tmp_path / "project"
-    skill_dir = project / ".deepy" / "skills" / "review"
+    skill_dir = project / ".agents" / "skills" / "review"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: review\ndescription: Review code\n---\n",
@@ -54,6 +59,42 @@ def test_format_skills_for_prompt_groups_by_scope(tmp_path):
 
     assert "Project skills:" in rendered
     assert "review - Review code" in rendered
+
+
+def test_read_skill_info_supports_yaml_block_description(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "writer"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\n"
+        "name: writer\n"
+        "description: |\n"
+        "  Create polished writing.\n"
+        "  Use when the user asks for editing.\n"
+        "metadata:\n"
+        "  owner: docs\n"
+        "---\n"
+        "Body",
+        encoding="utf-8",
+    )
+
+    skill = find_skill(tmp_path, "writer", home=tmp_path / "home")
+
+    assert skill is not None
+    assert skill.description == "Create polished writing.\nUse when the user asks for editing."
+
+
+def test_format_skills_for_prompt_preserves_standard_long_descriptions(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "long"
+    skill_dir.mkdir(parents=True)
+    long_description = "A" * 400
+    skill_dir.joinpath("SKILL.md").write_text(
+        f"---\nname: long\ndescription: {long_description}\n---\n",
+        encoding="utf-8",
+    )
+
+    rendered = format_skills_for_prompt(discover_skills(tmp_path, home=tmp_path / "home"))
+
+    assert long_description in rendered
 
 
 def test_load_project_rules_reads_project_then_user_rules(tmp_path):
@@ -72,7 +113,7 @@ def test_load_project_rules_reads_project_then_user_rules(tmp_path):
 
 
 def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text("---\nname: demo\ndescription: Demo skill\n---\n", encoding="utf-8")
@@ -104,6 +145,8 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "high-impact trade-offs" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt
+    assert "Skill protocol:" in prompt
+    assert "call `load_skill`" in prompt
     assert "Runtime context here." in prompt
 
 
@@ -144,7 +187,7 @@ def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path
 
 
 def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",
@@ -159,8 +202,8 @@ def test_find_skill_and_read_body_strip_frontmatter(tmp_path):
 
 def test_match_skills_for_prompt_uses_name_and_description(tmp_path):
     project = tmp_path / "project"
-    django_dir = project / ".deepy" / "skills" / "django"
-    review_dir = project / ".deepy" / "skills" / "review"
+    django_dir = project / ".agents" / "skills" / "django"
+    review_dir = project / ".agents" / "skills" / "review"
     django_dir.mkdir(parents=True)
     review_dir.mkdir(parents=True)
     django_dir.joinpath("SKILL.md").write_text(
@@ -181,7 +224,7 @@ def test_match_skills_for_prompt_uses_name_and_description(tmp_path):
 
 
 def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",
@@ -197,8 +240,8 @@ def test_format_loaded_skills_for_prompt_includes_skill_body(tmp_path):
 
 
 def test_format_loaded_skills_for_prompt_is_deterministic(tmp_path):
-    alpha_dir = tmp_path / ".deepy" / "skills" / "alpha"
-    beta_dir = tmp_path / ".deepy" / "skills" / "beta"
+    alpha_dir = tmp_path / ".agents" / "skills" / "alpha"
+    beta_dir = tmp_path / ".agents" / "skills" / "beta"
     alpha_dir.mkdir(parents=True)
     beta_dir.mkdir(parents=True)
     alpha_dir.joinpath("SKILL.md").write_text(

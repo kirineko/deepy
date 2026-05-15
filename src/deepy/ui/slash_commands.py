@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from deepy.skills import SkillInfo
 
@@ -16,7 +16,7 @@ class SlashCommandItem:
 
 
 BUILTIN_SLASH_COMMANDS = (
-    SlashCommandItem("skills", "skills", "/skills", "List available skills"),
+    SlashCommandItem("skills", "skills", "/skills", "Manage skills"),
     SlashCommandItem("model", "model", "/model", "Select model and thinking strength"),
     SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
     SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue"),
@@ -27,14 +27,18 @@ BUILTIN_SLASH_COMMANDS = (
 )
 
 
-def build_slash_commands(skills: list[SkillInfo]) -> list[SlashCommandItem]:
+def build_slash_commands(
+    skills: list[SkillInfo],
+    loaded_skill_names: list[str] | None = None,
+) -> list[SlashCommandItem]:
+    loaded = {name.lower() for name in loaded_skill_names or []}
     skill_items = [
         SlashCommandItem(
             kind="skill",
-            name=skill.name,
-            label=f"/{skill.name}",
+            name=f"skill:{skill.name}",
+            label=f"/skill:{skill.name}",
             description=skill.description or "(no description)",
-            skill=skill,
+            skill=replace(skill, is_loaded=skill.is_loaded or skill.name.lower() in loaded),
         )
         for skill in skills
     ]
@@ -47,7 +51,7 @@ def filter_slash_commands(items: list[SlashCommandItem], token: str) -> list[Sla
     query = token[1:].lower()
     if not query:
         return items
-    return [item for item in items if query in item.name.lower()]
+    return [item for item in items if query in item.name.lower() or query in item.label[1:].lower()]
 
 
 def find_exact_slash_command(

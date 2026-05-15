@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
+
+import yaml
 
 SKILL_MATCH_STOPWORDS = {
     "a",
@@ -33,8 +36,9 @@ class SkillInfo:
 def discover_skills(project_root: Path, *, home: Path | None = None) -> list[SkillInfo]:
     home_dir = home or Path.home()
     roots = [
+        ("builtin", _builtin_skills_root()),
         ("user", home_dir / ".agents" / "skills"),
-        ("project", project_root / ".deepy" / "skills"),
+        ("project", project_root / ".agents" / "skills"),
     ]
     by_name: dict[str, SkillInfo] = {}
     for scope, root in roots:
@@ -93,21 +97,26 @@ def format_loaded_skills_for_prompt(skills: Iterable[SkillInfo]) -> str:
 
 
 def _format_skills(skills: Iterable[SkillInfo], *, include_paths: bool) -> str:
-    grouped: dict[str, list[SkillInfo]] = {"project": [], "user": []}
+    grouped: dict[str, list[SkillInfo]] = {"project": [], "user": [], "builtin": []}
     for skill in skills:
         grouped.setdefault(skill.scope, []).append(skill)
 
     lines: list[str] = []
-    for scope in ("project", "user"):
+    for scope in ("project", "user", "builtin"):
         items = grouped.get(scope) or []
         if not items:
             continue
-        lines.append(f"{scope.title()} skills:")
+        heading = "Built-in" if scope == "builtin" else scope.title()
+        lines.append(f"{heading} skills:")
         for skill in sorted(items, key=lambda item: item.name):
             description = f" - {skill.description}" if skill.description else ""
             path = f" ({skill.path})" if include_paths else ""
             lines.append(f"- {skill.name}{description}{path}")
     return "\n".join(lines) if lines else "No skills found."
+
+
+def _builtin_skills_root() -> Path:
+    return Path(resources.files("deepy.data").joinpath("skills"))
 
 
 def _discover_skills_root(root: Path, *, scope: str) -> list[SkillInfo]:
@@ -140,14 +149,23 @@ def read_skill_info(
     return SkillInfo(name=name, description=description, path=path, scope=scope)
 
 
-def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}, text
     for index, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            return _parse_simple_yaml(lines[1:index]), "\n".join(lines[index + 1 :])
+            frontmatter_text = "\n".join(lines[1:index])
+            return _parse_frontmatter_yaml(frontmatter_text), "\n".join(lines[index + 1 :])
     return {}, text
+
+
+def _parse_frontmatter_yaml(text: str) -> dict[str, Any]:
+    try:
+        parsed = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError:
+        parsed = _parse_simple_yaml(text.splitlines())
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_simple_yaml(lines: list[str]) -> dict[str, str]:
@@ -170,7 +188,7 @@ def _first_body_line(body: str) -> str:
     return ""
 
 
-def _clean_scalar(value: str | None) -> str:
+def _clean_scalar(value: Any) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else ""
 
 

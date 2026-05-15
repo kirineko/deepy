@@ -245,12 +245,22 @@ deepy sessions show <session-id>
 deepy run "summarize this project"
 ```
 
+交互式终端中：
+
+```text
+/skills                 管理本地和市场 skills
+/skills list            列出已发现的 skills
+/skills search <query>  搜索配置的 skill 市场
+/skills install <name>  安装市场 skill
+/skill:<name> [request] 直接调用某个 skill
+```
+
 ## 项目规则和 Skills
 
 Deepy 会自动加载项目内的规则和技能文件：
 
 - `AGENTS.md`
-- `.deepy/skills/*/SKILL.md`
+- `.agents/skills/*/SKILL.md`
 
 这样每个仓库都可以保存自己的代码风格、验证命令、审查规则和领域工作流，而不需要修改全局配置。
 

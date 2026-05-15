@@ -47,6 +47,10 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         args = _tool_args(raw_input)
         return runtime.web_fetch(_string_arg(args, "url"))
 
+    async def invoke_load_skill(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return runtime.load_skill(_string_arg(args, "name"))
+
     return [
         FunctionTool(
             name="shell",
@@ -104,6 +108,17 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
             description="Fetch and extract readable content from a complete http or https URL.",
             params_json_schema=WEB_FETCH_SCHEMA,
             on_invoke_tool=invoke_web_fetch,
+            strict_json_schema=False,
+        ),
+        FunctionTool(
+            name="load_skill",
+            description=(
+                "Load the complete instructions for an available Agent Skill by name. Use this "
+                "when the user's task matches a skill listed in Available skills before relying "
+                "on that skill's workflow, scripts, references, or assets."
+            ),
+            params_json_schema=LOAD_SKILL_SCHEMA,
+            on_invoke_tool=invoke_load_skill,
             strict_json_schema=False,
         ),
     ]
@@ -348,5 +363,17 @@ WEB_FETCH_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["url"],
+    "additionalProperties": False,
+}
+
+LOAD_SKILL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The exact skill name from the Available skills list.",
+        },
+    },
+    "required": ["name"],
     "additionalProperties": False,
 }

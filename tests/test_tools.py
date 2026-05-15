@@ -1111,6 +1111,22 @@ def test_ask_user_question_rejects_invalid_questions(tmp_path):
     assert payload["error"] == '"questions" must be a non-empty array.'
 
 
+def test_load_skill_returns_skill_body_and_root(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\nUse demo.",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.load_skill("demo"))
+
+    assert payload["ok"] is True
+    assert "Use demo." in payload["output"]
+    assert payload["metadata"]["root"] == str(skill_dir)
+
+
 def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
@@ -1123,6 +1139,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "modify",
         "WebSearch",
         "WebFetch",
+        "load_skill",
     ]
     assert all(tool.description for tool in tools)
     shell_tool = tools[0]
@@ -1135,6 +1152,9 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "偏好" in ask_tool.description
     assert "for Chinese requests, ask in Chinese" in ask_tool.description
     assert "low-impact details" in ask_tool.description
+    skill_tool = tools[-1]
+    assert skill_tool.name == "load_skill"
+    assert "available Agent Skill" in skill_tool.description
 
 
 def test_function_tool_schemas_match_shell_tool(tmp_path):

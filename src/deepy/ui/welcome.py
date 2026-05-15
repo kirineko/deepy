@@ -43,7 +43,7 @@ CORE_SHORTCUT_TIPS = (
 )
 
 COMPACT_COMMAND_DESCRIPTIONS = {
-    "/skills": "List skills",
+    "/skills": "Manage skills",
     "/new": "New session",
     "/resume": "Resume session",
     "/exit": "Quit",

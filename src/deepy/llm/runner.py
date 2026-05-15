@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from deepy.config import Settings, load_settings
 from deepy.sessions.jsonl import DeepyJsonlSession
-from deepy.skills import discover_skills, find_skill, match_skills_for_prompt
+from deepy.skills import find_skill
 from deepy.tools import ToolRuntime
 from deepy.usage import TokenUsage, merge_usage, normalize_usage, usage_from_run_result
 from deepy.utils import json as json_utils
@@ -281,7 +281,7 @@ def _resolve_loaded_skills(
                 raise ValueError(f"Skill not found: {skill_name}")
             loaded_skills.append(skill)
         return loaded_skills
-    return match_skills_for_prompt(discover_skills(root), prompt)
+    return []
 
 
 def _max_turns_output(chunks: list[str], *, max_turns: int) -> str:

@@ -256,12 +256,22 @@ deepy sessions show <session-id>
 deepy run "summarize this project"
 ```
 
+Inside the interactive terminal:
+
+```text
+/skills                 Manage local and market skills
+/skills list            List discovered skills
+/skills search <query>  Search the configured skill market
+/skills install <name>  Install a market skill
+/skill:<name> [request] Invoke a skill directly
+```
+
 ## Project Rules And Skills
 
 Deepy automatically loads project instructions from:
 
 - `AGENTS.md`
-- `.deepy/skills/*/SKILL.md`
+- `.agents/skills/*/SKILL.md`
 
 This lets each repository define local conventions, commands, review rules, and
 domain-specific workflows without changing global config.

@@ -19,6 +19,7 @@ import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
 from deepy.ui.local_command import LocalCommandResult
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
+from deepy.ui.skill_picker import SkillMenuAction
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _format_context_footer
 from deepy.ui.terminal import _handle_slash_command
@@ -116,8 +117,112 @@ def test_parse_slash_command_strips_whitespace():
     assert parse_slash_command("  /exit  ") == SlashCommand("exit", "")
 
 
-def test_skills_slash_command_lists_project_skills(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+def test_skills_slash_command_shows_management_menu(tmp_path):
+    console = Console(record=True)
+    actions = iter([None])
+    observed: list[tuple[object, object]] = []
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        terminal,
+        "search_market_skills",
+        lambda query: (_ for _ in ()).throw(AssertionError("market should load inside picker")),
+    )
+    monkeypatch.setattr(terminal, "_build_installed_skill_views", lambda project_root: ["installed-demo"])
+
+    def fake_pick(market_skills, installed_skills, market_loader=None):
+        observed.append((market_skills, installed_skills))
+        assert market_loader is not None
+        return next(actions)
+
+    monkeypatch.setattr(terminal, "pick_skill_menu_action", fake_pick)
+    try:
+        next_session = _handle_slash_command(SlashCommand("skills"), console, tmp_path, "s1")
+    finally:
+        monkeypatch.undo()
+
+    assert next_session == "s1"
+    assert observed == [(None, ["installed-demo"])]
+
+
+def test_skills_menu_install_action_asks_for_scope_and_runs_market_install(tmp_path, monkeypatch):
+    console = Console(record=True)
+    actions = iter([SkillMenuAction("choose-install-scope", "demo"), None])
+    installed: list[tuple[str, str, Path]] = []
+
+    monkeypatch.setattr(terminal, "search_market_skills", lambda query: ["market-demo"])
+    monkeypatch.setattr(terminal, "list_installed_skills", lambda: [])
+    monkeypatch.setattr(
+        terminal,
+        "pick_skill_menu_action",
+        lambda market, installed, market_loader=None: next(actions),
+    )
+    monkeypatch.setattr(
+        terminal,
+        "pick_skill_install_scope",
+        lambda name, home, project_root: SimpleNamespace(
+            scope="project",
+            path=project_root / ".agents" / "skills" / name,
+        ),
+    )
+
+    def fake_install_market_skill(name, *, scope="user", project_root=None):
+        assert project_root is not None
+        install_path = project_root / ".agents" / "skills" / name
+        installed.append((name, scope, install_path))
+        return SimpleNamespace(name=name, scope=scope, install_path=install_path)
+
+    monkeypatch.setattr(terminal, "install_market_skill", fake_install_market_skill)
+
+    next_session = _handle_slash_command(SlashCommand("skills"), console, tmp_path, "s1")
+
+    assert next_session == "s1"
+    assert installed == [("demo", "project", tmp_path / ".agents" / "skills" / "demo")]
+    assert "Installed skill: demo (project)" in console.export_text()
+
+
+def test_skills_menu_includes_manual_user_and_project_skills(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    user_skill = home / ".agents" / "skills" / "user-demo"
+    project_skill = tmp_path / ".agents" / "skills" / "project-demo"
+    user_skill.mkdir(parents=True)
+    project_skill.mkdir(parents=True)
+    user_skill.joinpath("SKILL.md").write_text("---\nname: user-demo\n---\n", encoding="utf-8")
+    project_skill.joinpath("SKILL.md").write_text("---\nname: project-demo\n---\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(terminal, "list_installed_skills", lambda: [])
+
+    views = terminal._build_installed_skill_views(tmp_path)
+
+    assert [(view.name, view.scope, view.path, view.managed_by_market) for view in views] == [
+        ("project-demo", "project", project_skill, False),
+        ("user-demo", "user", user_skill, False),
+    ]
+
+
+def test_skills_menu_remove_local_skill_deletes_standard_skill_dir(tmp_path):
+    console = Console(record=True)
+    skill_dir = tmp_path / ".agents" / "skills" / "manual"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text("---\nname: manual\n---\n", encoding="utf-8")
+    loaded = ["manual"]
+
+    changed = terminal._handle_skill_menu_action(
+        SkillMenuAction("remove-local", "manual", scope="project", path=skill_dir),
+        console,
+        tmp_path,
+        loaded,
+        terminal.DARK_PALETTE,
+    )
+
+    assert changed is True
+    assert not skill_dir.exists()
+    assert loaded == []
+    assert "Removed local skill: manual" in console.export_text()
+
+
+def test_skills_list_command_lists_project_skills(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n",
@@ -125,7 +230,7 @@ def test_skills_slash_command_lists_project_skills(tmp_path):
     )
     console = Console(record=True)
 
-    next_session = _handle_slash_command(SlashCommand("skills"), console, tmp_path, "s1")
+    next_session = _handle_slash_command(SlashCommand("skills", "list"), console, tmp_path, "s1")
 
     assert next_session == "s1"
     rendered = console.export_text()
@@ -133,8 +238,8 @@ def test_skills_slash_command_lists_project_skills(tmp_path):
     assert "demo - Demo skill" in rendered
 
 
-def test_skill_slash_command_prints_skill_body(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+def test_skills_show_command_prints_skill_body(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\n# Body\nUse this skill.",
@@ -142,14 +247,14 @@ def test_skill_slash_command_prints_skill_body(tmp_path):
     )
     console = Console(record=True)
 
-    next_session = _handle_slash_command(SlashCommand("skill", "demo"), console, tmp_path, "s1")
+    next_session = _handle_slash_command(SlashCommand("skills", "show demo"), console, tmp_path, "s1")
 
     assert next_session == "s1"
     assert "Use this skill." in console.export_text()
 
 
-def test_use_slash_command_loads_skill_name(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+def test_skills_use_command_loads_skill_name(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\nUse this skill.",
@@ -158,7 +263,7 @@ def test_use_slash_command_loads_skill_name(tmp_path):
     console = Console(record=True)
     loaded: list[str] = []
 
-    next_session = _handle_slash_command(SlashCommand("use", "demo"), console, tmp_path, "s1", loaded)
+    next_session = _handle_slash_command(SlashCommand("skills", "use demo"), console, tmp_path, "s1", loaded)
 
     assert next_session == "s1"
     assert loaded == ["demo"]
@@ -1555,6 +1660,49 @@ def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypat
 
     assert result == 0
     assert observed == [("deepseek-v4-flash", "high")]
+
+
+def test_run_interactive_refreshes_skill_completion_after_market_install(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    console = Console(record=True, width=160)
+    prompts = iter(
+        [
+            "/skills install demo",
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+        ]
+    )
+    slash_command_labels: list[list[str]] = []
+
+    def fake_create_prompt_session(**kwargs):
+        slash_command_labels.append([item.label for item in kwargs["slash_commands"]])
+        return object()
+
+    def fake_install_market_skill(name):
+        skill_dir = home / ".agents" / "skills" / name
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Demo skill\n---\nUse demo.",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(name=name, install_path=skill_dir)
+
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(terminal, "create_prompt_session", fake_create_prompt_session)
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+    monkeypatch.setattr(terminal, "install_market_skill", fake_install_market_skill)
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "/skill:demo" not in slash_command_labels[0]
+    assert "/skill:demo" in slash_command_labels[1]
+    assert "Installed skill: demo" in console.export_text()
 
 
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():

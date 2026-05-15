@@ -55,6 +55,12 @@ Core rules:
 Tool protocol:
 Tool results are JSON strings: ok, name, output, error, metadata, awaitUserResponse.
 
+Skill protocol:
+- Available skills are metadata only. Do not assume their full workflow is already loaded.
+- If the user's task matches an available skill, call `load_skill` with the exact skill name before relying on that skill's detailed instructions, scripts, references, or assets.
+- If the user explicitly invoked a skill, follow the loaded skill instructions and use the user's request inside that context.
+- Skill files are standard Agent Skills. Resolve relative scripts, references, and assets from the skill root returned by `load_skill`.
+
 Tool documentation:
 {tool_docs_block}
 

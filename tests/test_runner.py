@@ -504,7 +504,7 @@ async def test_run_prompt_once_uses_sdk_accumulated_usage_for_multiple_requests(
 
 @pytest.mark.asyncio
 async def test_run_prompt_once_loads_requested_skill(monkeypatch, tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\nUse this skill.",
@@ -533,8 +533,8 @@ async def test_run_prompt_once_loads_requested_skill(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_prompt_once_auto_loads_matching_skill(monkeypatch, tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "django"
+async def test_run_prompt_once_does_not_auto_load_matching_skill(monkeypatch, tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "django"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: django\ndescription: Django migration specialist\n---\nUse Django skill.",
@@ -557,7 +557,8 @@ async def test_run_prompt_once_auto_loads_matching_skill(monkeypatch, tmp_path):
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
     )
 
-    assert "Use Django skill." in captured_instructions[0]
+    assert "django - Django migration specialist" in captured_instructions[0]
+    assert "Use Django skill." not in captured_instructions[0]
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from deepy.status import build_status_report, format_status_report, status_repor
 
 
 def test_status_report_includes_counts_and_context(tmp_path):
-    skill_dir = tmp_path / ".deepy" / "skills" / "demo"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo\n---\n",
@@ -16,7 +16,7 @@ def test_status_report_includes_counts_and_context(tmp_path):
     report = build_status_report(tmp_path, settings)
     rendered = format_status_report(report)
 
-    assert report.skill_count == 1
+    assert report.skill_count >= 3
     assert "API key: configured" in rendered
     assert "Reasoning: max" in rendered
     assert "Reserved context: 50000 tokens" in rendered

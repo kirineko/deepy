@@ -22,7 +22,7 @@ def test_build_slash_commands_prefixes_skills_before_builtins():
     items = build_slash_commands(SKILLS)
 
     assert items[0].kind == "skill"
-    assert items[0].name == "skill-writer"
+    assert items[0].name == "skill:skill-writer"
     assert [item.name for item in items if item.kind != "skill"] == [
         "skills",
         "model",
@@ -39,7 +39,8 @@ def test_filter_slash_commands_matches_partial_tokens():
     items = build_slash_commands(SKILLS)
 
     assert [item.name for item in filter_slash_commands(items, "/skil")] == [
-        "skill-writer",
+        "skill:skill-writer",
+        "skill:code-review",
         "skills",
     ]
 
@@ -69,7 +70,7 @@ def test_find_exact_slash_command_returns_builtins():
 
 
 def test_find_exact_slash_command_returns_matching_skill():
-    item = find_exact_slash_command(build_slash_commands(SKILLS), "/code-review")
+    item = find_exact_slash_command(build_slash_commands(SKILLS), "/skill:code-review")
 
     assert item is not None
     assert item.kind == "skill"
@@ -88,5 +89,13 @@ def test_format_slash_command_label_marks_loaded_skills():
         ]
     )
 
-    assert format_slash_command_label(items[0]) == "/loaded *"
-    assert format_slash_command_label(items[1]) == "/fresh"
+    assert format_slash_command_label(items[0]) == "/skill:loaded *"
+    assert format_slash_command_label(items[1]) == "/skill:fresh"
+
+
+def test_build_slash_commands_marks_loaded_skill_names():
+    items = build_slash_commands(SKILLS, loaded_skill_names=["code-review"])
+
+    labels = {item.name: format_slash_command_label(item) for item in items}
+    assert labels["skill:skill-writer"] == "/skill:skill-writer"
+    assert labels["skill:code-review"] == "/skill:code-review *"
