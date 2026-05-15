@@ -1121,6 +1121,9 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "Started a new session." in rendered
     assert "context used" not in rendered
     assert "Enter send" not in str(toolbars)
+    assert "/ commands" not in str(toolbars)
+    assert "Esc interrupt" not in str(toolbars)
+    assert "Ctrl+D twice exit" in str(toolbars)
     assert "model deepseek-v4-pro" in str(toolbars)
     assert "thinking max" in str(toolbars)
     assert f"cwd {tmp_path}" in str(toolbars)

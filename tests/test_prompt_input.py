@@ -148,17 +148,25 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
 
 def test_prompt_toolbar_switches_newline_help_by_platform():
     assert prompt_toolbar("win32") == [("class:toolbar.help", WINDOWS_PROMPT_TOOLBAR_HELP)]
+    assert WINDOWS_PROMPT_TOOLBAR_HELP == "Ctrl+J newline · Ctrl+D twice exit"
     assert "Ctrl+J newline" in WINDOWS_PROMPT_TOOLBAR_HELP
     assert "Shift+Enter" not in WINDOWS_PROMPT_TOOLBAR_HELP
     assert prompt_toolbar("darwin") == PROMPT_TOOLBAR
+    assert PROMPT_TOOLBAR == [("class:toolbar.help", "Shift+Enter newline · Ctrl+D twice exit")]
 
 
-def test_build_prompt_toolbar_only_shows_status():
+def test_build_prompt_toolbar_shows_status_and_platform_help():
     status = "model deepseek-v4-pro · thinking max · cwd ~/repo · context 100 / 1,000 (10.0%)"
-    toolbar = build_prompt_toolbar(status)
+    toolbar = build_prompt_toolbar(status, platform_name="win32")
 
     assert isinstance(toolbar, list)
-    assert toolbar == [("class:toolbar.context", status)]
+    assert toolbar == [
+        ("class:toolbar.context", status),
+        ("class:toolbar.separator", " · "),
+        ("class:toolbar.help", WINDOWS_PROMPT_TOOLBAR_HELP),
+    ]
+    assert "Ctrl+J newline" in str(toolbar)
+    assert "Shift+Enter" not in str(toolbar)
 
 
 def test_build_prompt_key_bindings_registers_escape_interrupt():
