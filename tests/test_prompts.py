@@ -92,11 +92,15 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## shell" in prompt
     assert "Use `modify` for file changes" in prompt
     assert "Run shell commands using the Runtime context's command dialect" in prompt
+    assert "Match visible thinking/reasoning language" in prompt
+    assert "you MUST write visible thinking/reasoning in Chinese" in prompt
+    assert "Do not switch visible thinking/reasoning to English for Chinese requests" in prompt
     assert "clarification would materially improve the result" in prompt
     assert "reasonable assumption" in prompt
     assert "## modify" in prompt
     assert "## AskUserQuestion" in prompt
-    assert "ambiguous intent" in prompt
+    assert "范围不清楚" in prompt
+    assert "用户使用中文提问" in prompt
     assert "high-impact trade-offs" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt

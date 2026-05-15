@@ -245,7 +245,7 @@ def test_resume_slash_command_prints_selected_session_history(tmp_path):
     assert next_session == "s1"
     assert "当前项目是做什么的？" in rendered
     assert "Thinking" in rendered
-    assert "read README.md  ok" in rendered
+    assert "[Read] README.md  ok" in rendered
     assert "这是一个 Python 终端编程代理。" in rendered
 
 
@@ -314,7 +314,36 @@ def test_collect_pending_question_response_accepts_multi_select_text():
     )
 
     assert '"Which scopes?"="tests, lint"' in response
-    assert prompts == ["Answer numbers separated by commas, text, or empty to decline"]
+    assert prompts == ["Answer numbers separated by commas, custom text, or empty to decline"]
+
+
+def test_collect_pending_question_response_prompts_for_custom_answer_option():
+    prompts: list[str] = []
+    answers = iter(["2", "Use pnpm"])
+    response = _collect_pending_question_response(
+        Console(record=True),
+        [{"question": "Package manager?", "options": [{"label": "npm"}]}],
+        input_func=lambda prompt: prompts.append(prompt) or next(answers),
+    )
+
+    assert '"Package manager?"="Use pnpm"' in response
+    assert prompts == ["Answer number, custom text, or empty to decline", "Custom answer"]
+
+
+def test_collect_pending_question_response_localizes_custom_answer_option():
+    console = Console(record=True)
+    prompts: list[str] = []
+    answers = iter(["2", "使用 pnpm"])
+    response = _collect_pending_question_response(
+        console,
+        [{"question": "选择哪个包管理器？", "options": [{"label": "npm"}]}],
+        input_func=lambda prompt: prompts.append(prompt) or next(answers),
+    )
+
+    rendered = console.export_text()
+    assert "自定义回答 - 输入自己的答案。" in rendered
+    assert '"选择哪个包管理器？"="使用 pnpm"' in response
+    assert prompts[-1] == "自定义回答"
 
 
 def test_print_stream_event_merges_tool_call_and_output():
@@ -342,7 +371,7 @@ def test_print_stream_event_merges_tool_call_and_output():
     )
 
     rendered = console.export_text()
-    assert "read README.md  ok" in rendered
+    assert "[Read] README.md  ok" in rendered
     assert "tool call:" not in rendered
     assert "tool output:" not in rendered
 
@@ -367,7 +396,7 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     )
 
     rendered = console.export_text()
-    assert "edit  ok" in rendered
+    assert "[Modify]  ok" in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -398,8 +427,8 @@ def test_print_stream_event_renders_write_preview_after_status():
     )
 
     rendered = console.export_text()
-    assert "write  ok" in rendered
-    assert "Wrote /repo/src/lib.rs (+1 -0)" in rendered
+    assert "[Write]  ok" in rendered
+    assert "[Write] /repo/src/lib.rs (+1 -0)" in rendered
     assert "new file body" in rendered
     assert "+new file body" not in rendered
     assert "Edited" not in rendered
@@ -480,7 +509,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
     )
 
     rendered = console.export_text()
-    assert "write src/lib.rs (4 lines, 34 chars)  ok" in rendered
+    assert "[Write] src/lib.rs (4 lines, 34 chars)  ok" in rendered
     assert "println" not in rendered
     assert "fn main() {}" in rendered
 
@@ -530,9 +559,46 @@ def test_print_stream_event_ask_user_question_hides_question_arguments():
     )
 
     rendered = console.export_text()
-    assert "AskUserQuestion  ok - Waiting for user input." in rendered
+    assert "[AskUserQuestion]  ok - Waiting for user input." in rendered
     assert "Which path?" not in rendered
     assert "questions" not in rendered
+
+
+def test_print_stream_event_renders_shell_output_block():
+    console = Console(record=True, width=120)
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            text=json_utils.dumps(
+                {
+                    "ok": False,
+                    "name": "shell",
+                    "output": "stdout line\nstderr line",
+                    "error": "Command exited with code 1.",
+                    "metadata": {"exitCode": 1},
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+    )
+
+    rendered = console.export_text()
+    assert "[Shell]  failed - Command exited with code 1." in rendered
+    assert "stdout line" in rendered
+    assert "stderr line" in rendered
+
+
+def test_status_line_emphasizes_only_tool_label():
+    line = terminal._status_line("[Read] Cargo.toml  ok", "green")
+
+    assert line.plain == "• [Read] Cargo.toml  ok"
+    label_style = str(line.spans[1].style)
+    detail_style = str(line.spans[2].style)
+    assert "bold" in label_style
+    assert "underline" in label_style
+    assert "bold" not in detail_style
 
 
 def test_print_user_input_uses_prompt_marker():
@@ -569,6 +635,43 @@ def test_terminal_stream_renderer_flushes_reasoning_for_each_model_turn():
     rendered = console.export_text()
     assert "第一轮思考。" in rendered
     assert "第二轮思考。" in rendered
+
+
+def test_terminal_stream_renderer_flushes_full_reasoning_without_truncation():
+    console = Console(record=True, width=120)
+    renderer = terminal.TerminalStreamRenderer(console)
+    content = "\n".join(f"步骤 {index}" for index in range(80))
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text=content))
+    renderer.flush()
+
+    rendered = console.export_text()
+    assert "步骤 0" in rendered
+    assert "步骤 79" in rendered
+    assert "[truncated]" not in rendered
+
+
+def test_terminal_stream_renderer_keeps_reasoning_visible_under_status_refresh():
+    console = Console(record=True, width=120)
+    started_at = time.monotonic()
+    content = "用户用中文问候，我也应该用中文回复。这是第二段完整思考。"
+
+    with console.status(_working_status_text(started_at), spinner="dots") as status:
+        renderer = terminal.TerminalStreamRenderer(
+            console,
+            status=status,
+            status_started_at=started_at,
+        )
+        for char in content:
+            renderer(DeepyStreamEvent(kind="reasoning_delta", text=char))
+        renderer.flush()
+
+    rendered = console.export_text()
+    assert "[Thinking]" in rendered
+    assert "用户用中文问候，我也应该用中文回复。" in rendered
+    assert "这是第二段完整思考。" in rendered
+    assert "用\n户" not in rendered
+    assert "中\n文" not in rendered
 
 
 def test_status_slash_command_prints_status(tmp_path):

@@ -25,6 +25,16 @@ MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
+TOOL_DISPLAY_LABELS = {
+    "AskUserQuestion": "AskUserQuestion",
+    "WebFetch": "WebFetch",
+    "WebSearch": "WebSearch",
+    "edit": "Modify",
+    "modify": "Modify",
+    "write": "Write",
+    "read": "Read",
+    "shell": "Shell",
+}
 ROLE_TITLES = {
     "user": "You",
     "assistant": "Deepy",
@@ -88,7 +98,9 @@ def parse_tool_output(output: str) -> ToolOutputView:
     await_user_response = bool(payload.get("awaitUserResponse"))
 
     detail = (error or path or _first_nonempty_line(text_output) or "").strip()
-    summary = f"{name} {status}" + (f" - {_truncate(detail)}" if detail else "")
+    summary = f"{format_tool_display_label(name)} {status}" + (
+        f" - {_truncate(detail)}" if detail else ""
+    )
     return ToolOutputView(
         name=name,
         ok=ok_value,
@@ -119,7 +131,7 @@ def format_tool_call_summary(
         {"name": tool_name, "arguments": arguments or ""},
         project_root=project_root,
     )
-    return f"{tool_name} {snippet}".strip()
+    return f"{format_tool_display_label(tool_name)} {snippet}".strip()
 
 
 def format_tool_progress_summary(
@@ -127,9 +139,22 @@ def format_tool_progress_summary(
     output: str,
 ) -> str:
     view = parse_tool_output(output)
-    base = call_summary.strip() or view.name
+    base = call_summary.strip() or format_tool_display_label(view.name)
     detail = _tool_progress_detail(view)
     return f"{base}  {view.status}" + (f" - {detail}" if detail else "")
+
+
+def format_tool_display_name(name: str) -> str:
+    if name in TOOL_DISPLAY_LABELS:
+        return TOOL_DISPLAY_LABELS[name]
+    stripped = name.strip()
+    if not stripped:
+        return "Tool"
+    return _display_title(stripped)
+
+
+def format_tool_display_label(name: str) -> str:
+    return f"[{format_tool_display_name(name)}]"
 
 
 def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | None:
@@ -165,9 +190,8 @@ def render_tool_diff_preview(
     if not preview.lines:
         return None
     syntax = _diff_preview_syntax(preview, palette)
-    label = "Wrote" if view.name.lower() == "write" else "Edited"
     return Group(
-        render_diff_preview_header(preview, label=label, palette=palette),
+        render_diff_preview_header(preview, tool_name=view.name, palette=palette),
         *(render_diff_preview_line(line, palette=palette, width=width, syntax=syntax) for line in preview.lines),
     )
 
@@ -185,14 +209,15 @@ def parse_diff_preview_view(diff_preview: str, *, path: str | None = None) -> Di
 def render_diff_preview_header(
     preview: DiffPreview,
     *,
-    label: str,
+    tool_name: str,
     palette: UiPalette | None = None,
 ) -> Text:
     palette = palette or DARK_PALETTE
+    label = format_tool_display_label(tool_name)
     if preview.path:
         label = f"{label} {preview.path}"
     label = f"{label} (+{preview.added} -{preview.removed})"
-    return Text(f"• {label}", style=f"bold {palette.info}")
+    return _tool_label_line(label, style=palette.info, bullet=True)
 
 
 def render_diff_preview_line(
@@ -431,11 +456,31 @@ def render_tool_output(
 ) -> Group:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
-    parts: list[Any] = [Text(view.summary, style=status_style(view.ok, palette))]
+    parts: list[Any] = [_render_tool_summary(view, palette)]
+    shell_output = render_shell_output_block(output, palette=palette)
+    if shell_output:
+        parts.append(shell_output)
     diff = render_tool_diff_preview(output, palette=palette, width=width)
     if diff:
         parts.append(diff)
     return Group(*parts)
+
+
+def render_shell_output_block(
+    output: str,
+    *,
+    palette: UiPalette | None = None,
+) -> Panel | None:
+    palette = palette or DARK_PALETTE
+    view = parse_tool_output(output)
+    if view.name != "shell" or not view.output:
+        return None
+    return Panel(
+        Text(view.output.rstrip("\n"), style=palette.markdown_code_block),
+        title=format_tool_display_label("shell"),
+        border_style=palette.tool,
+        expand=False,
+    )
 
 
 def render_message(
@@ -469,6 +514,31 @@ def _tool_diff_text(view: ToolOutputView) -> str | None:
     if view.ok is not True or view.name.lower() not in DIFF_PREVIEW_TOOLS:
         return None
     return view.diff_preview or view.diff
+
+
+def _render_tool_summary(view: ToolOutputView, palette: UiPalette) -> Text:
+    style = status_style(view.ok, palette)
+    label = format_tool_display_label(view.name)
+    if not view.summary.startswith(label):
+        return Text(view.summary, style=style)
+    return _tool_label_line(view.summary, style=style)
+
+
+def _tool_label_line(text: str, *, style: str, bullet: bool = False) -> Text:
+    label_match = re.match(r"(\[[^\]]+\])(\s?.*)", text, flags=re.DOTALL)
+    if not label_match:
+        return Text(text, style=style)
+    label, detail = label_match.groups()
+    parts = []
+    if bullet:
+        parts.append(("• ", style))
+    parts.extend(
+        [
+            (label, f"bold underline {style}"),
+            (detail, style),
+        ]
+    )
+    return Text.assemble(*parts)
 
 
 def _parse_hunk_header(line: str) -> tuple[int, int] | None:
@@ -619,6 +689,13 @@ def _string_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _display_title(value: str) -> str:
+    parts = [part for part in re.split(r"[_\-\s]+", value) if part]
+    if not parts:
+        return "Tool"
+    return "".join(part[:1].upper() + part[1:] for part in parts)
 
 
 def _first_nonempty_line(value: str) -> str | None:

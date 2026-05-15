@@ -40,6 +40,7 @@ class AskUserQuestionOptionEntry:
 def build_options(question: AskUserQuestionItem | None) -> list[AskUserQuestionOptionEntry]:
     if question is None:
         return []
+    custom_label, custom_description = _custom_answer_text(question.question)
     return [
         *[
             AskUserQuestionOptionEntry(
@@ -49,7 +50,12 @@ def build_options(question: AskUserQuestionItem | None) -> list[AskUserQuestionO
             )
             for option in question.options
         ],
-        AskUserQuestionOptionEntry(label="Other / custom answer", value=OTHER_VALUE, is_other=True),
+        AskUserQuestionOptionEntry(
+            label=custom_label,
+            value=OTHER_VALUE,
+            description=custom_description,
+            is_other=True,
+        ),
     ]
 
 
@@ -175,6 +181,16 @@ def format_ask_user_question_decline() -> str:
 
 def _stripped_string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _custom_answer_text(question: str) -> tuple[str, str]:
+    if _contains_cjk(question):
+        return "自定义回答", "输入自己的答案。"
+    return "Custom answer", "Type your own answer."
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
 
 
 def _escape_answer_part(value: str) -> str:

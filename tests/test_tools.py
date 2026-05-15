@@ -1090,6 +1090,11 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "current runtime shell" in shell_tool.description
     assert "command dialect" in shell_tool.description
     assert "persistent bash session" not in shell_tool.description
+    ask_tool = tools[1]
+    assert ask_tool.name == "AskUserQuestion"
+    assert "偏好" in ask_tool.description
+    assert "for Chinese requests, ask in Chinese" in ask_tool.description
+    assert "low-impact details" in ask_tool.description
 
 
 def test_function_tool_schemas_match_shell_tool(tmp_path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import select
 import threading
 import time
@@ -61,9 +62,11 @@ from deepy.ui.ask_user_question import normalize_questions
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.message_view import (
     build_thinking_summary,
+    format_tool_display_label,
     format_tool_call_summary,
     format_tool_progress_summary,
     parse_tool_output,
+    render_shell_output_block,
     render_tool_diff_preview,
 )
 from deepy.ui.markdown import render_markdown
@@ -442,8 +445,8 @@ class TerminalStreamRenderer:
         )
         self.status_detail = ""
         self.pending_tool_calls: dict[str, ToolCallDisplay] = {}
-        self.reasoning_text = ""
-        self.reasoning_flushed = False
+        self.reasoning_started = False
+        self.reasoning_buffer = ""
 
     def __call__(self, event: DeepyStreamEvent) -> None:
         _print_stream_event(
@@ -456,11 +459,19 @@ class TerminalStreamRenderer:
         )
 
     def add_reasoning(self, text: str) -> None:
-        if self.reasoning_flushed:
-            self.reasoning_text = ""
-            self.reasoning_flushed = False
-        self.reasoning_text += text
-        summary = build_thinking_summary(self.reasoning_text)
+        if not text:
+            return
+        if not self.reasoning_started:
+            self.console.print(
+                Text.assemble(
+                    ("• ", self.palette.muted),
+                    (format_tool_display_label("Thinking"), f"bold {self.palette.muted}"),
+                ),
+            )
+            self.reasoning_started = True
+        self.reasoning_buffer += text
+        self._print_stable_reasoning()
+        summary = build_thinking_summary(self.reasoning_buffer or text)
         if self.status is not None and summary:
             self.update_status(f"Thinking {summary}")
 
@@ -481,19 +492,17 @@ class TerminalStreamRenderer:
             )
 
     def flush(self) -> None:
-        if self.reasoning_flushed:
-            return
-        summary = build_thinking_summary(self.reasoning_text)
-        if not summary:
-            return
-        self.console.print(
-            Text.assemble(
-                ("• ", self.palette.muted),
-                ("Thinking  ", f"bold {self.palette.muted}"),
-                (summary, self.palette.muted),
-            )
+        self._print_stable_reasoning(force=True)
+        self.reasoning_started = False
+        self.reasoning_buffer = ""
+
+    def _print_stable_reasoning(self, *, force: bool = False) -> None:
+        text, self.reasoning_buffer = _split_stable_reasoning_text(
+            self.reasoning_buffer,
+            force=force,
         )
-        self.reasoning_flushed = True
+        if text:
+            self.console.print(Text(text.rstrip("\n"), style=self.palette.muted))
 
 
 def _handle_slash_command(
@@ -1516,9 +1525,12 @@ def _print_stream_event(
         view = parse_tool_output(event.text)
         call_id = _string_payload(event.payload.get("call_id"))
         call = pending_tool_calls.pop(call_id, None) if pending_tool_calls is not None else None
-        call_summary = call.summary if call is not None else view.name
+        call_summary = call.summary if call is not None else ""
         summary = format_tool_progress_summary(call_summary, event.text)
         console.print(_status_line(summary, status_style(view.ok, palette)))
+        shell_output = render_shell_output_block(event.text, palette=palette)
+        if shell_output:
+            console.print(shell_output)
         diff = render_tool_diff_preview(event.text, palette=palette, width=console.width)
         if diff:
             console.print(diff)
@@ -1536,8 +1548,30 @@ def _string_payload(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+_REASONING_BUFFER_TARGET_CHARS = 180
+
+
+def _split_stable_reasoning_text(text: str, *, force: bool = False) -> tuple[str, str]:
+    if force:
+        return text, ""
+    newline_index = text.rfind("\n")
+    if newline_index >= 0:
+        return text[: newline_index + 1], text[newline_index + 1 :]
+    if len(text) >= _REASONING_BUFFER_TARGET_CHARS:
+        return text, ""
+    return "", text
+
+
 def _status_line(text: str, style: str) -> Text:
-    return Text.assemble(("• ", style), (text, f"bold {style}"))
+    label_match = re.match(r"(\[[^\]]+\])(\s?.*)", text, flags=re.DOTALL)
+    if label_match:
+        label, detail = label_match.groups()
+        return Text.assemble(
+            ("• ", style),
+            (label, f"bold underline {style}"),
+            (detail, style),
+        )
+    return Text.assemble(("• ", style), (text, style))
 
 
 def _collect_pending_question_response(
@@ -1569,13 +1603,20 @@ def _prompt_for_question(
         detail = f" - {option.description}" if option.description else ""
         console.print(f"{index}. {option.label}{detail}")
     prompt = (
-        "Answer numbers separated by commas, text, or empty to decline"
+        "Answer numbers separated by commas, custom text, or empty to decline"
         if question.multi_select
-        else "Answer number, text, or empty to decline"
+        else "Answer number, custom text, or empty to decline"
     )
     raw_answer = input_func(prompt).strip()
     if not raw_answer:
         return None
+    direct_option = None if question.multi_select else _option_from_token(options, raw_answer)
+    if direct_option is not None and direct_option.is_other:
+        custom_answer = input_func(_custom_answer_prompt(direct_option)).strip()
+        return build_answer_for_question(question, direct_option, [], custom_answer)
+    if question.multi_select and _multi_select_needs_custom_text(options, raw_answer):
+        custom_answer = input_func(_custom_answer_prompt(options[-1])).strip()
+        raw_answer = f"{raw_answer}, {custom_answer}" if custom_answer else raw_answer
     return _answer_question_from_text(question, raw_answer)
 
 
@@ -1604,6 +1645,26 @@ def _answer_question_from_text(question: AskUserQuestionItem, raw_answer: str) -
         option = next((item for item in options if item.value == OTHER_VALUE), None)
     other_text = raw_answer if option is not None and option.is_other else ""
     return build_answer_for_question(question, option, [], other_text)
+
+
+def _multi_select_needs_custom_text(
+    options: list[AskUserQuestionOptionEntry],
+    raw_answer: str,
+) -> bool:
+    tokens = [part.strip() for part in raw_answer.split(",") if part.strip()]
+    saw_other = False
+    saw_custom_text = False
+    for token in tokens:
+        option = _option_from_token(options, token)
+        if option is not None and option.is_other:
+            saw_other = True
+        elif option is None:
+            saw_custom_text = True
+    return saw_other and not saw_custom_text
+
+
+def _custom_answer_prompt(option: AskUserQuestionOptionEntry) -> str:
+    return "自定义回答" if option.label.startswith("自定义") else "Custom answer"
 
 
 def _option_from_token(

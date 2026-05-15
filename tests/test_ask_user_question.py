@@ -160,8 +160,21 @@ def test_build_options_appends_other_option():
 
     assert [(option.label, option.value, option.description, option.is_other) for option in options] == [
         ("npm", "npm", "Use package-lock.json.", False),
-        ("Other / custom answer", OTHER_VALUE, None, True),
+        ("Custom answer", OTHER_VALUE, "Type your own answer.", True),
     ]
+
+
+def test_build_options_localizes_custom_answer_for_chinese_question():
+    question = AskUserQuestionItem(
+        question="选择哪个方案？",
+        options=[AskUserQuestionOption(label="方案 A")],
+    )
+
+    options = build_options(question)
+
+    assert options[-1].label == "自定义回答"
+    assert options[-1].description == "输入自己的答案。"
+    assert options[-1].value == OTHER_VALUE
 
 
 def test_build_answer_for_question_handles_single_select_and_other():

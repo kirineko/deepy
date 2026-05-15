@@ -9,6 +9,7 @@ from deepy.ui.message_view import MAX_DIFF_LINES
 from deepy.ui.message_view import format_tool_output_summary
 from deepy.ui.message_view import format_tool_progress_summary
 from deepy.ui.message_view import format_tool_call_summary
+from deepy.ui.message_view import format_tool_display_label
 from deepy.ui.message_view import build_thinking_summary
 from deepy.ui.message_view import build_tool_params_snippet
 from deepy.ui.message_view import build_tool_result_snippet
@@ -18,6 +19,7 @@ from deepy.ui.message_view import parse_diff_preview
 from deepy.ui.message_view import parse_tool_output
 from deepy.ui.message_view import render_diff_preview_line
 from deepy.ui.message_view import render_message
+from deepy.ui.message_view import render_shell_output_block
 from deepy.ui.message_view import render_tool_diff_preview
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
@@ -32,7 +34,7 @@ def test_format_tool_output_summary_uses_path_detail():
         '"metadata":{"path":"/tmp/a"},"awaitUserResponse":false}'
     )
 
-    assert format_tool_output_summary(output) == "read ok - /tmp/a"
+    assert format_tool_output_summary(output) == "[Read] ok - /tmp/a"
 
 
 def test_format_tool_output_summary_uses_error_detail():
@@ -41,7 +43,7 @@ def test_format_tool_output_summary_uses_error_detail():
         '"metadata":{"exitCode":1},"awaitUserResponse":false}'
     )
 
-    assert format_tool_output_summary(output) == "shell failed - Command exited with code 1."
+    assert format_tool_output_summary(output) == "[Shell] failed - Command exited with code 1."
 
 
 def test_parse_tool_output_preserves_pending_question_state():
@@ -53,7 +55,13 @@ def test_parse_tool_output_preserves_pending_question_state():
 
     assert view.name == "AskUserQuestion"
     assert view.await_user_response is True
-    assert view.summary == "AskUserQuestion ok - Waiting for user input."
+    assert view.summary == "[AskUserQuestion] ok - Waiting for user input."
+
+
+def test_format_tool_display_label_normalizes_protocol_names():
+    assert format_tool_display_label("AskUserQuestion") == "[AskUserQuestion]"
+    assert format_tool_display_label("WebFetch") == "[WebFetch]"
+    assert format_tool_display_label("edit") == "[Modify]"
 
 
 def test_raw_tool_output_is_truncated():
@@ -127,8 +135,8 @@ def test_render_tool_output_includes_summary_and_diff():
     console.print(render_tool_output(output))
 
     rendered = console.export_text()
-    assert "edit ok - file" in rendered
-    assert "Edited file (+1 -0)" in rendered
+    assert "[Modify] ok - file" in rendered
+    assert "[Modify] file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+new" not in rendered
 
@@ -144,10 +152,68 @@ def test_render_tool_output_shows_write_preview_with_diff_style():
     console.print(render_tool_output(output, width=40))
 
     rendered = console.export_text()
-    assert "write ok - file" in rendered
-    assert "Wrote file (+1 -0)" in rendered
+    assert "[Write] ok - file" in rendered
+    assert "[Write] file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+ new" in rendered
+
+
+def test_render_tool_output_bolds_tool_label():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "WebFetch",
+            "output": "Fetched page",
+            "error": None,
+            "metadata": {},
+            "awaitUserResponse": False,
+        }
+    )
+
+    rendered = render_tool_output(output)
+    summary = list(rendered.renderables)[0]
+
+    assert summary.plain.startswith("[WebFetch] ok")
+    assert "bold" in str(summary.spans[0].style)
+    assert "underline" in str(summary.spans[0].style)
+
+
+def test_render_tool_output_includes_full_shell_output_block():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "shell",
+            "output": "line 1\nline 2\nline 3",
+            "error": None,
+            "metadata": {"exitCode": 0},
+            "awaitUserResponse": False,
+        }
+    )
+    console = Console(record=True, width=120)
+
+    console.print(render_tool_output(output))
+
+    rendered = console.export_text()
+    assert "[Shell] ok - line 1" in rendered
+    assert "[Shell]" in rendered
+    assert "line 1" in rendered
+    assert "line 2" in rendered
+    assert "line 3" in rendered
+
+
+def test_render_shell_output_block_ignores_non_shell_tools():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "read",
+            "output": "file content",
+            "error": None,
+            "metadata": {},
+            "awaitUserResponse": False,
+        }
+    )
+
+    assert render_shell_output_block(output) is None
 
 
 def test_render_tool_diff_preview_hides_headers_and_markers():
@@ -169,7 +235,7 @@ def test_render_tool_diff_preview_hides_headers_and_markers():
     console.print(render_tool_diff_preview(output))
 
     rendered = console.export_text()
-    assert "Edited file (+1 -1)" in rendered
+    assert "[Modify] file (+1 -1)" in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -248,7 +314,7 @@ def test_render_write_preview_line_uses_shared_diff_background():
     assert rendered is not None
     lines = list(rendered.renderables)
 
-    assert "Wrote file (+1 -0)" in lines[0].plain
+    assert "[Write] file (+1 -0)" in lines[0].plain
     assert lines[1].plain.startswith("        1 + let x = 1;")
     assert cell_len(lines[1].plain) == 40
     assert "#1f3d2b" in str(lines[1].spans)
@@ -420,7 +486,7 @@ def test_render_message_renders_tool_outputs():
         )
     )
 
-    assert "read ok - file" in console.export_text()
+    assert "[Read] ok - file" in console.export_text()
 
 
 def test_parse_diff_preview_removes_headers_and_classifies_lines():
@@ -486,7 +552,7 @@ def test_format_tool_call_summary_formats_read_arguments():
             '{"file_path":"/repo/README.md"}',
             project_root="/repo",
         )
-        == "read README.md"
+        == "[Read] README.md"
     )
 
 
@@ -502,7 +568,7 @@ def test_format_tool_call_summary_formats_write_without_content_body():
         project_root="/repo",
     )
 
-    assert summary == "write src/lib.rs (4 lines, 34 chars)"
+    assert summary == "[Write] src/lib.rs (4 lines, 34 chars)"
     assert "println" not in summary
 
 
@@ -518,7 +584,7 @@ def test_format_tool_call_summary_formats_modify_create_without_content_body():
         project_root="/repo",
     )
 
-    assert summary == "modify src/lib.rs (4 lines, 34 chars)"
+    assert summary == "[Modify] src/lib.rs (4 lines, 34 chars)"
     assert "println" not in summary
 
 
@@ -537,7 +603,7 @@ def test_format_tool_call_summary_hides_ask_user_question_arguments():
         ),
     )
 
-    assert summary == "AskUserQuestion"
+    assert summary == "[AskUserQuestion]"
     assert "Which path?" not in summary
     assert "questions" not in summary
 
@@ -548,7 +614,7 @@ def test_format_tool_progress_summary_merges_call_and_output_status():
         '"metadata":{"path":"/repo/README.md"},"awaitUserResponse":false}'
     )
 
-    assert format_tool_progress_summary("read README.md", output) == "read README.md  ok"
+    assert format_tool_progress_summary("[Read] README.md", output) == "[Read] README.md  ok"
 
 
 def test_format_tool_progress_summary_includes_failure_detail():

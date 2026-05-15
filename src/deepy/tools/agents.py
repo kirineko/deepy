@@ -61,8 +61,11 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         FunctionTool(
             name="AskUserQuestion",
             description=(
-                "When the task has ambiguities or multiple implementation approaches, use this tool "
-                "to pause execution and ask the user a question to get clarification or make a decision."
+                "当用户意图、范围、偏好、实现路线、高影响取舍或必要批准会明显影响结果时，"
+                "use this tool to pause and ask a concise question. Match the user's language; "
+                "for Chinese requests, ask in Chinese. If one option is recommended, list it first "
+                "and mark it as recommended. Do not ask for low-impact details when a reasonable "
+                "assumption can keep progress moving."
             ),
             params_json_schema=ASK_USER_QUESTION_SCHEMA,
             on_invoke_tool=invoke_ask_user_question,

@@ -18,7 +18,7 @@
         <span>Deepy</span>
       </a>
       <nav>
-        <a href="#release">0.1.7</a>
+        <a href="#release">0.1.11</a>
         <a href="#features">特性</a>
         <a href="#screenshots">截图</a>
         <a href="#install">安装</a>
@@ -28,20 +28,20 @@
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="terminal-mark">&gt; deepy 0.1.7</p>
+          <p class="terminal-mark">&gt; deepy 0.1.11</p>
           <h1 id="hero-title">DeepSeek Coding Agent</h1>
           <p class="hero-lede">
             在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并用可恢复的 compact
             机制管理长上下文。
           </p>
-          <div class="hero-metrics" aria-label="Deepy 0.1.7 关键能力">
-            <span><strong>WebFetch</strong> 抓取可读网页内容</span>
-            <span><strong>diff preview</strong> 整行背景与语法高亮</span>
-            <span><strong>/compact</strong> 可恢复长上下文</span>
+          <div class="hero-metrics" aria-label="Deepy 0.1.11 关键能力">
+            <span><strong>[Tool]</strong> 统一醒目的工具活动标签</span>
+            <span><strong>Thinking</strong> 完整显示 DeepSeek 思考过程</span>
+            <span><strong>Shell</strong> 展示完整命令运行结果</span>
           </div>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">使用 uv 安装</a>
-            <a class="button secondary" href="#release">查看 0.1.7</a>
+            <a class="button secondary" href="#release">查看 0.1.11</a>
             <a class="button secondary" href="https://github.com/kirineko/deepy">GitHub</a>
           </div>
         </div>
@@ -52,49 +52,78 @@
 
       <section class="release" id="release" aria-labelledby="release-title">
         <div class="section-heading compact">
-          <p class="terminal-mark">&gt; release 0.1.7</p>
-          <h2 id="release-title">网页抓取和代码改动预览更适合真实编程会话</h2>
+          <p class="terminal-mark">&gt; release 0.1.11</p>
+          <h2 id="release-title">终端工具输出更统一，DeepSeek Thinking 更完整</h2>
           <p>
-            0.1.7 聚焦工具输出可读性：WebFetch 能从更多动态网页提取有用正文或描述，
-            write/edit diff 预览统一为终端宽度的整行背景，并对代码内容使用 Rich/Pygments
-            语法高亮。
+            0.1.11 聚焦终端工具 UX：所有工具活动统一使用 `[WebFetch]`、`[Write]`、
+            `[Modify]`、`[Read]` 这样的显著标签；DeepSeek Thinking 不再截断，并根据用户
+            语言加强本地化引导；Shell 工具会显示完整运行结果。
           </p>
         </div>
         <div class="release-grid">
           <article>
             <span>01</span>
-            <h3>Readable WebFetch extraction</h3>
+            <h3>Unified tool labels</h3>
             <p>
-              HTML 抓取会优先提取正文，并在正文不可用时回退到标准 description /
-              OpenGraph / Twitter 元数据，压缩响应也会先解码再解析。
+              WebFetch、Read、Write、Modify、Shell 和 AskUserQuestion 都使用统一的
+              bracketed Pascal 风格标签，工具名本身带有一致的显著视觉标识。
             </p>
           </article>
           <article>
             <span>02</span>
-            <h3>Full-width diff preview</h3>
+            <h3>Complete Thinking transcript</h3>
             <p>
-              `write` 和 `edit` 使用统一的 diff 样式，新增和删除行的红绿背景会铺满终端宽度，
-              `+` / `-` marker 保持醒目但更柔和。
+              Thinking 文本即时进入 transcript，不再按摘要截断；中文提问时，系统提示会更
+              明确地引导 DeepSeek 使用中文 thinking。
             </p>
           </article>
           <article>
             <span>03</span>
-            <h3>Syntax-highlighted changes</h3>
+            <h3>Shell output blocks</h3>
             <p>
-              diff 里的新增和删除代码会根据文件路径推断语言，并用 Rich/Pygments 渲染 token
-              颜色，同时保留 old/new 行号和 diff 背景。
+              shell 工具结果除了状态行，还会以独立样式展示完整 stdout/stderr，方便直接审查
+              命令的真实输出。
             </p>
           </article>
           <article>
             <span>04</span>
-            <h3>Dark and light theme coverage</h3>
+            <h3>Clearer AskUserQuestion UX</h3>
             <p>
-              变更预览覆盖 dark/light palette，宽字符 padding、超大 write 预览和实时流式
-              工具输出都有回归测试保护。
+              AskUserQuestion 的触发提示更明确，自定义回答选项会本地化显示，中文问题下会
+              优先呈现中文交互文案。
             </p>
           </article>
         </div>
         <div class="release-history" aria-label="历史版本">
+          <article>
+            <span>0.1.10</span>
+            <h3>Windows 编辑与换行修复</h3>
+            <p>
+              修复 Windows PowerShell 下 modify、CRLF 和 Unicode 文本编辑路径，让跨平台
+              文件修改更稳定。
+            </p>
+          </article>
+          <article>
+            <span>0.1.9</span>
+            <h3>PowerShell 兼容性</h3>
+            <p>
+              增强 Windows shell 执行、Python 子进程 UTF-8 输出和跨平台命令元数据。
+            </p>
+          </article>
+          <article>
+            <span>0.1.8</span>
+            <h3>主题和终端体验</h3>
+            <p>
+              增加 dark/light/auto 主题支持，并完善欢迎页、状态行和交互式配置体验。
+            </p>
+          </article>
+          <article>
+            <span>0.1.7</span>
+            <h3>网页抓取和 diff 预览</h3>
+            <p>
+              WebFetch 增强 HTML 可读内容提取，write/edit diff 预览增加整行背景和语法高亮。
+            </p>
+          </article>
           <article>
             <span>0.1.6</span>
             <h3>长会话可靠性</h3>
@@ -275,7 +304,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.1.7</span>
+      <span>Deepy 0.1.11</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>
