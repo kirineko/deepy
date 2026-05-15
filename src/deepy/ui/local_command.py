@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from deepy.tools.result import ToolResult
+from deepy.tools.shell_output import decode_shell_output_bytes
 from deepy.tools.shell_utils import RuntimeEnvironment, detect_runtime_environment
 from deepy.utils import json as json_utils
 
@@ -113,6 +114,7 @@ def run_local_command(
     capture_limit = max(display_limit, context_limit) + len(_TRUNCATED_MARKER)
 
     if runtime.os_family == "windows":
+        _prepare_windows_process_env(process_env)
         return _run_windows_pipes(
             command,
             cwd=cwd,
@@ -347,11 +349,11 @@ def _run_windows_pipes(
         if len(captured) >= capture_limit:
             capture_truncated = True
         exit_code = process.poll()
-        output = _sanitize_terminal_output(_decode_output(bytes(captured)))
+        output = _sanitize_terminal_output(_decode_output(bytes(captured), windows_compatible=True))
         error = _command_error(exit_code, timed_out=timed_out, interrupted=interrupted)
     except Exception as exc:
         exit_code = None
-        output = _sanitize_terminal_output(_decode_output(bytes(captured)))
+        output = _sanitize_terminal_output(_decode_output(bytes(captured), windows_compatible=True))
         error = str(exc)
 
     display_output, display_truncated = _limit_output(output, display_limit)
@@ -503,8 +505,17 @@ def _limit_output(output: str, limit: int) -> tuple[str, bool]:
     return output[:keep] + marker, True
 
 
-def _decode_output(output: bytes) -> str:
-    return _normalize_line_endings(output.decode("utf-8", errors="replace"))
+def _decode_output(output: bytes, *, windows_compatible: bool = False) -> str:
+    if windows_compatible:
+        text, _ = decode_shell_output_bytes(output)
+    else:
+        text = output.decode("utf-8", errors="replace")
+    return _normalize_line_endings(text)
+
+
+def _prepare_windows_process_env(env: dict[str, str]) -> None:
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
 
 def _sanitize_terminal_output(output: str) -> str:

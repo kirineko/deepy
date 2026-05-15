@@ -234,6 +234,8 @@ def test_windows_runner_preserves_powershell_shell_args_without_shell_true(tmp_p
         "-Command",
         "Write-Output ok",
     ]
+    assert calls[0]["kwargs"]["env"]["PYTHONUTF8"] == "1"  # type: ignore[index]
+    assert calls[0]["kwargs"]["env"]["PYTHONIOENCODING"] == "utf-8"  # type: ignore[index]
     assert "shell" not in calls[0]["kwargs"]
 
 
@@ -287,6 +289,38 @@ def test_windows_runner_normalizes_and_sanitizes_output(tmp_path):
     assert result.output == "中文\nnext\nline"
     assert result.display_output == "中文\nnext\nline"
     assert result.context_output == "中文\nnext\nline"
+
+
+def test_windows_runner_decodes_gbk_compatible_output(tmp_path):
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write("
+        "b'\\x1b[32m' + '状态: 正常\\r\\n'.encode('gb18030') + b'\\x1b[0m'"
+        ")"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = _run_windows_test_command(command, tmp_path)
+
+    assert result.ok
+    assert result.output == "状态: 正常\n"
+    assert result.display_output == "状态: 正常\n"
+    assert result.context_output == "状态: 正常\n"
+    assert "\ufffd" not in result.output
+
+
+def test_windows_runner_decodes_utf16le_output(tmp_path):
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write('WSL 状态: 正常\\r\\n'.encode('utf-16le'))"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = _run_windows_test_command(command, tmp_path)
+
+    assert result.ok
+    assert result.output == "WSL 状态: 正常\n"
+    assert "\ufffd" not in result.output
 
 
 def test_shell_tool_result_json_sanitizes_windows_output(tmp_path):
@@ -422,3 +456,21 @@ async def test_windows_synthetic_shell_transcript_stores_sanitized_output(tmp_pa
     assert payload["output"] == "中文\nnext"
     assert payload["metadata"]["ttyMode"] == "pipe"
     assert "\x1b" not in payload["output"]
+
+
+@pytest.mark.asyncio
+async def test_windows_synthetic_shell_transcript_stores_decoded_output(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    session = DeepyJsonlSession.create(project, deepy_home=tmp_path / "home", session_id="s1")
+    script = "import sys; sys.stdout.buffer.write('状态: 正常\\n'.encode('gb18030'))"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    result = _run_windows_test_command(command, project)
+    items = build_synthetic_shell_transcript_items(f"!{command}", result, call_id="call-local")
+
+    await session.add_items(items)
+
+    stored_items = await session.get_items()
+    payload = json_utils.loads(stored_items[2]["output"])
+    assert payload["output"] == "状态: 正常\n"
+    assert "\ufffd" not in payload["output"]
