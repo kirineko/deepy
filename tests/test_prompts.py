@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from deepy.config import Settings
 from deepy.prompts import build_system_prompt
+from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import load_project_rules
 from deepy.prompts.runtime_context import build_runtime_context
 from deepy.skills import (
@@ -97,19 +98,113 @@ def test_format_skills_for_prompt_preserves_standard_long_descriptions(tmp_path)
     assert long_description in rendered
 
 
-def test_load_project_rules_reads_project_then_user_rules(tmp_path):
+def test_load_project_rules_reads_global_then_project_rules(tmp_path):
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
     home.joinpath(".deepy").mkdir(parents=True)
     project.joinpath("AGENTS.md").write_text("project rule", encoding="utf-8")
-    home.joinpath(".deepy", "AGENTS.md").write_text("user rule", encoding="utf-8")
+    home.joinpath(".deepy", "AGENTS.md").write_text("global rule", encoding="utf-8")
 
     rules = load_project_rules(project, home=home)
 
     assert "project rule" in rules
-    assert "user rule" in rules
-    assert rules.index("project rule") < rules.index("user rule")
+    assert "global rule" in rules
+    assert "<!-- From:" in rules
+    assert rules.index("global rule") < rules.index("project rule")
+
+
+def test_load_project_rules_ignores_shared_agents_global_file(tmp_path):
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    home.joinpath(".agents").mkdir(parents=True)
+    home.joinpath(".agents", "AGENTS.md").write_text("shared global rule", encoding="utf-8")
+
+    rules = load_project_rules(project, home=home)
+
+    assert "shared global rule" not in rules
+
+
+def test_load_project_rules_reads_git_root_to_workdir_hierarchy(tmp_path):
+    repo = tmp_path / "repo"
+    leaf = repo / "src" / "deepy"
+    leaf.mkdir(parents=True)
+    repo.joinpath(".git").mkdir()
+    repo.joinpath("AGENTS.md").write_text("root rule", encoding="utf-8")
+    repo.joinpath("src", "AGENTS.md").write_text("src rule", encoding="utf-8")
+    leaf.joinpath("AGENTS.md").write_text("leaf rule", encoding="utf-8")
+
+    rules = load_project_rules(leaf, home=tmp_path / "home")
+
+    assert rules.index("root rule") < rules.index("src rule") < rules.index("leaf rule")
+
+
+def test_load_project_rules_without_git_only_reads_workdir(tmp_path):
+    project = tmp_path / "project"
+    leaf = project / "src"
+    leaf.mkdir(parents=True)
+    project.joinpath("AGENTS.md").write_text("parent rule", encoding="utf-8")
+    leaf.joinpath("AGENTS.md").write_text("leaf rule", encoding="utf-8")
+
+    rules = load_project_rules(leaf, home=tmp_path / "home")
+
+    assert "leaf rule" in rules
+    assert "parent rule" not in rules
+
+
+def test_load_project_rules_skips_empty_and_unsupported_filenames(tmp_path):
+    project = tmp_path / "project"
+    lower = project / "lower"
+    mixed = project / "mixed"
+    claude = project / "claude"
+    real = project / "real"
+    for directory in (lower, mixed, claude, real):
+        directory.mkdir(parents=True)
+    project.joinpath(".git").mkdir()
+    lower.joinpath("agents.md").write_text("lowercase rule", encoding="utf-8")
+    mixed.joinpath("Agents.md").write_text("mixed case rule", encoding="utf-8")
+    claude.joinpath("CLAUDE.md").write_text("claude rule", encoding="utf-8")
+    real.joinpath("AGENTS.md").write_text("", encoding="utf-8")
+
+    assert load_project_rules(lower, home=tmp_path / "home") == ""
+    assert load_project_rules(mixed, home=tmp_path / "home") == ""
+    assert load_project_rules(claude, home=tmp_path / "home") == ""
+    assert load_project_rules(real, home=tmp_path / "home") == ""
+
+
+def test_load_project_rules_budget_preserves_leaf_before_parent(tmp_path):
+    repo = tmp_path / "repo"
+    leaf = repo / "pkg"
+    leaf.mkdir(parents=True)
+    repo.joinpath(".git").mkdir()
+    repo.joinpath("AGENTS.md").write_text("A" * 1000, encoding="utf-8")
+    leaf.joinpath("AGENTS.md").write_text("B" * 50, encoding="utf-8")
+
+    rules = load_project_rules(leaf, home=tmp_path / "home", max_bytes=500)
+
+    assert rules.count("B") == 50
+    assert rules.count("A") < 1000
+    assert len(rules.encode("utf-8")) <= 500
+
+
+def test_build_agents_init_prompt_targets_project_root_agents_md(tmp_path):
+    prompt = build_agents_init_prompt(tmp_path, extra_instruction="Prefer concise docs.")
+
+    assert f"Target file: {tmp_path.resolve() / 'AGENTS.md'}" in prompt
+    assert "create the project root AGENTS.md" in prompt
+    assert "Prefer concise docs." in prompt
+    assert "Write only the project root AGENTS.md" in prompt
+    assert "Inspect the actual repository structure" in prompt
+
+
+def test_build_agents_init_prompt_updates_existing_agents_md(tmp_path):
+    tmp_path.joinpath("AGENTS.md").write_text("Existing guidance", encoding="utf-8")
+
+    prompt = build_agents_init_prompt(tmp_path)
+
+    assert "update the project root AGENTS.md" in prompt
+    assert "read it first and preserve useful accurate guidance" in prompt
 
 
 def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
@@ -128,6 +223,14 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
 
     assert "Keep the latest user task" in prompt
     assert "Follow local rules." in prompt
+    assert "AGENTS.md instructions:" in prompt
+    assert "binding Deepy and project guidance" in prompt
+    assert "Instruction precedence:" in prompt
+    assert "direct user instructions" in prompt
+    assert "child/cwd AGENTS.md" in prompt
+    assert "global ~/.deepy/AGENTS.md" in prompt
+    assert "check for\nmore specific AGENTS.md files" in prompt
+    assert "update the corresponding AGENTS.md" in prompt
     assert "## WebSearch" in prompt
     assert "## WebFetch" in prompt
     assert "## shell" in prompt
@@ -180,9 +283,9 @@ def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path
         runtime_context="Dynamic runtime context.",
     )
 
-    assert prompt.index("Tool documentation:") < prompt.index("Project rules:")
-    assert prompt.index("Default skill:") < prompt.index("Project rules:")
-    assert prompt.index("Project rules:") < prompt.index("Runtime context:")
+    assert prompt.index("Tool documentation:") < prompt.index("AGENTS.md instructions:")
+    assert prompt.index("Default skill:") < prompt.index("AGENTS.md instructions:")
+    assert prompt.index("AGENTS.md instructions:") < prompt.index("Runtime context:")
     assert "Dynamic runtime context." in prompt
 
 

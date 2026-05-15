@@ -28,7 +28,7 @@ def build_system_prompt(
         load_project_rules(project_root) if project_rules is None else project_rules.strip()
     )
     resolved_skills = discover_skills(project_root) if skills is None else skills
-    project_rules_block = resolved_project_rules or "No project rules found."
+    agent_instructions_block = resolved_project_rules or "No AGENTS.md instructions found."
     skills_block = format_skills_for_prompt(resolved_skills)
     loaded_skills_block = format_loaded_skills_for_prompt(loaded_skills or [])
     runtime_context_block = runtime_context or build_runtime_context(
@@ -67,8 +67,25 @@ Tool documentation:
 Default skill:
 {AGENT_DRIFT_GUARD}
 
-Project rules:
-{project_rules_block}
+AGENTS.md instructions:
+Loaded AGENTS.md files contain binding Deepy and project guidance. Follow them unless
+they conflict with system/developer constraints, safety requirements, or the user's
+latest direct instruction.
+
+Instruction precedence:
+- system/developer/safety constraints
+- direct user instructions
+- child/cwd AGENTS.md
+- parent project AGENTS.md
+- global ~/.deepy/AGENTS.md
+
+Before editing files in subdirectories outside the initially loaded path, check for
+more specific AGENTS.md files along that target path. If you change commands,
+workflows, structure, style rules, or conventions documented by an applicable
+AGENTS.md, update the corresponding AGENTS.md when the existing guidance becomes
+stale.
+
+{agent_instructions_block}
 
 Available skills:
 {skills_block}

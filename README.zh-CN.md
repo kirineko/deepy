@@ -253,16 +253,50 @@ deepy run "summarize this project"
 /skills search <query>  搜索配置的 skill 市场
 /skills install <name>  安装市场 skill
 /skill:<name> [request] 直接调用某个 skill
+/init                   创建或更新项目 AGENTS.md
 ```
 
-## 项目规则和 Skills
+## AGENTS.md 指令和 Skills
 
-Deepy 会自动加载项目内的规则和技能文件：
+Deepy 会自动加载面向 Agent 的指令和技能文件：
 
-- `AGENTS.md`
+- `~/.deepy/AGENTS.md`：Deepy 全局个人规则
+- 从 git root 到当前工作目录逐层发现的 `AGENTS.md`
 - `.agents/skills/*/SKILL.md`
 
-这样每个仓库都可以保存自己的代码风格、验证命令、审查规则和领域工作流，而不需要修改全局配置。
+项目内的 `AGENTS.md` 会按从宽到窄的顺序加载。子目录里的
+`AGENTS.md` 会出现在仓库根目录规则之后；如果规则冲突，越靠近当前
+工作目录的规则优先。用户当前直接输入的指令仍然高于所有已加载的
+`AGENTS.md`。
+
+推荐保持 `AGENTS.md` 简洁、具体：
+
+```markdown
+# AGENTS.md
+
+## 命令
+- 测试：`uv run pytest`
+- Lint：`uv run ruff check`
+- 类型检查：`uv run pyright`
+
+## 架构
+- CLI 入口保持轻量，可复用逻辑放在 `src/` 下。
+
+## 风格
+- 优先做小而聚焦的改动，并匹配现有代码风格。
+
+## 验证
+- 先运行与改动相关的聚焦测试，再运行更完整的检查。
+
+## 边界
+- 不重写无关文件，不回滚用户已有改动。
+```
+
+Skills 仍然采用标准 Agent Skills，放在 `.agents/skills/*/SKILL.md`，
+并通过 progressive disclosure 流程加载。
+
+在交互式终端中运行 `/init`，Deepy 会分析当前仓库并创建或刷新项目根目录的
+`AGENTS.md`。
 
 ## 开发
 

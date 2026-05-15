@@ -46,6 +46,8 @@ from deepy.config import (
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
+from deepy.prompts.init_agents import build_agents_init_prompt
+from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
@@ -266,6 +268,27 @@ def run_interactive(
                         palette=palette,
                     )
                     session_id = summary.session_id
+                _print_assistant_output(output, summary.output, palette=palette)
+                _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                context_status = _format_context_footer(
+                    summary.session_id,
+                    project_root=root,
+                    settings=settings,
+                )
+                continue
+            if slash.name == "init":
+                _print_user_input(output, text, palette=palette)
+                summary = _run_once_with_status(
+                    output,
+                    run_once,
+                    build_agents_init_prompt(root, extra_instruction=slash.argument),
+                    project_root=root,
+                    settings=settings,
+                    session_id=session_id,
+                    skill_names=list(loaded_skill_names),
+                    palette=palette,
+                )
+                session_id = summary.session_id
                 _print_assistant_output(output, summary.output, palette=palette)
                 _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
                 context_status = _format_context_footer(
@@ -686,6 +709,7 @@ def _handle_slash_command(
         console.print("/skills show NAME")
         console.print("/skills use NAME")
         console.print("/skill:NAME  Invoke a skill")
+        console.print("/init      Create or update project AGENTS.md")
         console.print("/model      Select model and thinking strength")
         console.print("/status     Show project status")
         console.print("/theme      Show or change UI theme")
@@ -1744,6 +1768,8 @@ def _format_context_footer(
     ]
     if project_root is not None:
         parts.append(f"cwd {format_home_relative_path(project_root)}")
+        if has_agents_instructions(project_root):
+            parts.append("AGENTS.md loaded")
     else:
         parts.append("cwd unknown")
 

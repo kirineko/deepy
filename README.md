@@ -264,17 +264,50 @@ Inside the interactive terminal:
 /skills search <query>  Search the configured skill market
 /skills install <name>  Install a market skill
 /skill:<name> [request] Invoke a skill directly
+/init                   Create or update project AGENTS.md
 ```
 
-## Project Rules And Skills
+## AGENTS.md Instructions And Skills
 
-Deepy automatically loads project instructions from:
+Deepy automatically loads agent-facing instructions from:
 
-- `AGENTS.md`
+- `~/.deepy/AGENTS.md` for Deepy-wide personal guidance
+- `AGENTS.md` files from the git root down to the current working directory
 - `.agents/skills/*/SKILL.md`
 
-This lets each repository define local conventions, commands, review rules, and
-domain-specific workflows without changing global config.
+Project `AGENTS.md` files are loaded from broad to specific. A file in a nested
+directory appears after the repository root file and takes precedence when rules
+conflict. Direct user instructions still take precedence over loaded
+`AGENTS.md` guidance.
+
+A concise `AGENTS.md` works best:
+
+```markdown
+# AGENTS.md
+
+## Commands
+- Test: `uv run pytest`
+- Lint: `uv run ruff check`
+- Type check: `uv run pyright`
+
+## Architecture
+- Keep CLI entry points thin; put reusable behavior under `src/`.
+
+## Style
+- Prefer small, focused changes that match existing patterns.
+
+## Verification
+- Run focused tests for touched code before broader checks.
+
+## Boundaries
+- Do not rewrite unrelated files or revert user changes.
+```
+
+Skills remain standard Agent Skills under `.agents/skills/*/SKILL.md` and are
+loaded through the skill progressive-disclosure flow.
+
+Run `/init` in the interactive terminal to have Deepy inspect the repository and
+create or refresh the project root `AGENTS.md`.
 
 ## Development
 

@@ -948,7 +948,42 @@ def test_help_slash_command_includes_model(tmp_path):
     rendered = console.export_text()
     assert next_session == "s1"
     assert "/model" in rendered
+    assert "/init" in rendered
     assert "/compact [focus]" in rendered
+
+
+def test_run_interactive_init_routes_to_model_prompt(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(
+        [
+            "/init keep it short",
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+        ]
+    )
+    captured: list[str] = []
+
+    async def fake_run_once(prompt, **kwargs):
+        captured.append(prompt)
+        return RunSummary(output="initialized", session_id="init-session", complete=True)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+
+    result = terminal.run_interactive(
+        Settings(ui=UiConfig(theme="dark", theme_configured=True)),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert len(captured) == 1
+    assert f"Target file: {tmp_path.resolve() / 'AGENTS.md'}" in captured[0]
+    assert "create the project root AGENTS.md" in captured[0]
+    assert "keep it short" in captured[0]
+    assert "initialized" in console.export_text()
 
 
 def test_compact_slash_command_without_active_session(tmp_path):
@@ -1261,6 +1296,37 @@ def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_pa
     assert "Enter send" not in toolbar
     assert "Shift+Enter" not in toolbar
     assert "session" not in toolbar
+    assert "AGENTS.md loaded" not in toolbar
+
+
+def test_format_context_footer_marks_loaded_agents_md(tmp_path):
+    tmp_path.joinpath("AGENTS.md").write_text("Use local rules.", encoding="utf-8")
+
+    toolbar = _format_context_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "AGENTS.md loaded" in toolbar
+
+
+def test_format_context_footer_ignores_empty_agents_md(tmp_path):
+    tmp_path.joinpath("AGENTS.md").write_text("", encoding="utf-8")
+
+    toolbar = _format_context_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "AGENTS.md loaded" not in toolbar
 
 
 def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(tmp_path):
