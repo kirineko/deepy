@@ -145,6 +145,16 @@ main {
   padding-bottom: clamp(2rem, 5vw, 4rem);
 }
 
+.release-kicker {
+  margin-bottom: 0.6rem;
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 h1 {
   margin-bottom: 1.1rem;
   font-size: clamp(4.4rem, 13vw, 11rem);
@@ -369,16 +379,20 @@ h2 {
 }
 
 .workflow-card.diff-card {
-  grid-column: span 5;
+  grid-column: span 7;
 }
 
 .workflow-card:nth-child(2),
 .workflow-card:nth-child(3) {
+  grid-column: span 5;
+}
+
+.workflow-card:nth-child(4) {
   grid-column: span 7;
 }
 
-.workflow-card:nth-child(4),
-.workflow-card:nth-child(5) {
+.workflow-card:nth-child(5),
+.workflow-card:nth-child(6) {
   grid-column: span 6;
 }
 
@@ -527,7 +541,8 @@ footer a {
   .workflow-card:nth-child(2),
   .workflow-card:nth-child(3),
   .workflow-card:nth-child(4),
-  .workflow-card:nth-child(5) {
+  .workflow-card:nth-child(5),
+  .workflow-card:nth-child(6) {
     grid-column: 1 / -1;
   }
 }
