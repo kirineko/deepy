@@ -13,7 +13,7 @@ def test_format_session_time_formats_millisecond_timestamp():
     assert ":" in rendered
 
 
-def test_format_resume_session_label_includes_title_status_time_and_history_tokens():
+def test_format_resume_session_label_includes_title_status_time_and_history_estimate():
     label = format_resume_session_label(
         ResumeSessionPreview(
             id="abc123456789",
@@ -26,7 +26,7 @@ def test_format_resume_session_label_includes_title_status_time_and_history_toke
 
     assert "当前项目有哪些核心文件？" in label
     assert "completed" in label
-    assert "history 1,559 est" in label
+    assert "history estimate 1,559" in label
     assert "abc12345" in label
 
 

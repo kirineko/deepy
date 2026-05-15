@@ -8,7 +8,7 @@ from typing import Any
 
 from deepy.llm.context import estimate_tokens_for_item
 from deepy.llm.replay import sanitize_sdk_items_for_replay
-from deepy.usage import TokenUsage, merge_usage, normalize_usage
+from deepy.usage import ContextWindowUsage, TokenUsage, context_window_usage, merge_usage, normalize_usage
 from deepy.utils import json as json_utils
 
 SESSION_INDEX_VERSION = 2
@@ -26,6 +26,7 @@ class SessionEntry:
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
     usage: dict[str, Any] | None = None
+    latest_context_window_tokens: int | None = None
     last_usage_tokens: int | None = None
     pending_tokens: int = 0
     last_usage_record_count: int | None = None
@@ -126,6 +127,7 @@ class DeepyJsonlSession:
         state = self.context_token_state(records)
         self._touch_index(
             active_tokens=state.active_tokens,
+            latest_context_window_tokens=state.active_tokens,
             last_usage_tokens=state.last_usage_tokens,
             pending_tokens=state.pending_tokens,
             last_usage_record_count=state.last_usage_record_count,
@@ -138,6 +140,7 @@ class DeepyJsonlSession:
         self._loaded_items = []
         self._touch_index(
             active_tokens=0,
+            latest_context_window_tokens=0,
             last_usage_tokens=0,
             pending_tokens=0,
             last_usage_record_count=0,
@@ -152,9 +155,13 @@ class DeepyJsonlSession:
         current_state = self.context_token_state()
         checkpoint_tokens = max(normalized.prompt_tokens, current_state.active_tokens)
         record_count = len(self._load_records())
+        latest_context_usage = context_window_usage(normalized)
         self._touch_index(
             active_tokens=checkpoint_tokens,
             usage=accumulated.to_dict(),
+            latest_context_window_tokens=latest_context_usage.used_tokens
+            if latest_context_usage is not None
+            else None,
             last_usage_tokens=checkpoint_tokens,
             pending_tokens=0,
             last_usage_record_count=record_count,
@@ -202,6 +209,20 @@ class DeepyJsonlSession:
             estimated=True,
         )
 
+    def latest_context_window_usage(self) -> ContextWindowUsage | None:
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        latest_tokens = _optional_int(previous.get("latestContextWindowTokens")) if previous else None
+        if latest_tokens is not None:
+            return ContextWindowUsage(
+                used_tokens=latest_tokens,
+                input_tokens=latest_tokens,
+                output_tokens=0,
+            )
+        usage = previous.get("usage") if previous else None
+        if isinstance(usage, dict) and usage.get("request_usage_entries"):
+            return context_window_usage(usage)
+        return None
+
     async def replace_items(
         self,
         items: list[dict[str, Any]],
@@ -230,6 +251,7 @@ class DeepyJsonlSession:
         )
         self._touch_index(
             active_tokens=estimated_tokens,
+            latest_context_window_tokens=estimated_tokens,
             last_usage_tokens=estimated_tokens,
             pending_tokens=0,
             last_usage_record_count=len(records),
@@ -282,6 +304,7 @@ class DeepyJsonlSession:
         *,
         active_tokens: int | None = None,
         usage: dict[str, Any] | None = None,
+        latest_context_window_tokens: int | None = None,
         last_usage_tokens: int | None = None,
         pending_tokens: int | None = None,
         last_usage_record_count: int | None = None,
@@ -301,6 +324,15 @@ class DeepyJsonlSession:
                 "activeTokens": active_tokens
                 if active_tokens is not None
                 else _coerce_int(previous.get("activeTokens"), 0),
+                **(
+                    {"latestContextWindowTokens": latest_context_window_tokens}
+                    if latest_context_window_tokens is not None
+                    else (
+                        {"latestContextWindowTokens": previous["latestContextWindowTokens"]}
+                        if "latestContextWindowTokens" in previous
+                        else {}
+                    )
+                ),
                 **(
                     {"lastUsageTokens": last_usage_tokens}
                     if last_usage_tokens is not None
@@ -366,7 +398,8 @@ class DeepyJsonlSession:
 
 @dataclass(frozen=True)
 class ContextTokenState:
-    # active_tokens is the effective context pressure used by UI and auto compaction.
+    # active_tokens is an internal local history estimate. User-facing Context Window
+    # values should use latest_context_window_usage() when provider usage is known.
     # last_usage_tokens is the latest checkpoint covered by usage or session rewrite.
     # pending_tokens estimates records appended after that checkpoint.
     active_tokens: int
@@ -399,6 +432,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 updated_at=_coerce_int(item.get("updatedAt"), 0),
                 processes=_normalize_processes(item.get("processes")),
                 usage=usage if isinstance(usage, dict) else None,
+                latest_context_window_tokens=_optional_int(item.get("latestContextWindowTokens")),
                 last_usage_tokens=_optional_int(item.get("lastUsageTokens")),
                 pending_tokens=_coerce_int(item.get("pendingTokens"), 0),
                 last_usage_record_count=_optional_int(item.get("lastUsageRecordCount")),

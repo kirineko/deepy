@@ -34,6 +34,15 @@ class TokenUsage:
         return {key: value for key, value in payload.items() if value not in (0, [], None)}
 
 
+@dataclass(frozen=True)
+class ContextWindowUsage:
+    used_tokens: int
+    input_tokens: int
+    output_tokens: int
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+
+
 def normalize_usage(value: Any) -> TokenUsage:
     payload = _to_mapping(value)
     if payload is None:
@@ -129,11 +138,38 @@ def usage_from_run_result(result: Any) -> TokenUsage:
     return normalize_usage(usage)
 
 
+def latest_request_usage(usage: TokenUsage | Mapping[str, Any] | None) -> TokenUsage:
+    normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
+    if normalized.request_usage_entries:
+        return normalize_usage(normalized.request_usage_entries[-1])
+    return normalized
+
+
+def context_window_usage(usage: TokenUsage | Mapping[str, Any] | None) -> ContextWindowUsage | None:
+    latest = latest_request_usage(usage)
+    if not latest.known:
+        return None
+    input_tokens = latest.prompt_tokens
+    cache_tokens = latest.prompt_cache_hit_tokens + latest.prompt_cache_miss_tokens
+    if input_tokens == 0 and cache_tokens:
+        input_tokens = cache_tokens
+    used_tokens = input_tokens + latest.completion_tokens
+    if used_tokens <= 0:
+        return None
+    return ContextWindowUsage(
+        used_tokens=used_tokens,
+        input_tokens=input_tokens,
+        output_tokens=latest.completion_tokens,
+        cache_hit_tokens=latest.prompt_cache_hit_tokens,
+        cache_miss_tokens=latest.prompt_cache_miss_tokens,
+    )
+
+
 def format_usage_line(usage: TokenUsage | Mapping[str, Any] | None) -> str:
     normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
     if not normalized.known:
         return "usage=unknown"
-    parts = [f"context input {normalized.prompt_tokens:,}"]
+    parts = [f"input {normalized.prompt_tokens:,}"]
     cache_tokens = normalized.prompt_cache_hit_tokens + normalized.prompt_cache_miss_tokens
     if cache_tokens:
         cache_hit_rate = normalized.prompt_cache_hit_tokens / cache_tokens * 100

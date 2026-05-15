@@ -97,6 +97,7 @@ async def test_session_index_preserves_usage_and_processes_on_touch(tmp_path):
     entry = list_session_entries(project, deepy_home=home)[0]
     assert entry.usage == {"prompt_tokens": 12, "completion_tokens": 3}
     assert entry.processes == {"123": {"startTime": "now", "command": "pytest"}}
+    assert session.latest_context_window_usage() is None
 
 
 @pytest.mark.asyncio
@@ -122,6 +123,11 @@ async def test_session_record_usage_accumulates_token_usage(tmp_path):
     assert usage["completion_tokens"] == 6
     assert usage["total_tokens"] == 19
     assert usage["reasoning_tokens"] == 2
+    entry = list_session_entries(project, deepy_home=home)[0]
+    assert entry.latest_context_window_tokens == 7
+    latest_usage = session.latest_context_window_usage()
+    assert latest_usage is not None
+    assert latest_usage.used_tokens == 7
 
 
 @pytest.mark.asyncio
@@ -219,7 +225,11 @@ async def test_replace_items_resets_checkpoint_to_compacted_estimate(tmp_path):
     assert state.pending_tokens == 0
     assert state.last_usage_record_count == 1
     assert entry.active_tokens == 12
+    assert entry.latest_context_window_tokens == 12
     assert entry.pending_tokens == 0
+    latest_usage = session.latest_context_window_usage()
+    assert latest_usage is not None
+    assert latest_usage.used_tokens == 12
 
 
 @pytest.mark.asyncio
@@ -239,9 +249,11 @@ async def test_context_token_state_reestimates_when_history_is_shortened(tmp_pat
     await session.pop_item()
 
     state = session.context_token_state()
+    entry = list_session_entries(project, deepy_home=home)[0]
     assert state.active_tokens < 9_000
     assert state.last_usage_tokens is None
     assert state.last_usage_record_count is None
+    assert entry.latest_context_window_tokens == state.active_tokens
 
 
 @pytest.mark.asyncio
@@ -265,7 +277,12 @@ async def test_clear_session_resets_active_tokens(tmp_path):
 
     await session.clear_session()
 
-    assert list_session_entries(project, deepy_home=home)[0].active_tokens == 0
+    entry = list_session_entries(project, deepy_home=home)[0]
+    assert entry.active_tokens == 0
+    assert entry.latest_context_window_tokens == 0
+    latest_usage = session.latest_context_window_usage()
+    assert latest_usage is not None
+    assert latest_usage.used_tokens == 0
 
 
 @pytest.mark.asyncio

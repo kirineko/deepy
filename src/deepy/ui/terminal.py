@@ -87,7 +87,7 @@ from deepy.ui.theme_picker import THEME_CHOICES, pick_theme
 from deepy.ui.model_picker import REASONING_MODE_CHOICES, pick_model, pick_reasoning_mode
 from deepy.ui.welcome import build_welcome_panel
 from deepy.ui.welcome import format_home_relative_path
-from deepy.usage import TokenUsage, format_usage_line
+from deepy.usage import TokenUsage, context_window_usage, format_usage_line
 from deepy.utils import json as json_utils
 
 
@@ -576,7 +576,7 @@ def _handle_slash_command(
             return current_session_id
         for entry in entries:
             console.print(
-                f"{entry.id}\tupdated={entry.updated_at}\thistory_tokens={entry.active_tokens}\t"
+                f"{entry.id}\tupdated={entry.updated_at}\thistory_estimate={entry.active_tokens}\t"
                 f"{format_usage_line(entry.usage)}"
             )
         return current_session_id
@@ -1306,7 +1306,7 @@ def _print_usage_footer(
         duration = _format_duration_ms(summary.duration_ms) if summary.duration_ms > 0 else ""
         prefix = f"time {duration} · " if duration else ""
         console.print(
-            f"[{palette.muted}]turn API usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
+            f"[{palette.muted}]turn Token Usage[/] {prefix}{_format_turn_usage_line(summary.usage)}"
         )
     elif summary.duration_ms > 0:
         console.print(f"[{palette.muted}]turn time[/] {_format_duration_ms(summary.duration_ms)}")
@@ -1337,35 +1337,38 @@ def _format_context_footer(
         return " · ".join(parts)
 
     session_entry = _session_entry(project_root, session_id)
-    used_tokens = _session_context_tokens(project_root, session_id, session_entry)
-    used_text = _format_token_count_short(used_tokens) if used_tokens is not None else "unknown"
-    used_ratio = (
-        f" ({used_tokens / window_tokens * 100:.1f}%)"
-        if used_tokens is not None
-        else ""
-    )
-    if compact_threshold > 0:
-        compact_progress = (
-            f" ({used_tokens / compact_threshold * 100:.1f}%)"
-            if used_tokens is not None
-            else ""
-        )
-        pending_text = (
-            f" · pending ~{_format_token_count_short(session_entry.pending_tokens)}"
-            if session_entry is not None and session_entry.pending_tokens > 0
-            else ""
-        )
-        context = (
-            f"ctx ~{used_text}/{_format_token_count_short(compact_threshold)}"
-            f"{compact_progress} · win {_format_token_count_short(window_tokens)}{pending_text}"
-        )
-        if used_tokens is not None and used_tokens >= compact_threshold:
-            context = f"{context} · compact next"
-        parts.append(context)
-    else:
-        parts.append(f"ctx {used_text}/{_format_token_count_short(window_tokens)}{used_ratio}")
+    parts.append(_format_context_window_status(session_entry, window_tokens, compact_threshold))
 
     return " · ".join(parts)
+
+
+def _format_context_window_status(
+    session_entry: SessionEntry | None,
+    window_tokens: int,
+    compact_threshold: int,
+) -> str:
+    window_text = _format_token_count_short(window_tokens)
+    if session_entry is not None and session_entry.latest_context_window_tokens is not None:
+        used_tokens = session_entry.latest_context_window_tokens
+    else:
+        usage_payload = session_entry.usage if session_entry is not None else None
+        usage = (
+            context_window_usage(usage_payload)
+            if isinstance(usage_payload, dict) and usage_payload.get("request_usage_entries")
+            else None
+        )
+        used_tokens = usage.used_tokens if usage is not None else None
+    if used_tokens is None:
+        return f"ctx win unknown/{window_text}"
+    remaining_tokens = max(window_tokens - used_tokens, 0)
+    percentage = used_tokens / window_tokens * 100
+    status = (
+        f"ctx win {_format_token_count_short(used_tokens)}/{window_text} "
+        f"({percentage:.1f}%, {_format_token_count_short(remaining_tokens)} left)"
+    )
+    if compact_threshold > 0 and used_tokens >= compact_threshold:
+        status = f"{status} · compact next"
+    return status
 
 
 def _session_entry(project_root: Path | None, session_id: str | None) -> SessionEntry | None:
@@ -1379,25 +1382,6 @@ def _session_entry(project_root: Path | None, session_id: str | None) -> Session
         return None
     entry = next((item for item in entries if item.id == session_id), None)
     return entry
-
-
-def _session_context_tokens(
-    project_root: Path | None,
-    session_id: str | None,
-    session_entry: SessionEntry | None,
-) -> int | None:
-    if not session_id:
-        return 0
-    if project_root is not None:
-        try:
-            session = DeepyJsonlSession.open(project_root, session_id)
-            if session.path.exists():
-                return session.context_token_state().active_tokens
-        except Exception:
-            pass
-    if session_entry is not None:
-        return session_entry.active_tokens
-    return None
 
 
 def _format_token_count_short(value: int) -> str:

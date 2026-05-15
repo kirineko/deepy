@@ -362,7 +362,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             return 0
         for entry in entries:
             print(
-                f"{entry.id}\tupdated={entry.updated_at}\thistory_tokens={entry.active_tokens}\t"
+                f"{entry.id}\tupdated={entry.updated_at}\thistory_estimate={entry.active_tokens}\t"
                 f"{format_usage_line(entry.usage)}"
             )
         return 0

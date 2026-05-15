@@ -9,7 +9,7 @@ from deepy.llm.compaction import (
     ensure_context_ready,
     prepare_compaction_items,
 )
-from deepy.sessions import DeepyJsonlSession
+from deepy.sessions import DeepyJsonlSession, list_session_entries
 from deepy.usage import TokenUsage
 
 
@@ -50,6 +50,13 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
             {"role": "user", "content": "recent request"},
         ]
     )
+    session._touch_index(
+        active_tokens=87_058,
+        latest_context_window_tokens=24_000,
+        last_usage_tokens=87_058,
+        pending_tokens=0,
+        last_usage_record_count=3,
+    )
 
     result = await compact_session(
         session,
@@ -60,6 +67,7 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
 
     items = await session.get_items()
     assert result.compacted is True
+    assert result.before_tokens == 24_000
     assert result.archive_path is not None
     assert result.archive_path.exists()
     assert "Important summary." in items[0]["content"]
@@ -68,6 +76,10 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
         {"role": "assistant", "content": "recent answer"},
         {"role": "user", "content": "recent request"},
     ]
+    entry = list_session_entries(tmp_path, deepy_home=tmp_path / "home")[0]
+    assert entry.latest_context_window_tokens == result.after_tokens
+    assert session.latest_context_window_usage() is not None
+    assert session.latest_context_window_usage().used_tokens == result.after_tokens
 
 
 @pytest.mark.asyncio
@@ -119,11 +131,15 @@ async def test_ensure_context_ready_blocks_when_auto_compaction_cannot_fit(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_ensure_context_ready_uses_effective_context_after_short_usage(
+async def test_ensure_context_ready_does_not_compact_after_short_latest_context_usage(
     monkeypatch,
     tmp_path,
 ):
+    compact_calls = 0
+
     async def fake_compact_session(session, settings, *, provider=None, reason):
+        nonlocal compact_calls
+        compact_calls += 1
         return type(
             "FakeCompaction",
             (),
@@ -153,5 +169,51 @@ async def test_ensure_context_ready_uses_effective_context_after_short_usage(
         additional_input="continue",
     )
 
-    assert readiness.compacted is True
+    assert compact_calls == 0
+    assert readiness.compacted is False
     assert readiness.before_tokens >= 900
+
+
+@pytest.mark.asyncio
+async def test_ensure_context_ready_compacts_when_latest_context_usage_reaches_threshold(
+    monkeypatch,
+    tmp_path,
+):
+    compact_calls = 0
+
+    async def fake_compact_session(session, settings, *, provider=None, reason):
+        nonlocal compact_calls
+        compact_calls += 1
+        await session.replace_items([{"role": "user", "content": "summary"}], active_tokens=100)
+        return type(
+            "FakeCompaction",
+            (),
+            {
+                "compacted": True,
+                "before_tokens": 850,
+                "after_tokens": 100,
+            },
+        )()
+
+    monkeypatch.setattr("deepy.llm.compaction.compact_session", fake_compact_session)
+    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    await session.add_items([{"role": "user", "content": "large prompt"}])
+    session.record_usage({"prompt_tokens": 850, "completion_tokens": 5, "total_tokens": 855})
+
+    readiness = await ensure_context_ready(
+        session,
+        Settings(
+            context=ContextConfig(
+                window_tokens=1_000,
+                compact_trigger_ratio=0.8,
+                reserved_context_tokens=50,
+            )
+        ),
+        additional_input="continue",
+    )
+
+    assert compact_calls == 1
+    assert readiness.compacted is True
+    latest_usage = session.latest_context_window_usage()
+    assert latest_usage is not None
+    assert latest_usage.used_tokens == 100

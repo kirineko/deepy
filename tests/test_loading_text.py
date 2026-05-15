@@ -124,7 +124,7 @@ def test_build_loading_text_appends_known_usage():
 
     assert (
         text
-        == "Thinking... (5s) · ↓ 850 tokens · context input 10 · output 2 · reasoning 1 · total 12"
+        == "Thinking... (5s) · ↓ 850 tokens · input 10 · output 2 · reasoning 1 · total 12"
     )
 
 

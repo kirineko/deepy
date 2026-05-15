@@ -7,6 +7,7 @@ import sys
 import time
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 
 from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig
@@ -1041,7 +1042,7 @@ def test_print_usage_footer_shows_known_usage():
     )
 
     rendered = console.export_text()
-    assert "turn API usage context input 10 · output 2 · total 12" in rendered
+    assert "turn Token Usage input 10 · output 2 · total 12" in rendered
 
 
 def test_print_usage_footer_shows_turn_duration():
@@ -1059,7 +1060,7 @@ def test_print_usage_footer_shows_turn_duration():
     )
 
     assert (
-        "turn API usage time 1m 5s · context input 10 · output 2 · total 12"
+        "turn Token Usage time 1m 5s · input 10 · output 2 · total 12"
         in console.export_text()
     )
 
@@ -1127,13 +1128,13 @@ def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     )
 
     rendered = console.export_text()
-    assert "turn API usage requests 2 · context input 100 · output 2 · total 102" in rendered
-    assert "context used" not in rendered
+    assert "turn Token Usage requests 2 · input 100 · output 2 · total 102" in rendered
+    assert "ctx win" not in rendered
     assert "900" not in rendered
     assert "session" not in rendered
 
 
-def test_format_context_footer_shows_only_model_reasoning_cwd_and_context(tmp_path):
+def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_path):
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
     session._touch_index(active_tokens=200)
 
@@ -1149,13 +1150,34 @@ def test_format_context_footer_shows_only_model_reasoning_cwd_and_context(tmp_pa
     assert "model deepseek-v4-flash" in toolbar
     assert "thinking high" in toolbar
     assert f"cwd {tmp_path}" in toolbar
-    assert "ctx ~200/800 (25.0%) · win 1K" in toolbar
+    assert "ctx win unknown/1K" in toolbar
+    assert "compact ~" not in toolbar
     assert "Enter send" not in toolbar
     assert "Shift+Enter" not in toolbar
     assert "session" not in toolbar
 
 
-def test_format_context_footer_does_not_shrink_after_short_latest_usage(tmp_path):
+def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session._touch_index(
+        active_tokens=200,
+        usage={"prompt_tokens": 900, "completion_tokens": 10, "total_tokens": 910},
+    )
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "ctx win unknown/1K" in toolbar
+    assert "910" not in toolbar
+
+
+def test_format_context_footer_shows_latest_request_context_window_only(tmp_path):
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
     session._touch_index(
         active_tokens=9_000,
@@ -1179,9 +1201,50 @@ def test_format_context_footer_does_not_shrink_after_short_latest_usage(tmp_path
         ),
     )
 
-    assert "ctx ~9K/8K" in toolbar
-    assert "win 10K · compact next" in toolbar
-    assert "ctx ~3.5K" not in toolbar
+    assert "ctx win 4K/10K (35.1%, 6K left)" in toolbar
+    assert "compact ~" not in toolbar
+    assert "compact next" not in toolbar
+
+
+def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session.path.parent.mkdir(parents=True, exist_ok=True)
+    session.path.write_text(
+        '{"role":"user","content":"large prompt","meta":{"sdk_item":{"role":"user","content":"large prompt"}}}\n',
+        encoding="utf-8",
+    )
+    session.record_usage({"prompt_tokens": 8_500, "completion_tokens": 10, "total_tokens": 8_510})
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "ctx win 9K/10K (85.1%, 1K left)" in toolbar
+    assert "compact next" in toolbar
+
+
+@pytest.mark.asyncio
+async def test_format_context_footer_uses_compacted_context_window_checkpoint(tmp_path):
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session.record_usage({"prompt_tokens": 8_500, "completion_tokens": 10, "total_tokens": 8_510})
+    await session.replace_items([{"role": "user", "content": "summary"}], active_tokens=100)
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "ctx win 100/10K (1.0%, 10K left)" in toolbar
+    assert "compact next" not in toolbar
 
 
 def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
@@ -1192,10 +1255,11 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     async def fake_run_once(prompt, **kwargs):
         calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
         session_id = "s1" if prompt == "first" else "s2"
-        DeepyJsonlSession.create(tmp_path, session_id=session_id)._touch_index(
-            active_tokens=200 if prompt == "first" else 50
+        usage = TokenUsage(
+            prompt_tokens=900 if prompt == "first" else 50,
+            total_tokens=900 if prompt == "first" else 50,
         )
-        usage = TokenUsage(prompt_tokens=200 if prompt == "first" else 50, total_tokens=200)
+        DeepyJsonlSession.create(tmp_path, session_id=session_id).record_usage(usage)
         return RunSummary(output=f"answer {prompt}", session_id=session_id, complete=True, usage=usage)
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
@@ -1226,13 +1290,15 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "Enter send" not in str(toolbars)
     assert "/ commands" not in str(toolbars)
     assert "Esc interrupt" not in str(toolbars)
-    assert "Ctrl+D twice exit" in str(toolbars)
-    assert "model deepseek-v4-pro" in str(toolbars)
-    assert "thinking max" in str(toolbars)
-    assert f"cwd {tmp_path}" in str(toolbars)
-    assert "ctx ~0/800 (0.0%) · win 1K" in str(toolbars)
-    assert "ctx ~200/800 (25.0%) · win 1K" in str(toolbars)
-    assert "ctx ~50/800 (6.2%) · win 1K" in str(toolbars)
+    toolbar_texts = [str(toolbar) for toolbar in toolbars]
+    assert "Ctrl+D twice exit" in str(toolbar_texts)
+    assert "model deepseek-v4-pro" in str(toolbar_texts)
+    assert "thinking max" in str(toolbar_texts)
+    assert f"cwd {tmp_path}" in str(toolbar_texts)
+    assert "ctx win 900/1K (90.0%, 100 left) · compact next" in toolbar_texts[1]
+    assert "ctx win unknown/1K" in toolbar_texts[2]
+    assert "ctx win 50/1K (5.0%, 950 left)" in toolbar_texts[3]
+    assert "compact ~" not in str(toolbar_texts)
 
 
 def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monkeypatch):

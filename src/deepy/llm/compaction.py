@@ -10,7 +10,7 @@ from deepy.prompts.compact import build_compact_prompt, build_compact_summary_me
 from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.usage import TokenUsage, usage_from_run_result
 
-from .context import estimate_tokens_for_item, estimate_tokens_for_items, should_auto_compact
+from .context import estimate_tokens_for_item, estimate_tokens_for_items
 from .provider import ProviderBundle, build_provider_bundle
 from .replay import sanitize_sdk_items_for_replay
 
@@ -52,7 +52,13 @@ async def compact_session(
     focus_instruction: str | None = None,
 ) -> CompactionResult:
     items = await session.get_items()
-    before_tokens = session.context_token_state().active_tokens
+    before_estimated_tokens = session.context_token_state().active_tokens
+    before_context_usage = session.latest_context_window_usage()
+    before_tokens = (
+        before_context_usage.used_tokens
+        if before_context_usage is not None
+        else before_estimated_tokens
+    )
     prepared = prepare_compaction_items(
         items,
         preserve_recent_messages=settings.context.compact_preserve_recent_messages,
@@ -116,13 +122,14 @@ async def ensure_context_ready(
     additional_tokens = estimate_tokens_for_item(additional_input or "")
     state = session.context_token_state()
     before_tokens = state.active_tokens + additional_tokens
+    latest_context_usage = session.latest_context_window_usage()
+    trigger_tokens = (
+        latest_context_usage.used_tokens
+        if latest_context_usage is not None
+        else before_tokens
+    )
     compacted: CompactionResult | None = None
-    if should_auto_compact(
-        before_tokens,
-        settings.context.window_tokens,
-        trigger_ratio=settings.context.compact_trigger_ratio,
-        reserved_context_size=settings.context.reserved_context_tokens,
-    ):
+    if trigger_tokens >= settings.context.resolved_compact_threshold:
         compacted = await compact_session(
             session,
             settings,
@@ -132,10 +139,19 @@ async def ensure_context_ready(
 
     after_state = session.context_token_state()
     after_tokens = after_state.active_tokens + additional_tokens
-    if after_tokens + settings.context.reserved_context_tokens >= settings.context.window_tokens:
+    if compacted and compacted.compacted:
+        fit_tokens = after_tokens
+    else:
+        after_context_usage = session.latest_context_window_usage()
+        fit_tokens = (
+            after_context_usage.used_tokens
+            if after_context_usage is not None
+            else after_tokens
+        )
+    if fit_tokens + settings.context.reserved_context_tokens >= settings.context.window_tokens:
         raise ContextCompactionError(
             "Context exceeds the configured window and could not be compacted enough "
-            f"({after_tokens:,} tokens + {settings.context.reserved_context_tokens:,} reserved "
+            f"({fit_tokens:,} tokens + {settings.context.reserved_context_tokens:,} reserved "
             f">= {settings.context.window_tokens:,} window)."
         )
     return ContextReadiness(
