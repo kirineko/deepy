@@ -9,6 +9,49 @@ from deepy.llm.replay import (
 )
 
 
+def test_sanitize_model_input_normalizes_chat_tool_call_items_for_agents_sdk():
+    items = [
+        {"role": "user", "content": "!ls"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-local",
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": '{"command":"ls"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"ok":true,"name":"shell","output":"README.md"}',
+            "tool_call_id": "call-local",
+        },
+    ]
+
+    sanitized = sanitize_model_input_for_chat_completions(items)
+
+    assert sanitized == [
+        {"role": "user", "content": "!ls"},
+        {
+            "type": "function_call",
+            "call_id": "call-local",
+            "name": "shell",
+            "arguments": '{"command":"ls"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-local",
+            "output": '{"ok":true,"name":"shell","output":"README.md"}',
+        },
+    ]
+    from agents.models.chatcmpl_converter import Converter
+
+    messages = Converter.items_to_messages(sanitized)
+    assert messages[1]["tool_calls"][0]["id"] == "call-local"
+
+
 def test_sanitize_model_input_drops_empty_assistant_between_tool_call_and_output():
     call = {
         "arguments": '{"file_path":"README.md"}',

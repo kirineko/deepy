@@ -5,306 +5,320 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 是一个 DeepSeek 终端编程 Agent，可在终端里阅读项目、编辑文件、运行命令、抓取网页，并用可读 diff 预览审查改动。"
+      content="Deepy 是为 DeepSeek 设计的终端编程 Agent，支持项目阅读、代码修改、命令执行、网页检索、长上下文 compact、会话恢复和跨平台终端体验。"
     >
     <title>Deepy - DeepSeek 终端编程 Agent</title>
-    <link rel="icon" href="asset/deepy-logo.png">
+    <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
   <body>
     <header class="site-header" aria-label="主导航">
       <a class="brand" href="#top" aria-label="Deepy 首页">
-        <img src="asset/deepy-logo.png" alt="" width="40" height="40">
+        <img src="asset/deepy-logo.webp" alt="" width="40" height="40">
         <span>Deepy</span>
       </a>
       <nav>
-        <a href="#release">0.1.11</a>
-        <a href="#features">特性</a>
-        <a href="#screenshots">截图</a>
+        <a href="#capabilities">功能</a>
+        <a href="#workflow">工作流</a>
+        <a href="#usage">使用</a>
         <a href="#install">安装</a>
+        <a href="https://github.com/kirineko/deepy">GitHub</a>
       </nav>
     </header>
 
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-backdrop" aria-hidden="true">
+          <img src="asset/welcome.webp" alt="">
+        </div>
         <div class="hero-copy">
-          <p class="terminal-mark">&gt; deepy 0.1.11</p>
-          <h1 id="hero-title">DeepSeek Coding Agent</h1>
+          <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            在一个终端会话里提问、读代码、改文件、运行命令、检索资料，并用可恢复的 compact
-            机制管理长上下文。
+            为 DeepSeek 设计的终端编程 Agent。让模型在同一个项目会话里读代码、改文件、
+            运行命令、检索网页、管理长上下文，并把每一步工具行为清楚地显示给你。
           </p>
-          <div class="hero-metrics" aria-label="Deepy 0.1.11 关键能力">
-            <span><strong>[Tool]</strong> 统一醒目的工具活动标签</span>
-            <span><strong>Thinking</strong> 完整显示 DeepSeek 思考过程</span>
-            <span><strong>Shell</strong> 展示完整命令运行结果</span>
-          </div>
           <div class="hero-actions" aria-label="主要操作">
-            <a class="button primary" href="#install">使用 uv 安装</a>
-            <a class="button secondary" href="#release">查看 0.1.11</a>
-            <a class="button secondary" href="https://github.com/kirineko/deepy">GitHub</a>
+            <a class="button primary" href="#install">安装 Deepy</a>
+            <a class="button secondary" href="#usage">学习基础使用</a>
+            <a class="button secondary" href="https://github.com/kirineko/deepy">查看源码</a>
           </div>
         </div>
-        <div class="hero-visual" aria-label="Deepy 终端欢迎界面">
-          <img src="asset/welcome.jpg" alt="Deepy 终端启动界面">
-        </div>
+        <dl class="hero-facts" aria-label="Deepy 核心定位">
+          <div>
+            <dt>Model</dt>
+            <dd>DeepSeek V4 Pro / Flash</dd>
+          </div>
+          <div>
+            <dt>Runtime</dt>
+            <dd>Python CLI + OpenAI Agents SDK</dd>
+          </div>
+          <div>
+            <dt>Context</dt>
+            <dd>JSONL session, compact, usage accounting</dd>
+          </div>
+          <div>
+            <dt>Tools</dt>
+            <dd>read, modify, shell, WebSearch, WebFetch</dd>
+          </div>
+        </dl>
       </section>
 
-      <section class="release" id="release" aria-labelledby="release-title">
-        <div class="section-heading compact">
-          <p class="terminal-mark">&gt; release 0.1.11</p>
-          <h2 id="release-title">终端工具输出更统一，DeepSeek Thinking 更完整</h2>
+      <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
+        <div class="section-header">
+          <h2 id="capabilities-title">工程可审查</h2>
           <p>
-            0.1.11 聚焦终端工具 UX：所有工具活动统一使用 `[WebFetch]`、`[Write]`、
-            `[Modify]`、`[Read]` 这样的显著标签；DeepSeek Thinking 不再截断，并根据用户
-            语言加强本地化引导；Shell 工具会显示完整运行结果。
+            Deepy 不把工具调用藏在对话后面。模型的 thinking、文件 diff、shell 输出、
+            上下文状态、会话恢复和本地命令都会成为可见、可追溯、可继续的终端记录。
           </p>
         </div>
-        <div class="release-grid">
+        <div class="capability-grid">
           <article>
-            <span>01</span>
-            <h3>Unified tool labels</h3>
+            <h3>DeepSeek-first 模型体验</h3>
             <p>
-              WebFetch、Read、Write、Modify、Shell 和 AskUserQuestion 都使用统一的
-              bracketed Pascal 风格标签，工具名本身带有一致的显著视觉标识。
+              默认面向 `deepseek-v4-pro` 和 thinking 模式设计，`/model` 可切换 V4 Pro /
+              V4 Flash，并选择 `none`、`high`、`max` thinking 强度。
             </p>
           </article>
           <article>
-            <span>02</span>
-            <h3>Complete Thinking transcript</h3>
+            <h3>项目级读写与 diff</h3>
             <p>
-              Thinking 文本即时进入 transcript，不再按摘要截断；中文提问时，系统提示会更
-              明确地引导 DeepSeek 使用中文 thinking。
+              Read、Write、Modify 使用同一套路径校验、旧内容校验和可读 diff 展示，降低
+              Agent 误改文件后不可察觉的风险。
             </p>
           </article>
           <article>
-            <span>03</span>
-            <h3>Shell output blocks</h3>
+            <h3>Shell 与本地命令</h3>
             <p>
-              shell 工具结果除了状态行，还会以独立样式展示完整 stdout/stderr，方便直接审查
-              命令的真实输出。
+              模型可通过 shell 工具运行验证；用户也可以在输入框直接使用 `!cmd` 执行本地
+              非交互命令，输出会写入上下文供下一轮模型使用。
             </p>
           </article>
           <article>
-            <span>04</span>
-            <h3>Clearer AskUserQuestion UX</h3>
+            <h3>WebSearch / WebFetch</h3>
             <p>
-              AskUserQuestion 的触发提示更明确，自定义回答选项会本地化显示，中文问题下会
-              优先呈现中文交互文案。
-            </p>
-          </article>
-        </div>
-        <div class="release-history" aria-label="历史版本">
-          <article>
-            <span>0.1.10</span>
-            <h3>Windows 编辑与换行修复</h3>
-            <p>
-              修复 Windows PowerShell 下 modify、CRLF 和 Unicode 文本编辑路径，让跨平台
-              文件修改更稳定。
+              需要最新信息时可搜索网页；已有 URL 时用 WebFetch 抽取页面正文、标题和
+              metadata，让终端会话可以带来源地研究问题。
             </p>
           </article>
           <article>
-            <span>0.1.9</span>
-            <h3>PowerShell 兼容性</h3>
+            <h3>长上下文 compact</h3>
             <p>
-              增强 Windows shell 执行、Python 子进程 UTF-8 输出和跨平台命令元数据。
+              Deepy 记录 Context Window 使用情况，支持自动 compact 和 `/compact` 手动压缩，
+              用摘要替换旧历史并保留近期上下文。
             </p>
           </article>
           <article>
-            <span>0.1.8</span>
-            <h3>主题和终端体验</h3>
+            <h3>跨平台终端适配</h3>
             <p>
-              增加 dark/light/auto 主题支持，并完善欢迎页、状态行和交互式配置体验。
-            </p>
-          </article>
-          <article>
-            <span>0.1.7</span>
-            <h3>网页抓取和 diff 预览</h3>
-            <p>
-              WebFetch 增强 HTML 可读内容提取，write/edit diff 预览增加整行背景和语法高亮。
-            </p>
-          </article>
-          <article>
-            <span>0.1.6</span>
-            <h3>长会话可靠性</h3>
-            <p>
-              上下文压缩从临时裁剪重构为会话级状态机；补齐 `/compact`、自动 compact、
-              `/model`、澄清问题、多平台 shell 和主题体验。
-            </p>
-          </article>
-          <article>
-            <span>0.1.5</span>
-            <h3>欢迎页和品牌打磨</h3>
-            <p>
-              优化 Deepy 启动画面、品牌呈现和发布文档，让首次进入终端会话时能更快看到
-              模型、工作目录和核心命令。
-            </p>
-          </article>
-          <article>
-            <span>0.1.4</span>
-            <h3>发行稳定化</h3>
-            <p>
-              延续 0.1.x CLI 发行节奏，整理安装、页面和包发布流程，为 PyPI 与 GitHub
-              Pages 的自动化发布打基础。
-            </p>
-          </article>
-          <article>
-            <span>0.1.3</span>
-            <h3>终端工作流完善</h3>
-            <p>
-              持续完善终端 UI、会话恢复、工具输出展示和 Agent 编程流程，让 Deepy 更接近
-              日常项目里的可用编码助手。
-            </p>
-          </article>
-          <article>
-            <span>0.1.2</span>
-            <h3>更新检查收敛</h3>
-            <p>
-              版本更新检查收敛到 PyPI 来源，减少多来源版本判断的不确定性，让启动提示更
-              可预测。
-            </p>
-          </article>
-          <article>
-            <span>0.1.1</span>
-            <h3>PyPI trusted publishing</h3>
-            <p>
-              增加 PyPI trusted publishing 工作流，开始把 Deepy 的发布路径从本地构建推进到
-              GitHub Actions 自动发布。
-            </p>
-          </article>
-          <article>
-            <span>0.1.0</span>
-            <h3>初始公开版本</h3>
-            <p>
-              发布 Deepy 的核心终端 Agent 体验：项目阅读、文件编辑、命令执行、WebSearch /
-              WebFetch、会话历史和 GitHub Pages 首页。
+              POSIX shell、PowerShell、cmd 使用各自命令方言；Windows 路径、UTF-8 输出、
+              CRLF 编辑和 pywinpty 本地命令都有专门处理。
             </p>
           </article>
         </div>
       </section>
 
-      <section class="intro" id="features" aria-labelledby="intro-title">
-        <div>
-          <h2 id="intro-title">为 DeepSeek 编程会话而设计</h2>
+      <section class="section product-strip" aria-labelledby="terminal-title">
+        <div class="section-header compact">
+          <h2 id="terminal-title">终端体验</h2>
           <p>
-            Deepy 是一个 Python CLI，通过 OpenAI Agents SDK 调用 DeepSeek。它围绕
-            thinking 模式、长上下文、上下文缓存和可读的终端 UI 进行优化，让 Agent 的
-            工作过程清晰可见。
+            欢迎页、状态栏、工具标签、thinking 输出和结果面板都围绕“当前模型在做什么、
+            用了什么工具、上下文还剩多少”组织。
           </p>
         </div>
-        <div class="intro-grid">
-          <article>
-            <strong>理解项目</strong>
-            <span>自动加载项目规则、skills、会话历史和当前工作目录。</span>
-          </article>
-          <article>
-            <strong>工具驱动</strong>
-            <span>读取文件、编辑代码、运行命令、搜索资料，并抓取指定 URL。</span>
-          </article>
-          <article>
-            <strong>终端体验</strong>
-            <span>渲染 Markdown、thinking、diff、每轮 usage 和上下文窗口状态。</span>
-          </article>
-          <article>
-            <strong>长上下文可靠性</strong>
-            <span>用 pending token accounting、reserved budget 和可恢复归档保护长会话。</span>
-          </article>
+        <div class="terminal-showcase" aria-label="Deepy 终端功能截图">
+          <figure class="shot hero-shot">
+            <img src="asset/webfetch-shell-thinking.webp" alt="Deepy 显示 thinking、WebFetch 和 shell 输出" width="2076" height="1678">
+            <figcaption>
+              <strong>Thinking and tool transcript</strong>
+              <span>DeepSeek thinking、工具调用和 shell 结果保留在同一条可读 transcript 中。</span>
+            </figcaption>
+          </figure>
+          <div class="terminal-support">
+            <figure class="shot">
+              <img src="asset/result-status.webp" alt="Deepy 状态行显示 usage 和上下文窗口" width="1914" height="1300">
+              <figcaption>
+                <strong>Usage and context status</strong>
+                <span>每轮 usage、context window、compact next 等状态在终端底部持续可见。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot compact-shot">
+              <img src="asset/atmode-statusline.webp" alt="Deepy @ 文件补全和状态栏" width="2214" height="356">
+              <figcaption>
+                <strong>File mention completion</strong>
+                <span>输入 `@` 可补全当前目录文件；继续输入会搜索子目录文件名。</span>
+              </figcaption>
+            </figure>
+          </div>
         </div>
       </section>
 
-      <section class="showcase" id="screenshots" aria-labelledby="screenshots-title">
-        <div class="section-heading">
-          <h2 id="screenshots-title">终端优先的工作流</h2>
-          <p>Deepy 把对话、工具调用、代码修改和验证输出放在同一个终端上下文里。</p>
-        </div>
-
-        <article class="feature-row">
-          <div class="feature-copy">
-            <p class="terminal-mark">&gt; code</p>
-            <h3>编写代码并运行验证</h3>
-            <p>
-              让 Deepy 实现功能、补充测试、运行项目命令并总结结果。diff 会直接在终端中
-              渲染，方便你快速审查改动。
-            </p>
-          </div>
-          <img src="asset/coding-1.jpg" alt="Deepy 编码工作流和 diff 展示">
-        </article>
-
-        <article class="feature-row flipped">
-          <div class="feature-copy">
-            <p class="terminal-mark">&gt; explain</p>
-            <h3>把执行结果整理成说明</h3>
-            <p>
-              Deepy 可以把命令输出和项目文件整理成可读的 Markdown，包括项目结构、
-              实现细节和测试覆盖。
-            </p>
-          </div>
-          <img src="asset/coding-2.jpg" alt="Deepy 项目总结输出">
-        </article>
-
-        <article class="feature-row">
-          <div class="feature-copy">
-            <p class="terminal-mark">&gt; research</p>
-            <h3>检索并抓取来源页面</h3>
-            <p>
-              WebSearch 用于查找最新资料；WebFetch 可以读取指定 URL，在需要精确网页
-              内容时给出有来源依据的回答。
-            </p>
-          </div>
-          <img src="asset/websearch.jpg" alt="Deepy WebSearch 和 WebFetch 工作流">
-        </article>
-      </section>
-
-      <section class="install" id="install" aria-labelledby="install-title">
-        <div>
-          <h2 id="install-title">安装与维护</h2>
+      <section class="section workflows" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-header">
+          <h2 id="workflow-title">项目闭环</h2>
           <p>
-            推荐用 uv 安装 Deepy。国内网络环境可以先配置清华 PyPI 镜像，再安装、
-            升级或卸载命令行工具。
+            从理解项目、修改文件、联网研究到本地命令和模型设置，Deepy 的功能都直接围绕
+            真实编码会话设计。
           </p>
         </div>
-        <div class="install-steps">
-          <article>
-            <h3>1. 准备 uv</h3>
-            <p>macOS / Linux</p>
-            <pre><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
-            <p>Windows PowerShell</p>
-            <pre><code>powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
-          </article>
+        <div class="workflow-grid" aria-label="Deepy 工作流截图">
+          <figure class="workflow-card diff-card">
+            <img src="asset/edit-diff.webp" alt="Deepy 代码修改和 diff 预览" width="1734" height="1350">
+            <figcaption>
+              <span>01</span>
+              <h3>改代码前后都能审查</h3>
+              <p>Modify 工具显示整行 diff、语法高亮和路径信息，用户能快速确认 Agent 的文件改动。</p>
+            </figcaption>
+          </figure>
+          <figure class="workflow-card">
+            <img src="asset/websearch.webp" alt="Deepy WebSearch 结果" width="1800" height="1062">
+            <figcaption>
+              <span>02</span>
+              <h3>把网页研究纳入终端</h3>
+              <p>WebSearch 查找资料，WebFetch 精确读取 URL，适合查文档、版本信息和来源页面。</p>
+            </figcaption>
+          </figure>
+          <figure class="workflow-card">
+            <img src="asset/command_mode.webp" alt="Deepy 本地命令模式" width="1742" height="742">
+            <figcaption>
+              <span>03</span>
+              <h3>`!cmd` 不经过模型</h3>
+              <p>用户清楚自己要执行什么时，可直接把命令交给当前 shell，输出仍进入上下文。</p>
+            </figcaption>
+          </figure>
+          <figure class="workflow-card">
+            <img src="asset/model-1.webp" alt="Deepy 模型选择界面" width="1308" height="390">
+            <figcaption>
+              <span>04</span>
+              <h3>交互式模型选择</h3>
+              <p>`/model` 通过键盘选择模型和 thinking 强度，避免重复手写配置。</p>
+            </figcaption>
+          </figure>
+          <figure class="workflow-card">
+            <img src="asset/model-2.webp" alt="Deepy thinking 强度选择界面" width="1270" height="354">
+            <figcaption>
+              <span>05</span>
+              <h3>Thinking 强度明确可控</h3>
+              <p>`none`、`high`、`max` 对应不同推理成本和深度，适合在速度与质量之间切换。</p>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
 
+      <section class="section feature-table" aria-labelledby="details-title">
+        <div class="section-header compact">
+          <h2 id="details-title">运行保障</h2>
+          <p>
+            Compact、session history、theme、Windows 适配和项目规则并不是展示层功能，
+            但它们决定 Deepy 在真实项目中的连续性、可恢复性和跨平台稳定性。
+          </p>
+        </div>
+        <div class="detail-table" role="table" aria-label="Deepy 功能详细说明">
+          <div class="detail-row" role="row">
+            <strong role="cell">Session history</strong>
+            <span role="cell">`/resume`、`deepy sessions list`、`deepy sessions show` 读取项目本地 JSONL 历史，跨进程继续同一项目上下文。</span>
+          </div>
+          <div class="detail-row" role="row">
+            <strong role="cell">Durable compact</strong>
+            <span role="cell">自动 compact 会先归档原 session，再写入摘要与近期消息；失败时保留原历史，避免半写入状态。</span>
+          </div>
+          <div class="detail-row" role="row">
+            <strong role="cell">Theme</strong>
+            <span role="cell">`/theme` 和 `deepy config theme` 支持 dark、light、auto，欢迎页、状态栏、diff 和 tool panel 都走同一 palette。</span>
+          </div>
+          <div class="detail-row" role="row">
+            <strong role="cell">Windows</strong>
+            <span role="cell">PowerShell/cmd 方言、Windows 路径、UTF-8 输出、CRLF 文本编辑和 `pywinpty` TTY 路径都有测试覆盖。</span>
+          </div>
+          <div class="detail-row" role="row">
+            <strong role="cell">Project skills</strong>
+            <span role="cell">Deepy 自动读取 `AGENTS.md` 和 `.deepy/skills/*/SKILL.md`，让每个仓库保存自己的规则和工作流。</span>
+          </div>
+          <div class="detail-row" role="row">
+            <strong role="cell">Safety checks</strong>
+            <span role="cell">文件修改包含路径检查、旧内容匹配、stale-write 防护和 diff 预览；shell 输出保留 exit code 与 metadata。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section usage" id="usage" aria-labelledby="usage-title">
+        <div class="section-header">
+          <h2 id="usage-title">基础使用</h2>
+          <p>第一次使用时只需要完成安装、配置 DeepSeek API key，然后在项目目录启动 Deepy。</p>
+        </div>
+        <div class="usage-layout">
           <article>
-            <h3>2. 配置清华镜像（可选）</h3>
-            <p>Linux / macOS: <code>~/.config/uv/uv.toml</code></p>
-            <p>Windows: <code>%AppData%\uv\uv.toml</code></p>
+            <h3>1. 初始化配置</h3>
+            <p>交互式设置 API key、模型和 UI 主题。</p>
+            <pre><code>deepy config setup</code></pre>
+          </article>
+          <article>
+            <h3>2. 进入项目</h3>
+            <p>Deepy 会以当前目录作为项目根目录，读取本地规则、skills 和 session。</p>
+            <pre><code>cd your-project
+deepy</code></pre>
+          </article>
+          <article>
+            <h3>3. 常用交互命令</h3>
+            <p>命令都在终端输入框中使用。</p>
+            <pre><code>/model       选择模型和 thinking 强度
+/resume      恢复历史会话
+/compact     压缩当前上下文
+/theme       切换 UI 主题
+@src/app.py  引用项目文件
+!pytest -q   本地执行非交互命令</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="section install" id="install" aria-labelledby="install-title">
+        <div class="section-header compact">
+          <h2 id="install-title">安装指南</h2>
+          <p>
+            推荐通过 `uv tool` 安装。Deepy 的 Python 包名是 `deepy-cli`，安装后的命令是
+            `deepy`。
+          </p>
+        </div>
+        <div class="install-grid">
+          <article>
+            <span class="step-number">01</span>
+            <h3>安装 uv</h3>
+            <pre><code># macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+          </article>
+          <article>
+            <span class="step-number">02</span>
+            <h3>配置 uv 镜像</h3>
+            <p>Linux / macOS: `~/.config/uv/uv.toml`</p>
+            <pre><code>[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true</code></pre>
+            <p>Windows: `%AppData%\uv\uv.toml`</p>
             <pre><code>[[index]]
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
 default = true</code></pre>
           </article>
-
           <article>
-            <h3>3. 安装并启动 Deepy</h3>
-            <pre><code>uv tool install deepy-cli
+            <span class="step-number">03</span>
+            <h3>安装 Deepy</h3>
+            <pre><code>uv tool install deepy-cli</code></pre>
+          </article>
+          <article>
+            <span class="step-number">04</span>
+            <h3>配置并启动</h3>
+            <pre><code>deepy config setup
 
-# 进入你的项目目录
 cd your-project
 deepy</code></pre>
-          </article>
-
-          <article>
-            <h3>4. 升级 Deepy</h3>
-            <pre><code>uv tool upgrade deepy-cli</code></pre>
-          </article>
-
-          <article>
-            <h3>5. 卸载 Deepy</h3>
-            <pre><code>uv tool uninstall deepy-cli</code></pre>
           </article>
         </div>
       </section>
     </main>
 
     <footer>
-      <span>Deepy 0.1.11</span>
+      <span>Deepy 0.1.12</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

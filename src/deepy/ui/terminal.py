@@ -60,6 +60,13 @@ from deepy.ui.ask_user_question import format_ask_user_question_answers
 from deepy.ui.ask_user_question import format_ask_user_question_decline
 from deepy.ui.ask_user_question import normalize_questions
 from deepy.ui.exit_summary import build_exit_summary_text
+from deepy.ui.local_command import (
+    LocalCommandInput,
+    build_synthetic_shell_transcript_items,
+    parse_local_command,
+    run_local_command,
+    shell_tool_result_json,
+)
 from deepy.ui.message_view import (
     build_thinking_summary,
     format_tool_display_label,
@@ -186,6 +193,23 @@ def run_interactive(
 
         ctrl_d_exit_pending = False
         if not text:
+            continue
+
+        local_command = parse_local_command(text)
+        if local_command is not None:
+            session_id = _handle_local_command(
+                local_command,
+                output,
+                root,
+                session_id,
+                settings=settings,
+                palette=palette,
+            )
+            context_status = _format_context_footer(
+                session_id,
+                project_root=root,
+                settings=settings,
+            )
             continue
 
         slash = parse_slash_command(text)
@@ -349,6 +373,67 @@ def _run_once_with_status(
 
     renderer.flush()
     return summary
+
+
+def _handle_local_command(
+    command_input: LocalCommandInput,
+    console: Console,
+    project_root: Path,
+    current_session_id: str | None,
+    *,
+    settings: Settings,
+    palette: UiPalette | None = None,
+) -> str | None:
+    palette = palette or resolve_ui_palette(settings.ui.theme)
+    if not command_input.command:
+        console.print(f"[{palette.error}]Usage:[/] !<command>")
+        return current_session_id
+
+    _print_user_input(console, command_input.raw_text, palette=palette)
+    started_at = time.monotonic()
+    interrupt_requested = threading.Event()
+    with console.status(
+        _local_command_status_text(command_input.command, started_at, palette=palette),
+        spinner="dots",
+    ):
+        with _esc_interrupt_watcher(interrupt_requested):
+            result = run_local_command(
+                command_input.command,
+                cwd=project_root,
+                should_interrupt=interrupt_requested.is_set,
+            )
+
+    tool_output = shell_tool_result_json(result, output=result.display_output)
+    call_summary = format_tool_call_summary(
+        "shell",
+        json_utils.dumps({"command": result.command}),
+        project_root=str(project_root),
+    )
+    console.print(
+        _status_line(
+            format_tool_progress_summary(call_summary, tool_output),
+            status_style(result.ok, palette),
+        )
+    )
+    shell_output = render_shell_output_block(tool_output, palette=palette)
+    if shell_output:
+        console.print(shell_output)
+
+    session = (
+        DeepyJsonlSession.open(project_root, current_session_id)
+        if current_session_id
+        else DeepyJsonlSession.create(project_root)
+    )
+    try:
+        asyncio.run(
+            session.add_items(
+                build_synthetic_shell_transcript_items(command_input.raw_text, result)
+            )
+        )
+    except Exception as exc:
+        console.print(f"[{palette.error}]Failed to persist local command transcript:[/] {exc}")
+        return current_session_id
+    return session.session_id
 
 
 @contextlib.contextmanager
@@ -1427,6 +1512,22 @@ def _working_status_text(
         text.append(" · ", style=palette.muted)
         text.append(detail, style=palette.muted)
     return text
+
+
+def _local_command_status_text(
+    command: str,
+    started_at: float,
+    *,
+    palette: UiPalette | None = None,
+) -> Text:
+    palette = palette or DARK_PALETTE
+    elapsed = _format_duration_ms(int((time.monotonic() - started_at) * 1000)) or "0s"
+    return Text.assemble(
+        ("Running local command ", f"bold {palette.muted}"),
+        (f"({elapsed})", palette.muted),
+        (" · ", palette.muted),
+        (command, palette.muted),
+    )
 
 
 def _format_duration_ms(duration_ms: int) -> str:

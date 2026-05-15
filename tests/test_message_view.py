@@ -201,6 +201,25 @@ def test_render_tool_output_includes_full_shell_output_block():
     assert "line 3" in rendered
 
 
+def test_render_shell_output_block_uses_plain_tool_text_without_background():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "shell",
+            "output": "line 1",
+            "error": None,
+            "metadata": {"exitCode": 0},
+            "awaitUserResponse": False,
+        }
+    )
+
+    panel = render_shell_output_block(output, palette=DARK_PALETTE)
+
+    assert panel is not None
+    assert panel.renderable.style == DARK_PALETTE.tool
+    assert " on " not in str(panel.renderable.style)
+
+
 def test_render_shell_output_block_ignores_non_shell_tools():
     output = json.dumps(
         {

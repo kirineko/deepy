@@ -476,7 +476,7 @@ def render_shell_output_block(
     if view.name != "shell" or not view.output:
         return None
     return Panel(
-        Text(view.output.rstrip("\n"), style=palette.markdown_code_block),
+        Text(view.output.rstrip("\n"), style=palette.tool),
         title=format_tool_display_label("shell"),
         border_style=palette.tool,
         expand=False,

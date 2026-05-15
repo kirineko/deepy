@@ -13,10 +13,11 @@ from rich.console import Console
 from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
-from deepy.sessions import DeepyJsonlSession, SessionEntry
+from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
+from deepy.ui.local_command import LocalCommandResult
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _format_context_footer
@@ -1299,6 +1300,93 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "ctx win unknown/1K" in toolbar_texts[2]
     assert "ctx win 50/1K (5.0%, 950 left)" in toolbar_texts[3]
     assert "compact ~" not in str(toolbar_texts)
+
+
+def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["!printf ok", "normal prompt", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    calls: list[dict[str, object]] = []
+    toolbars: list[object] = []
+
+    def fake_prompt_for_input(session, **kwargs):
+        toolbars.append(kwargs.get("bottom_toolbar"))
+        return next(prompts)
+
+    async def fake_run_once(prompt, **kwargs):
+        calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
+        return RunSummary(
+            output="model answer",
+            session_id=kwargs.get("session_id") or "model-session",
+            complete=True,
+        )
+
+    def fake_run_local_command(command, *, cwd, should_interrupt=None):
+        return LocalCommandResult(
+            command=command,
+            output="ok",
+            display_output="ok",
+            context_output="ok",
+            exit_code=0,
+            cwd=cwd,
+            shell_path="/bin/sh",
+            shell_kind="unknown",
+            command_dialect="posix",
+            path_style="posix",
+            os_family="macos",
+            tty_mode="pty",
+            duration_ms=1,
+            timeout_ms=1000,
+        )
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+    monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    entries = list_session_entries(tmp_path)
+    session_id = entries[0].id
+    items = asyncio.run(DeepyJsonlSession.open(tmp_path, session_id).get_items())
+    rendered = console.export_text()
+
+    assert result == 0
+    assert calls == [{"prompt": "normal prompt", "session_id": session_id}]
+    assert items[0] == {"role": "user", "content": "!printf ok"}
+    assert items[1]["type"] == "function_call"
+    assert items[1]["name"] == "shell"
+    assert items[2]["type"] == "function_call_output"
+    assert "ok" in rendered
+    assert "ctx win unknown/2K" in str(toolbars[0])
+    assert "ctx win " in str(toolbars[1])
+
+
+def test_run_interactive_empty_local_command_does_not_append_or_call_model(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["!", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    async def fake_run_once(prompt, **kwargs):
+        raise AssertionError("empty local command should not call run_once")
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "Usage: !<command>" in console.export_text()
+    assert list_session_entries(tmp_path) == []
 
 
 def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monkeypatch):

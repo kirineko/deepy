@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-logo.png" alt="Deepy logo" width="160">
+  <img src="https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-logo.webp" alt="Deepy logo" width="144">
 </p>
 
 <h1 align="center">Deepy</h1>
 
 <p align="center">
-  A cute terminal coding agent for DeepSeek models.
+  A terminal coding agent built for DeepSeek.
   <br>
-  Read, edit, run tools, search the web, and keep project context in one terminal session.
+  Read projects, edit files, run commands, search the web, and keep long project context in one recoverable terminal session.
 </p>
 
 <p align="center">
@@ -16,106 +16,205 @@
   <a href="README.zh-CN.md">中文文档</a>
   ·
   <a href="#quick-start">Quick Start</a>
+  ·
+  <a href="#daily-workflow">Daily Workflow</a>
 </p>
 
-![Deepy welcome screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
+![Deepy terminal welcome screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.webp)
 
-## What Is Deepy?
+## What Deepy Does
 
-Deepy is a Python terminal coding agent built for DeepSeek's OpenAI-compatible
-models. It keeps the workflow inside your terminal: ask questions, inspect a
-project, edit files, run commands, search or fetch web content, and resume the
+Deepy is a Python CLI coding agent for DeepSeek's OpenAI-compatible models. It
+keeps the working loop inside your terminal: inspect a project, ask questions,
+modify code, run validation commands, search or fetch web pages, and resume the
 same project session later.
 
-Deepy is designed around DeepSeek V4 thinking mode, long context, cache-friendly
-prompting, and a Rich terminal interface that makes tool calls, diffs, usage, and
-context state visible while the agent works.
+Deepy is optimized for DeepSeek V4 thinking mode, long context, cache-friendly
+prompting, and a Rich terminal UI that makes the agent's actions visible instead
+of hiding tool calls behind chat text.
 
-## Highlights
+## Why Use It
 
-- DeepSeek-first model setup with `deepseek-v4-pro`, thinking enabled, and
-  `reasoning_effort=max` by default; `/model` can switch between V4 Pro and V4
-  Flash with `none`, `high`, or `max` thinking strength.
-- OpenAI Agents SDK integration through `OpenAIChatCompletionsModel`.
-- Project-aware coding tools for reading files, modifying files, running shell
-  commands, and showing readable diffs.
-- Web research tools for search and direct URL fetching when a task needs fresh
-  information.
-- Session history, `/resume`, `/new`, automatic context tracking, and compacting
-  for long project work.
-- TOML-only private configuration at `~/.deepy/config.toml`.
-- Theme-aware terminal UI with Markdown rendering, DeepSeek thinking display,
-  per-turn usage, context window status, and version update checks.
+- **DeepSeek-first defaults**: starts with `deepseek-v4-pro`, thinking enabled,
+  and `reasoning_effort=max`. Use `/model` to switch V4 Pro / V4 Flash and
+  choose `none`, `high`, or `max` thinking strength.
+- **Project-aware coding tools**: read files, write new files, modify existing
+  files with stale-write protection, run shell commands, and review readable
+  diffs.
+- **Visible terminal transcript**: thinking, tool calls, shell output, usage,
+  context status, and command results are shown in the terminal.
+- **Research from the terminal**: use WebSearch for discovery and WebFetch when
+  you already have an exact URL.
+- **Long-session continuity**: JSONL sessions, `/resume`, `/new`, context window
+  status, automatic compacting, and manual `/compact`.
+- **Local command mode**: type `!cmd` to run a non-interactive local shell command
+  without sending it to the model; the result is still saved as context.
+- **Cross-platform shell handling**: POSIX shell, PowerShell, cmd, Windows paths,
+  UTF-8 output, CRLF editing, and pywinpty-backed local command mode.
 
 ## See It Work
 
-### Start In A Project
+### Terminal-Centered Agent Loop
 
-Deepy shows the current model, thinking settings, working directory, and the core
-commands directly on startup.
+Deepy keeps model reasoning, WebFetch, shell output, and status lines visible in
+one transcript.
 
-![Deepy startup screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.jpg)
+![Deepy thinking, WebFetch, and shell output](https://raw.githubusercontent.com/kirineko/deepy/main/asset/webfetch-shell-thinking.webp)
 
-### Build And Verify Code
+### Code Editing With Reviewable Diff
 
-Ask Deepy to implement a change, write tests, run the project test command, and
-summarize the result.
+File edits are shown with path information and readable diff output so you can
+inspect what changed before continuing.
 
-![Deepy coding workflow with diff](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-1.jpg)
+![Deepy edit diff preview](https://raw.githubusercontent.com/kirineko/deepy/main/asset/edit-diff.webp)
 
-Deepy can also turn command output into a readable project summary, including
-files created, code snippets, and test coverage.
+### Search, Fetch, And Local Commands
 
-![Deepy project summary](https://raw.githubusercontent.com/kirineko/deepy/main/asset/coding-2.jpg)
+Use WebSearch / WebFetch for external context, `@` for file mentions, and `!`
+for direct local commands.
 
-### Research With Sources
+![Deepy web research workflow](https://raw.githubusercontent.com/kirineko/deepy/main/asset/websearch.webp)
 
-Deepy includes WebSearch and WebFetch tools, so a terminal session can gather
-current information and fetch exact pages when a URL is provided.
-
-![Deepy web research workflow](https://raw.githubusercontent.com/kirineko/deepy/main/asset/websearch.jpg)
+![Deepy local command mode](https://raw.githubusercontent.com/kirineko/deepy/main/asset/command_mode.webp)
 
 ## Quick Start
 
-Install from PyPI after the first release:
+1. Install `uv`:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+2. Configure a uv mirror.
+
+Linux / macOS: `~/.config/uv/uv.toml`
+
+```toml
+[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+```
+
+Windows: `%AppData%\uv\uv.toml`
+
+```toml
+[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+```
+
+3. Install Deepy:
 
 ```bash
 uv tool install deepy-cli
 ```
 
-The installed command is still `deepy`.
+The installed command is `deepy`.
 
-Install the latest code from GitHub:
-
-```bash
-uv tool install git+https://github.com/kirineko/deepy.git
-```
-
-Configure your DeepSeek API key:
+4. Configure your DeepSeek API key and start Deepy:
 
 ```bash
 deepy config setup
-```
 
-Start Deepy in a project:
-
-```bash
 cd your-project
 deepy
 ```
 
-## Configuration
+## Installation Notes
 
-Deepy only uses TOML configuration. JSON config files are intentionally rejected.
+Use this order for a fresh machine:
+
+### 1. Install uv
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### 2. Configure a uv mirror
+
+Linux / macOS: `~/.config/uv/uv.toml`
 
 ```toml
-# ~/.deepy/config.toml
+[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+```
+
+Windows: `%AppData%\uv\uv.toml`
+
+```toml
+[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+```
+
+### 3. Install Deepy
+
+```bash
+uv tool install deepy-cli
+```
+
+### 4. Configure and start
+
+```bash
+deepy config setup
+
+cd your-project
+deepy
+```
+
+Upgrade or uninstall Deepy:
+
+```bash
+uv tool upgrade deepy-cli
+uv tool uninstall deepy-cli
+```
+
+## Daily Workflow
+
+Inside an interactive Deepy session:
+
+```text
+/model       Select model and thinking strength
+/resume      Resume a previous project session
+/new         Start a fresh session
+/compact     Compact the active session context
+/theme       Show or change terminal UI theme
+@src/app.py  Mention a file in the current project
+!pytest -q   Run a local non-interactive command
+Esc          Interrupt the current model turn
+Ctrl+D       Press twice to quit
+```
+
+Typical usage:
+
+```text
+Ask Deepy to inspect a bug, edit files, run tests, and summarize what changed.
+Use @ to reference files precisely.
+Use ! for commands you want to run directly without model mediation.
+Use /resume when returning to a project later.
+Use /compact when a long session needs a durable summary.
+```
+
+## Configuration
+
+Deepy uses TOML configuration at `~/.deepy/config.toml`.
+
+```toml
 [model]
 api_key = "sk-..."
 name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
 thinking = true
-reasoning_effort = "max" # high or max when thinking is enabled
+reasoning_effort = "max"
 
 [context]
 window_tokens = 1048576
@@ -127,40 +226,27 @@ compact_preserve_recent_messages = 2
 theme = "auto" # auto, dark, or light
 ```
 
-Supported interactive model choices are `deepseek-v4-pro` and
-`deepseek-v4-flash`. In `/model`, thinking strength `none` saves
-`thinking = false`; `high` and `max` save `thinking = true` with the matching
-`reasoning_effort`.
+Set config without the interactive wizard:
 
-WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it
-with your own SearXNG instance:
+```bash
+deepy config init --api-key sk-... --model deepseek-v4-pro
+deepy config theme light
+```
+
+WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it:
 
 ```toml
 [tools.web_search]
 searxng_url = "https://your-searxng.example/"
 ```
 
-You can also initialize config non-interactively:
-
-```bash
-deepy config init --api-key sk-... --model deepseek-v4-pro
-```
-
-If your terminal uses a light background and parts of the UI look low contrast,
-set the UI theme explicitly:
-
-```bash
-deepy config theme light
-```
-
-## Common Commands
+## Command Reference
 
 ```bash
 deepy --version
 deepy config setup
 deepy config reset
 deepy config theme
-deepy config theme light
 deepy doctor
 deepy doctor --live --json
 deepy status
@@ -168,21 +254,6 @@ deepy skills list
 deepy sessions list
 deepy sessions show <session-id>
 deepy run "summarize this project"
-```
-
-Inside the interactive terminal:
-
-```text
-/skills   List available skills
-/model    Select model and thinking strength
-/new      Start a fresh conversation
-/resume   Pick a previous session
-/compact  Compact the active session context
-/theme    Show or change UI theme
-/reset    Delete config and run setup again
-/         Open the command menu
-Esc       Interrupt the current model turn
-Ctrl+D    Press twice to quit
 ```
 
 ## Project Rules And Skills
@@ -193,7 +264,7 @@ Deepy automatically loads project instructions from:
 - `.deepy/skills/*/SKILL.md`
 
 This lets each repository define local conventions, commands, review rules, and
-domain-specific skills without changing global config.
+domain-specific workflows without changing global config.
 
 ## Development
 
@@ -207,8 +278,3 @@ uv build
 
 The Python package is built from `src/deepy`. GitHub Pages files and screenshot
 assets live outside the package directory and are not included in the wheel.
-
-## Release Status
-
-Deepy `0.1.11` is released through GitHub and PyPI. Standalone binaries and npm
-wrappers can be added later, but the primary distribution is the Python CLI.

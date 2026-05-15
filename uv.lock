@@ -248,7 +248,7 @@ wheels = [
 
 [[package]]
 name = "deepy-cli"
-version = "0.1.11"
+version = "0.1.12"
 source = { editable = "." }
 dependencies = [
     { name = "openai" },
@@ -256,6 +256,7 @@ dependencies = [
     { name = "orjson" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
+    { name = "pywinpty", marker = "sys_platform == 'win32'" },
     { name = "rich" },
     { name = "tiktoken" },
     { name = "tomli-w" },
@@ -276,6 +277,7 @@ requires-dist = [
     { name = "orjson", specifier = ">=3.10,<4" },
     { name = "prompt-toolkit", specifier = ">=3.0,<4" },
     { name = "pydantic", specifier = ">=2.12,<3" },
+    { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=2.0,<3" },
     { name = "rich", specifier = ">=13.9,<15" },
     { name = "tiktoken", specifier = ">=0.9,<1" },
     { name = "tomli-w", specifier = ">=1" },
@@ -856,6 +858,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c9/31/097f2e132c4f16d99a22bfb777e0fd88bd8e1c634304e102f313af69ace5/pywin32-311-cp314-cp314-win32.whl", hash = "sha256:b7a2c10b93f8986666d0c803ee19b5990885872a7de910fc460f9b0c2fbf92ee", size = 8840714, upload-time = "2025-07-14T20:13:32.449Z" },
     { url = "https://files.pythonhosted.org/packages/90/4b/07c77d8ba0e01349358082713400435347df8426208171ce297da32c313d/pywin32-311-cp314-cp314-win_amd64.whl", hash = "sha256:3aca44c046bd2ed8c90de9cb8427f581c479e594e99b5c0bb19b29c10fd6cb87", size = 9656800, upload-time = "2025-07-14T20:13:34.312Z" },
     { url = "https://files.pythonhosted.org/packages/c0/d2/21af5c535501a7233e734b8af901574572da66fcc254cb35d0609c9080dd/pywin32-311-cp314-cp314-win_arm64.whl", hash = "sha256:a508e2d9025764a8270f93111a970e1d0fbfc33f4153b388bb649b7eec4f9b42", size = 8932540, upload-time = "2025-07-14T20:13:36.379Z" },
+]
+
+[[package]]
+name = "pywinpty"
+version = "2.0.15"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/7c/917f9c4681bb8d34bfbe0b79d36bbcd902651aeab48790df3d30ba0202fb/pywinpty-2.0.15.tar.gz", hash = "sha256:312cf39153a8736c617d45ce8b6ad6cd2107de121df91c455b10ce6bba7a39b2", size = 29017, upload-time = "2025-02-03T21:53:23.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/e5/9714def18c3a411809771a3fbcec70bffa764b9675afb00048a620fca604/pywinpty-2.0.15-cp312-cp312-win_amd64.whl", hash = "sha256:83a8f20b430bbc5d8957249f875341a60219a4e971580f2ba694fbfb54a45ebc", size = 1405243, upload-time = "2025-02-03T21:56:52.476Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/16/2ab7b3b7f55f3c6929e5f629e1a68362981e4e5fed592a2ed1cb4b4914a5/pywinpty-2.0.15-cp313-cp313-win_amd64.whl", hash = "sha256:ab5920877dd632c124b4ed17bc6dd6ef3b9f86cd492b963ffdb1a67b85b0f408", size = 1405020, upload-time = "2025-02-03T21:56:04.753Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/16/edef3515dd2030db2795dbfbe392232c7a0f3dc41b98e92b38b42ba497c7/pywinpty-2.0.15-cp313-cp313t-win_amd64.whl", hash = "sha256:a4560ad8c01e537708d2790dbe7da7d986791de805d89dd0d3697ca59e9e4901", size = 1404151, upload-time = "2025-02-03T21:55:53.628Z" },
 ]
 
 [[package]]
