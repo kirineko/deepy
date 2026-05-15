@@ -384,11 +384,12 @@ def _read_pipe_output(
     process: subprocess.Popen[bytes],
     output_queue: queue.Queue[bytes],
 ) -> None:
-    if process.stdout is None:
+    stream = process.stdout
+    if stream is None:
         return
     while True:
         try:
-            chunk = process.stdout.read(4096)
+            chunk = stream.read1(4096)
         except Exception:
             return
         if not chunk:
