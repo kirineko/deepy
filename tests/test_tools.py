@@ -1189,6 +1189,21 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
     assert list(tools["WebFetch"].params_json_schema["properties"]) == ["url"]
 
 
+def test_web_search_tool_description_mentions_mcp_fallback_when_preferred(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tools = {
+        tool.name: tool
+        for tool in build_function_tools(
+            runtime,
+            preferred_mcp_web_search_tools=["mcp_tavily__tavily_search"],
+        )
+    }
+
+    assert "Built-in fallback web search" in tools["WebSearch"].description
+    assert "mcp_tavily__tavily_search" in tools["WebSearch"].description
+    assert "Prefer those MCP tools first" in tools["WebSearch"].description
+
+
 def test_web_fetch_requires_complete_http_url(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 

@@ -240,6 +240,30 @@ WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it:
 searxng_url = "https://your-searxng.example/"
 ```
 
+Deepy can also load MCP servers through the OpenAI Agents SDK. Most users only
+need `~/.deepy/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "tavily": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env": {"TAVILY_API_KEY": "${TAVILY_API_KEY}"},
+      "roles": ["web_search"]
+    }
+  }
+}
+```
+
+When an active MCP tool is marked or detected as web search, Deepy instructs the
+model to prefer it over built-in WebSearch and keeps built-in WebSearch as a
+fallback. Project MCP config is ignored by default because stdio MCP servers can
+start local commands; enable `mcp.allow_project_config` only for trusted
+projects. Use `/mcp` to inspect server status and exposed tools. Advanced MCP
+configuration is documented in [docs/mcp.md](docs/mcp.md).
+
 ## Command Reference
 
 ```bash
@@ -265,6 +289,7 @@ Inside the interactive terminal:
 /skills install <name>  Install a market skill
 /skill:<name> [request] Invoke a skill directly
 /init                   Create or update project AGENTS.md
+/mcp                    Show MCP server status and tools
 ```
 
 ## AGENTS.md Instructions And Skills

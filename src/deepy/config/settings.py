@@ -16,6 +16,11 @@ DEFAULT_RESERVED_CONTEXT_TOKENS = 50_000
 DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES = 2
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 DEFAULT_UI_THEME = "auto"
+DEFAULT_MCP_ENABLED = True
+DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS = 10.0
+DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
+DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 30.0
+DEFAULT_MCP_CACHE_TOOLS_LIST = True
 REASONING_EFFORTS = {"high", "max"}
 REASONING_MODES = {"none", "high", "max"}
 UI_THEMES = {"auto", "dark", "light"}
@@ -48,6 +53,12 @@ SUPPORTED_DEEPSEEK_MODELS = frozenset(model.name for model in DEEPSEEK_MODEL_CAT
 
 def default_config_path() -> Path:
     return Path.home() / ".deepy" / "config.toml"
+
+
+def default_mcp_config_path(config_path: Path | None = None) -> Path:
+    if config_path is not None:
+        return config_path.expanduser().parent / "mcp.json"
+    return Path.home() / ".deepy" / "mcp.json"
 
 
 def mask_secret(value: str | None) -> str:
@@ -213,6 +224,63 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True)
+class McpWebSearchConfig:
+    prefer_mcp: bool = True
+    preferred_server: str | None = None
+    preferred_tools: tuple[str, ...] = ()
+    fallback_to_builtin: bool = True
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
+        tools = raw.get("preferred_tools")
+        preferred_tools = (
+            tuple(item.strip() for item in tools if isinstance(item, str) and item.strip())
+            if isinstance(tools, list)
+            else ()
+        )
+        return cls(
+            prefer_mcp=_as_bool(raw.get("prefer_mcp"), True),
+            preferred_server=_as_str(raw.get("preferred_server")) or None,
+            preferred_tools=preferred_tools,
+            fallback_to_builtin=_as_bool(raw.get("fallback_to_builtin"), True),
+        )
+
+
+@dataclass(frozen=True)
+class McpConfig:
+    enabled: bool = DEFAULT_MCP_ENABLED
+    connect_timeout_seconds: float = DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS
+    cleanup_timeout_seconds: float = DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS
+    client_session_timeout_seconds: float = DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS
+    cache_tools_list: bool = DEFAULT_MCP_CACHE_TOOLS_LIST
+    allow_project_config: bool = False
+    prefer_mcp_web_search: bool = True
+    web_search: McpWebSearchConfig = field(default_factory=McpWebSearchConfig)
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
+        return cls(
+            enabled=_as_bool(raw.get("enabled"), DEFAULT_MCP_ENABLED),
+            connect_timeout_seconds=_as_float(
+                raw.get("connect_timeout_seconds"),
+                DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS,
+            ),
+            cleanup_timeout_seconds=_as_float(
+                raw.get("cleanup_timeout_seconds"),
+                DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS,
+            ),
+            client_session_timeout_seconds=_as_float(
+                raw.get("client_session_timeout_seconds"),
+                DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
+            ),
+            cache_tools_list=_as_bool(raw.get("cache_tools_list"), DEFAULT_MCP_CACHE_TOOLS_LIST),
+            allow_project_config=_as_bool(raw.get("allow_project_config"), False),
+            prefer_mcp_web_search=_as_bool(raw.get("prefer_mcp_web_search"), True),
+            web_search=McpWebSearchConfig.from_mapping(_as_mapping(raw.get("web_search"))),
+        )
+
+
+@dataclass(frozen=True)
 class UiConfig:
     theme: str = DEFAULT_UI_THEME
     theme_configured: bool = False
@@ -232,6 +300,7 @@ class Settings:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
     ui: UiConfig = field(default_factory=UiConfig)
     path: Path | None = None
 
@@ -249,6 +318,7 @@ class Settings:
             logging=LoggingConfig.from_mapping(_as_mapping(raw.get("logging"))),
             notify=NotifyConfig.from_mapping(_as_mapping(raw.get("notify"))),
             tools=ToolsConfig.from_mapping(_as_mapping(raw.get("tools"))),
+            mcp=McpConfig.from_mapping(_as_mapping(raw.get("mcp"))),
             ui=UiConfig.from_mapping(_as_mapping(raw.get("ui"))),
             path=path,
         )
@@ -352,6 +422,21 @@ def write_config(
         "tools": {
             "web_search": {
                 "searxng_url": DEFAULT_WEB_SEARCH_SEARXNG_URL,
+            },
+        },
+        "mcp": {
+            "enabled": DEFAULT_MCP_ENABLED,
+            "connect_timeout_seconds": DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS,
+            "cleanup_timeout_seconds": DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS,
+            "client_session_timeout_seconds": DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
+            "cache_tools_list": DEFAULT_MCP_CACHE_TOOLS_LIST,
+            "allow_project_config": False,
+            "prefer_mcp_web_search": True,
+            "web_search": {
+                "prefer_mcp": True,
+                "preferred_server": "",
+                "preferred_tools": [],
+                "fallback_to_builtin": True,
             },
         },
         "ui": {

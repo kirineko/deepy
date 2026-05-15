@@ -18,14 +18,26 @@ def build_deepy_agent(
     project_root: Path,
     provider: ProviderBundle | None = None,
     loaded_skills: list[SkillInfo] | None = None,
+    mcp_servers: list[object] | None = None,
+    preferred_mcp_web_search_tools: list[str] | None = None,
 ):
     from agents import Agent
 
     provider = provider or build_provider_bundle(settings)
     return Agent(
         name="Deepy",
-        instructions=build_system_prompt(project_root, settings, loaded_skills=loaded_skills),
+        instructions=build_system_prompt(
+            project_root,
+            settings,
+            loaded_skills=loaded_skills,
+            preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
+        ),
         model=provider.model,
         model_settings=provider.model_settings,
-        tools=build_function_tools(runtime),
+        tools=build_function_tools(
+            runtime,
+            preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
+        ),
+        mcp_servers=list(mcp_servers or []),
+        mcp_config={"include_server_in_tool_names": True},
     )

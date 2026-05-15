@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from deepy.config import Settings
+from deepy.mcp import mcp_policy_to_dict
 from deepy.prompts.runtime_context import build_runtime_context
 from deepy.sessions import list_session_entries
 from deepy.skills import discover_skills
@@ -21,6 +22,7 @@ class StatusReport:
     reserved_context_tokens: int
     session_count: int
     skill_count: int
+    mcp: dict[str, Any]
     runtime_context: str
 
 
@@ -36,6 +38,7 @@ def build_status_report(project_root: Path, settings: Settings) -> StatusReport:
         reserved_context_tokens=settings.context.reserved_context_tokens,
         session_count=len(list_session_entries(root)),
         skill_count=len(discover_skills(root)),
+        mcp=mcp_policy_to_dict(settings),
         runtime_context=build_runtime_context(root),
     )
 
@@ -52,6 +55,11 @@ def format_status_report(report: StatusReport) -> str:
             f"Reserved context: {report.reserved_context_tokens} tokens",
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
+            (
+                "MCP: "
+                f"{'enabled' if report.mcp.get('enabled') else 'disabled'} "
+                f"config={report.mcp.get('config_path')}"
+            ),
             "",
             report.runtime_context,
         ]
@@ -69,5 +77,6 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "reserved_context_tokens": report.reserved_context_tokens,
         "session_count": report.session_count,
         "skill_count": report.skill_count,
+        "mcp": report.mcp,
         "runtime_context": report.runtime_context,
     }

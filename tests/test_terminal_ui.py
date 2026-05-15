@@ -13,6 +13,7 @@ from rich.console import Console
 from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
+from deepy.mcp import McpServerStatus
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
@@ -29,6 +30,7 @@ from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
 from deepy.ui.terminal import _format_duration_ms
 from deepy.ui.terminal import _format_token_count_short
+from deepy.ui.terminal import _tool_output_text
 from deepy.ui.terminal import _run_once_with_status
 from deepy.ui.terminal import _working_status_text
 from deepy.utils import json as json_utils
@@ -59,6 +61,17 @@ import deepy.ui.terminal
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_history_tool_output_text_preserves_typed_content_for_parser():
+    output = _tool_output_text(
+        {
+            "role": "function_call_output",
+            "content": [{"type": "input_text", "text": "Detailed Results:\n\nTitle: x"}],
+        }
+    )
+
+    assert output == '[{"type":"input_text","text":"Detailed Results:\\n\\nTitle: x"}]'
 
 
 def test_windows_esc_watcher_sets_interrupt(monkeypatch):
@@ -481,6 +494,47 @@ def test_print_stream_event_merges_tool_call_and_output():
     assert "[Read] README.md  ok" in rendered
     assert "tool call:" not in rendered
     assert "tool output:" not in rendered
+
+
+def test_print_stream_event_does_not_dump_unknown_tool_output_without_debug_env():
+    console = Console(record=True)
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text='{"name":"mystery","value":{"nested":true}}',
+        ),
+        pending_tool_calls={},
+    )
+
+    rendered = console.export_text()
+    assert "[Mystery]" in rendered
+    assert "unknown" in rendered
+    assert "Tool output JSON:" not in rendered
+    assert '"nested": true' not in rendered
+
+
+def test_print_stream_event_debug_env_dumps_successful_tool_output_json(monkeypatch):
+    console = Console(record=True)
+    monkeypatch.setenv("DEEPY_DEBUG_TOOL_OUTPUT", "1")
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text='[{"type":"input_text","text":"Detailed Results:\\n\\nTitle: x"}]',
+        ),
+        pending_tool_calls={},
+    )
+
+    rendered = console.export_text()
+    assert "[MCP]" in rendered
+    assert "ok" in rendered
+    assert "Tool output JSON:" in rendered
+    assert '"type": "input_text"' in rendered
 
 
 def test_print_stream_event_renders_diff_without_headers_or_markers():
@@ -949,7 +1003,47 @@ def test_help_slash_command_includes_model(tmp_path):
     assert next_session == "s1"
     assert "/model" in rendered
     assert "/init" in rendered
+    assert "/mcp" in rendered
     assert "/compact [focus]" in rendered
+
+
+def test_mcp_slash_command_shows_no_servers(tmp_path):
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(SlashCommand("mcp"), console, tmp_path, "s1")
+
+    assert next_session == "s1"
+    assert "MCP: no servers configured." in console.export_text()
+
+
+def test_mcp_slash_command_shows_active_server_and_preferred_tool(tmp_path):
+    console = Console(record=True)
+
+    class FakeRuntime:
+        statuses = [
+            McpServerStatus(
+                name="tavily",
+                transport="stdio",
+                source="global",
+                state="active",
+                tool_count=1,
+                tools=("mcp_tavily__tavily_search",),
+                preferred_web_search_tools=("mcp_tavily__tavily_search",),
+            )
+        ]
+
+    next_session = _handle_slash_command(
+        SlashCommand("mcp"),
+        console,
+        tmp_path,
+        "s1",
+        mcp_runtime=FakeRuntime(),  # type: ignore[arg-type]
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "tavily (active)" in rendered
+    assert "mcp_tavily__tavily_search *web-search*" in rendered
 
 
 def test_run_interactive_init_routes_to_model_prompt(tmp_path, monkeypatch):

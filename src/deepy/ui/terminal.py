@@ -46,6 +46,7 @@ from deepy.config import (
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
+from deepy.mcp import DeepyMcpRuntime, format_mcp_status
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
@@ -163,6 +164,15 @@ def run_interactive(
         settings=settings,
     )
     prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
+    async_runner = asyncio.Runner()
+    mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
+    async_runner.run(mcp_runtime.connect())
+    context_status = _format_context_footer(
+        session_id,
+        project_root=root,
+        settings=settings,
+        mcp_runtime=mcp_runtime,
+    )
     output.print(
         build_welcome_panel(
             model=settings.model.name,
@@ -178,193 +188,212 @@ def run_interactive(
         )
     )
 
-    while True:
-        try:
-            text = prompt_for_input(
-                prompt_session,
-                bottom_toolbar=build_prompt_toolbar(context_status),
-            )
-        except EOFError:
-            if ctrl_d_exit_pending:
+    try:
+        while True:
+            try:
+                text = prompt_for_input(
+                    prompt_session,
+                    bottom_toolbar=build_prompt_toolbar(context_status),
+                )
+            except EOFError:
+                if ctrl_d_exit_pending:
+                    output.print()
+                    return 0
+                ctrl_d_exit_pending = True
+                output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
+                continue
+            except KeyboardInterrupt:
                 output.print()
                 return 0
-            ctrl_d_exit_pending = True
-            output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
-            continue
-        except KeyboardInterrupt:
-            output.print()
-            return 0
 
-        if text == CTRL_D_EXIT_CONFIRM_SIGNAL:
-            if ctrl_d_exit_pending:
-                output.print()
-                return 0
-            ctrl_d_exit_pending = True
-            output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
-            continue
+            if text == CTRL_D_EXIT_CONFIRM_SIGNAL:
+                if ctrl_d_exit_pending:
+                    output.print()
+                    return 0
+                ctrl_d_exit_pending = True
+                output.print(f"[{palette.muted}]Press Ctrl+D again to exit.[/]")
+                continue
 
-        ctrl_d_exit_pending = False
-        if not text:
-            continue
+            ctrl_d_exit_pending = False
+            if not text:
+                continue
 
-        local_command = parse_local_command(text)
-        if local_command is not None:
-            session_id = _handle_local_command(
-                local_command,
-                output,
-                root,
-                session_id,
-                settings=settings,
-                palette=palette,
-            )
-            context_status = _format_context_footer(
-                session_id,
-                project_root=root,
-                settings=settings,
-            )
-            continue
-
-        slash = parse_slash_command(text)
-        if slash is not None:
-            if slash.name.startswith("skill:"):
-                skill_name = slash.name.removeprefix("skill:")
-                skill = find_skill(root, skill_name)
-                if skill is None:
-                    output.print(f"[{palette.error}]Skill not found:[/] {skill_name}")
-                    continue
-                request = slash.argument or f"Use the {skill.name} skill."
-                _print_user_input(output, text, palette=palette)
-                summary = _run_once_with_status(
+            local_command = parse_local_command(text)
+            if local_command is not None:
+                session_id = _handle_local_command(
+                    local_command,
                     output,
-                    run_once,
-                    request,
-                    project_root=root,
+                    root,
+                    session_id,
                     settings=settings,
-                    session_id=session_id,
-                    skill_names=[skill.name],
                     palette=palette,
                 )
-                session_id = summary.session_id
-                clarification_rounds = 0
-                while summary.status == "waiting_for_user":
-                    if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
-                        output.print(
-                            f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
-                            "clarification rounds. Please continue with a narrower request.[/]"
-                        )
-                        break
-                    response = _collect_pending_question_response(output, summary.pending_questions)
-                    if not response:
-                        break
-                    clarification_rounds += 1
+                context_status = _format_context_footer(
+                    session_id,
+                    project_root=root,
+                    settings=settings,
+                    mcp_runtime=mcp_runtime,
+                )
+                continue
+
+            slash = parse_slash_command(text)
+            if slash is not None:
+                if slash.name.startswith("skill:"):
+                    skill_name = slash.name.removeprefix("skill:")
+                    skill = find_skill(root, skill_name)
+                    if skill is None:
+                        output.print(f"[{palette.error}]Skill not found:[/] {skill_name}")
+                        continue
+                    request = slash.argument or f"Use the {skill.name} skill."
+                    _print_user_input(output, text, palette=palette)
                     summary = _run_once_with_status(
                         output,
                         run_once,
-                        response,
+                        request,
                         project_root=root,
                         settings=settings,
                         session_id=session_id,
                         skill_names=[skill.name],
                         palette=palette,
+                        async_runner=async_runner,
+                        mcp_runtime=mcp_runtime,
                     )
                     session_id = summary.session_id
-                _print_assistant_output(output, summary.output, palette=palette)
-                _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-                context_status = _format_context_footer(
-                    summary.session_id,
-                    project_root=root,
-                    settings=settings,
-                )
-                continue
-            if slash.name == "init":
-                _print_user_input(output, text, palette=palette)
-                summary = _run_once_with_status(
+                    clarification_rounds = 0
+                    while summary.status == "waiting_for_user":
+                        if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
+                            output.print(
+                                f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
+                                "clarification rounds. Please continue with a narrower request.[/]"
+                            )
+                            break
+                        response = _collect_pending_question_response(output, summary.pending_questions)
+                        if not response:
+                            break
+                        clarification_rounds += 1
+                        summary = _run_once_with_status(
+                            output,
+                            run_once,
+                            response,
+                            project_root=root,
+                            settings=settings,
+                            session_id=session_id,
+                            skill_names=[skill.name],
+                            palette=palette,
+                            async_runner=async_runner,
+                            mcp_runtime=mcp_runtime,
+                        )
+                        session_id = summary.session_id
+                    _print_assistant_output(output, summary.output, palette=palette)
+                    _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                    context_status = _format_context_footer(
+                        summary.session_id,
+                        project_root=root,
+                        settings=settings,
+                        mcp_runtime=mcp_runtime,
+                    )
+                    continue
+                if slash.name == "init":
+                    _print_user_input(output, text, palette=palette)
+                    summary = _run_once_with_status(
+                        output,
+                        run_once,
+                        build_agents_init_prompt(root, extra_instruction=slash.argument),
+                        project_root=root,
+                        settings=settings,
+                        session_id=session_id,
+                        skill_names=list(loaded_skill_names),
+                        palette=palette,
+                        async_runner=async_runner,
+                        mcp_runtime=mcp_runtime,
+                    )
+                    session_id = summary.session_id
+                    _print_assistant_output(output, summary.output, palette=palette)
+                    _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                    context_status = _format_context_footer(
+                        summary.session_id,
+                        project_root=root,
+                        settings=settings,
+                        mcp_runtime=mcp_runtime,
+                    )
+                    continue
+                next_session = _handle_slash_command(
+                    slash,
                     output,
-                    run_once,
-                    build_agents_init_prompt(root, extra_instruction=slash.argument),
-                    project_root=root,
-                    settings=settings,
-                    session_id=session_id,
-                    skill_names=list(loaded_skill_names),
-                    palette=palette,
-                )
-                session_id = summary.session_id
-                _print_assistant_output(output, summary.output, palette=palette)
-                _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-                context_status = _format_context_footer(
-                    summary.session_id,
-                    project_root=root,
-                    settings=settings,
-                )
-                continue
-            next_session = _handle_slash_command(
-                slash,
-                output,
-                root,
-                session_id,
-                loaded_skill_names,
-                settings=settings,
-                palette=palette,
-            )
-            if next_session == "__exit__":
-                return 0
-            if slash.name in {"theme", "reset", "model"}:
-                settings = load_theme_settings(settings)
-                palette = resolve_ui_palette(settings.ui.theme)
-            if slash.name in {"skills", "theme", "reset", "model"}:
-                prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
-            session_id = next_session
-            if slash.name in {"new", "resume", "reset", "model", "compact"}:
-                context_status = _format_context_footer(
+                    root,
                     session_id,
-                    project_root=root,
+                    loaded_skill_names,
                     settings=settings,
+                    palette=palette,
+                    mcp_runtime=mcp_runtime,
                 )
-            continue
+                if next_session == "__exit__":
+                    return 0
+                if slash.name in {"theme", "reset", "model"}:
+                    settings = load_theme_settings(settings)
+                    palette = resolve_ui_palette(settings.ui.theme)
+                if slash.name in {"skills", "theme", "reset", "model"}:
+                    prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
+                session_id = next_session
+                if slash.name in {"new", "resume", "reset", "model", "compact"}:
+                    context_status = _format_context_footer(
+                        session_id,
+                        project_root=root,
+                        settings=settings,
+                        mcp_runtime=mcp_runtime,
+                    )
+                continue
 
-        _print_user_input(output, text, palette=palette)
-        summary = _run_once_with_status(
-            output,
-            run_once,
-            text,
-            project_root=root,
-            settings=settings,
-            session_id=session_id,
-            skill_names=list(loaded_skill_names),
-            palette=palette,
-        )
-        session_id = summary.session_id
-        clarification_rounds = 0
-        while summary.status == "waiting_for_user":
-            if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
-                output.print(
-                    f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
-                    "clarification rounds. Please continue with a narrower request.[/]"
-                )
-                break
-            response = _collect_pending_question_response(output, summary.pending_questions)
-            if not response:
-                break
-            clarification_rounds += 1
+            _print_user_input(output, text, palette=palette)
             summary = _run_once_with_status(
                 output,
                 run_once,
-                response,
+                text,
                 project_root=root,
                 settings=settings,
                 session_id=session_id,
                 skill_names=list(loaded_skill_names),
                 palette=palette,
+                async_runner=async_runner,
+                mcp_runtime=mcp_runtime,
             )
             session_id = summary.session_id
-        _print_assistant_output(output, summary.output, palette=palette)
-        _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-        context_status = _format_context_footer(
-            summary.session_id,
-            project_root=root,
-            settings=settings,
-        )
-
+            clarification_rounds = 0
+            while summary.status == "waiting_for_user":
+                if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
+                    output.print(
+                        f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
+                        "clarification rounds. Please continue with a narrower request.[/]"
+                    )
+                    break
+                response = _collect_pending_question_response(output, summary.pending_questions)
+                if not response:
+                    break
+                clarification_rounds += 1
+                summary = _run_once_with_status(
+                    output,
+                    run_once,
+                    response,
+                    project_root=root,
+                    settings=settings,
+                    session_id=session_id,
+                    skill_names=list(loaded_skill_names),
+                    palette=palette,
+                    async_runner=async_runner,
+                    mcp_runtime=mcp_runtime,
+                )
+                session_id = summary.session_id
+            _print_assistant_output(output, summary.output, palette=palette)
+            _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+            context_status = _format_context_footer(
+                summary.session_id,
+                project_root=root,
+                settings=settings,
+                mcp_runtime=mcp_runtime,
+            )
+    finally:
+        async_runner.run(mcp_runtime.cleanup())
+        async_runner.close()
 
 def _create_interactive_prompt_session(
     root: Path,
@@ -421,6 +450,7 @@ def _run_once_with_status(
     prompt: str,
     **kwargs: object,
 ) -> RunSummary:
+    async_runner = kwargs.pop("async_runner", None)
     palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
@@ -461,7 +491,11 @@ def _run_once_with_status(
                     if callable(original_emit_event):
                         original_emit_event(event)
 
-                summary = asyncio.run(run_once(prompt, **kwargs, emit_event=emit_event))
+                coroutine = run_once(prompt, **kwargs, emit_event=emit_event)
+                if isinstance(async_runner, asyncio.Runner):
+                    summary = async_runner.run(coroutine)
+                else:
+                    summary = asyncio.run(coroutine)
         finally:
             stop_status_refresh.set()
             status_thread.join(timeout=0.2)
@@ -696,6 +730,7 @@ def _handle_slash_command(
     settings: Settings | None = None,
     input_func: InputFunc | None = None,
     palette: UiPalette | None = None,
+    mcp_runtime: DeepyMcpRuntime | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
@@ -710,6 +745,7 @@ def _handle_slash_command(
         console.print("/skills use NAME")
         console.print("/skill:NAME  Invoke a skill")
         console.print("/init      Create or update project AGENTS.md")
+        console.print("/mcp       Show MCP server status and tools")
         console.print("/model      Select model and thinking strength")
         console.print("/status     Show project status")
         console.print("/theme      Show or change UI theme")
@@ -766,6 +802,10 @@ def _handle_slash_command(
         return current_session_id
     if command.name == "status":
         console.print(format_status_report(build_status_report(project_root, settings)))
+        return current_session_id
+    if command.name == "mcp":
+        statuses = mcp_runtime.statuses if mcp_runtime is not None else []
+        console.print(format_mcp_status(statuses))
         return current_session_id
     if command.name == "compact":
         return _handle_compact_command(
@@ -1622,6 +1662,9 @@ def _reasoning_text(item: dict[str, Any]) -> str:
 def _tool_output_text(item: dict[str, Any]) -> str:
     if "output" in item:
         return _content_text(item["output"])
+    content = item.get("content")
+    if isinstance(content, list):
+        return json_utils.dumps(content)
     return _item_text(item)
 
 
@@ -1758,6 +1801,7 @@ def _format_context_footer(
     *,
     project_root: Path | None = None,
     settings: Settings | None = None,
+    mcp_runtime: DeepyMcpRuntime | None = None,
 ) -> str:
     if settings is None:
         return ""
@@ -1770,6 +1814,8 @@ def _format_context_footer(
         parts.append(f"cwd {format_home_relative_path(project_root)}")
         if has_agents_instructions(project_root):
             parts.append("AGENTS.md loaded")
+        if mcp_runtime is not None and mcp_runtime.active_servers:
+            parts.append(f"MCP {len(mcp_runtime.active_servers)} server(s)")
     else:
         parts.append("cwd unknown")
 
@@ -1971,6 +2017,9 @@ def _print_stream_event(
         call_summary = call.summary if call is not None else ""
         summary = format_tool_progress_summary(call_summary, event.text)
         console.print(_status_line(summary, status_style(view.ok, palette)))
+        if _should_print_tool_output_debug(view):
+            console.print(Text("Tool output JSON:", style=palette.muted))
+            console.print(Text(_format_tool_output_debug(event.text), style=palette.muted))
         shell_output = render_shell_output_block(event.text, palette=palette)
         if shell_output:
             console.print(shell_output)
@@ -1989,6 +2038,24 @@ def _print_stream_event(
 
 def _string_payload(value: object) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _should_print_tool_output_debug(view: object) -> bool:
+    return os.environ.get("DEEPY_DEBUG_TOOL_OUTPUT", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "all",
+    }
+
+
+def _format_tool_output_debug(output: str) -> str:
+    try:
+        parsed = json_utils.loads(output)
+    except json_utils.JSONDecodeError:
+        return output
+    return json_utils.dumps_pretty(parsed)
 
 
 _REASONING_BUFFER_TARGET_CHARS = 180

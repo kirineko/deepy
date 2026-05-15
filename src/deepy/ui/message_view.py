@@ -25,11 +25,15 @@ MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit", "write"}
+SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
+SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_text", "text"}
+SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
 TOOL_DISPLAY_LABELS = {
     "AskUserQuestion": "AskUserQuestion",
     "WebFetch": "WebFetch",
     "WebSearch": "WebSearch",
     "edit": "Modify",
+    "mcp": "MCP",
     "modify": "Modify",
     "write": "Write",
     "read": "Read",
@@ -79,7 +83,12 @@ def parse_tool_output(output: str) -> ToolOutputView:
     try:
         payload = json_utils.loads(output)
     except json_utils.JSONDecodeError:
+        if error_view := _sdk_tool_error_output(output):
+            return error_view
         return _raw_tool_output(output)
+
+    if sdk_view := _sdk_content_tool_output(payload, raw=output):
+        return sdk_view
 
     if not isinstance(payload, dict):
         return _raw_tool_output(output)
@@ -669,6 +678,110 @@ def _raw_tool_output(output: str) -> ToolOutputView:
         summary=_truncate(output),
         raw=output,
     )
+
+
+def _sdk_tool_error_output(output: str) -> ToolOutputView | None:
+    text = output.strip()
+    if not text.startswith(SDK_TOOL_ERROR_PREFIX):
+        return None
+    return ToolOutputView(
+        name="tool",
+        ok=False,
+        status="failed",
+        summary=f"{format_tool_display_label('tool')} failed - {_truncate(text)}",
+        error=text,
+        raw=output,
+    )
+
+
+def _sdk_content_tool_output(payload: Any, *, raw: str) -> ToolOutputView | None:
+    is_error = bool(payload.get("isError") or payload.get("is_error")) if isinstance(payload, dict) else False
+    if _is_sdk_content_block(payload):
+        content = payload
+    else:
+        content = payload.get("content") if isinstance(payload, dict) else payload
+    content_blocks = _sdk_content_blocks(content)
+    structured_content = _sdk_structured_content(payload)
+    text = _sdk_content_text(content)
+    if text is None and not content_blocks and structured_content is None and not is_error:
+        return None
+    ok = not is_error
+    status = _status_text(ok)
+    detail = (
+        _first_nonempty_line(text or "")
+        or _sdk_non_text_detail(content_blocks, structured_content=structured_content)
+        or "MCP tool returned an error"
+    )
+    return ToolOutputView(
+        name="mcp",
+        ok=ok,
+        status=status,
+        summary=f"{format_tool_display_label('mcp')} {status}"
+        + (f" - {_truncate(detail)}" if detail else ""),
+        output="" if is_error else text or "",
+        error=(text or detail) if is_error else None,
+        raw=raw,
+    )
+
+
+def _sdk_content_text(content: Any) -> str | None:
+    parts: list[str] = []
+    for item in _sdk_content_blocks(content):
+        text = _sdk_text_block_text(item)
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    return "\n".join(parts)
+
+
+def _sdk_content_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, dict):
+        return [content] if _is_sdk_content_block(content) else []
+    if not isinstance(content, list):
+        return []
+    return [item for item in content if _is_sdk_content_block(item)]
+
+
+def _sdk_text_block_text(item: Any) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    block_type = item.get("type")
+    text = item.get("text")
+    if block_type in SDK_TEXT_BLOCK_TYPES and isinstance(text, str) and text:
+        return text
+    return None
+
+
+def _is_sdk_content_block(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    block_type = value.get("type")
+    return isinstance(block_type, str) and block_type in SDK_CONTENT_BLOCK_TYPES
+
+
+def _sdk_structured_content(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("structuredContent", "structured_content"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _sdk_non_text_detail(
+    content_blocks: list[dict[str, Any]],
+    *,
+    structured_content: dict[str, Any] | None,
+) -> str:
+    if content_blocks:
+        count = len(content_blocks)
+        label = "content block" if count == 1 else "content blocks"
+        return f"{count} {label}"
+    if structured_content is not None:
+        return "structured content"
+    return ""
 
 
 def _status_text(ok: bool | None) -> str:

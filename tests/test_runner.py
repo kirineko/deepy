@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from agents import ModelSettings
-from agents.exceptions import MaxTurnsExceeded
+from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from openai import APIStatusError, BadRequestError
 
 from deepy.config import ContextConfig, Settings
@@ -146,6 +146,15 @@ class DeepSeekStatusErrorStream:
             response=response,
             body=response.json(),
         )
+        yield
+
+
+class ModelBehaviorErrorStream:
+    final_output = None
+    is_complete = False
+
+    async def stream_events(self):
+        raise ModelBehaviorError("Tool mcp_tavily__tavily_search not found in agent Deepy")
         yield
 
 
@@ -654,6 +663,31 @@ async def test_run_prompt_once_returns_deepseek_status_error_as_content(monkeypa
     assert "code=invalid_request_error" in summary.output
     assert error_entries[0]["response"]["statusCode"] == 402
     assert error_entries[0]["response"]["body"]["error"]["message"] == "Insufficient Balance"
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_returns_model_behavior_error_as_content(monkeypatch, tmp_path):
+    error_entries: list[dict] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            return ModelBehaviorErrorStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    monkeypatch.setattr("deepy.llm.runner.log_api_error", error_entries.append)
+
+    summary = await run_prompt_once(
+        "search",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+    )
+
+    assert summary.complete is False
+    assert summary.status == "agent_error"
+    assert "Tool mcp_tavily__tavily_search not found in agent Deepy" in summary.output
+    assert isinstance(error_entries[0]["error"], ModelBehaviorError)
 
 
 def test_format_deepseek_api_error_includes_known_error_code_guidance():

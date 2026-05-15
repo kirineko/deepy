@@ -71,6 +71,168 @@ def test_raw_tool_output_is_truncated():
     assert len(summary) <= 160
 
 
+def test_parse_tool_output_normalizes_mcp_content_array():
+    output = json.dumps(
+        [
+            {
+                "type": "input_text",
+                "text": "Detailed Results:\n\nTitle: Result One\nURL: https://example.com",
+            }
+        ]
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is True
+    assert view.status == "ok"
+    assert view.summary == "[MCP] ok - Detailed Results:"
+    assert "Title: Result One" in view.output
+
+
+def test_parse_tool_output_normalizes_mcp_call_tool_result_dict():
+    output = json.dumps(
+        {
+            "content": [{"type": "text", "text": "Result body"}],
+            "isError": False,
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is True
+    assert view.status == "ok"
+    assert view.output == "Result body"
+
+
+def test_parse_tool_output_normalizes_single_mcp_content_block():
+    output = json.dumps(
+        {
+            "type": "input_text",
+            "text": "Detailed Results:\n\nTitle: Single Block",
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is True
+    assert view.status == "ok"
+    assert view.summary == "[MCP] ok - Detailed Results:"
+    assert "Title: Single Block" in view.output
+
+
+def test_parse_tool_output_normalizes_mcp_is_error_snake_case():
+    output = json.dumps(
+        {
+            "content": {"type": "text", "text": "MCP failed"},
+            "is_error": True,
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is False
+    assert view.status == "failed"
+    assert view.error == "MCP failed"
+
+
+def test_parse_tool_output_marks_mcp_is_error_without_text_as_failed():
+    output = json.dumps(
+        {
+            "content": {"type": "image", "image_url": "data:image/png;base64,abc"},
+            "isError": True,
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is False
+    assert view.status == "failed"
+    assert view.error == "1 content block"
+
+
+def test_parse_tool_output_marks_non_text_mcp_content_as_ok():
+    output = json.dumps(
+        {
+            "type": "image",
+            "image_url": "data:image/png;base64,abc",
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is True
+    assert view.status == "ok"
+    assert view.summary == "[MCP] ok - 1 content block"
+
+
+def test_parse_tool_output_marks_mcp_structured_content_as_ok():
+    output = json.dumps({"structuredContent": {"result": "ok"}, "isError": False})
+
+    view = parse_tool_output(output)
+
+    assert view.name == "mcp"
+    assert view.ok is True
+    assert view.status == "ok"
+    assert view.summary == "[MCP] ok - structured content"
+
+
+def test_parse_tool_output_normalizes_sdk_tool_error_string():
+    output = (
+        "An error occurred while running the tool. Please try again. "
+        "Error: Timed out while waiting for response to ClientRequest."
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.ok is False
+    assert view.status == "failed"
+    assert view.error == output
+    assert view.summary.startswith("[Tool] failed - An error occurred")
+
+
+def test_parse_tool_output_leaves_unrecognized_json_array_raw():
+    view = parse_tool_output(json.dumps(["plain", "array"]))
+
+    assert view.ok is None
+    assert view.status == "raw"
+
+
+def test_format_tool_progress_summary_marks_mcp_content_as_ok():
+    output = json.dumps(
+        [
+            {
+                "type": "input_text",
+                "text": "Detailed Results:\n\nTitle: Result One",
+            }
+        ]
+    )
+
+    assert (
+        format_tool_progress_summary("[McpTavilyTavilySearch] Vibe Coding", output)
+        == "[McpTavilyTavilySearch] Vibe Coding  ok"
+    )
+
+
+def test_format_tool_progress_summary_marks_sdk_tool_error_as_failed():
+    output = (
+        "An error occurred while running the tool. Please try again. "
+        "Error: Timed out while waiting for response to ClientRequest."
+    )
+
+    assert (
+        format_tool_progress_summary("[McpTavilyTavilySearch] Vibe Coding", output)
+        == "[McpTavilyTavilySearch] Vibe Coding  failed - "
+        "An error occurred while running the tool. Please try again. "
+        "Error: Timed out while waiting for response to ClientRequest."
+    )
+
+
 def test_tool_diff_preview_only_for_successful_edit():
     diff = "--- a/file\n+++ b/file\n@@\n-old\n+new\n"
     output = json.dumps(

@@ -274,6 +274,22 @@ def test_system_prompt_includes_powershell_tool_guidance(tmp_path):
     assert "PowerShell commands and Windows paths" in prompt
 
 
+def test_system_prompt_prefers_mcp_web_search_tools(tmp_path):
+    prompt = build_system_prompt(
+        tmp_path,
+        Settings(),
+        project_rules="",
+        skills=[],
+        runtime_context="Runtime context here.",
+        preferred_mcp_web_search_tools=["mcp_tavily__tavily_search"],
+    )
+
+    assert "MCP web search preference:" in prompt
+    assert "mcp_tavily__tavily_search" in prompt
+    assert "prefer these MCP tools before Deepy's built-in WebSearch" in prompt
+    assert "Use built-in WebSearch only if MCP search is unavailable" in prompt
+
+
 def test_system_prompt_keeps_static_cache_prefix_before_dynamic_context(tmp_path):
     prompt = build_system_prompt(
         tmp_path,

@@ -158,6 +158,28 @@ def test_normalize_tool_output_event():
     assert normalized.text == "{\"ok\":true}"
 
 
+def test_normalize_tool_output_event_serializes_typed_content():
+    item = type(
+        "Item",
+        (),
+        {
+            "output": [{"type": "input_text", "text": "Detailed Results:\n\nTitle: x"}],
+            "call_id": "call-1",
+        },
+    )()
+    event = type(
+        "Event",
+        (),
+        {"type": "run_item_stream_event", "name": "tool_output", "item": item},
+    )()
+
+    normalized = normalize_stream_event(event)
+
+    assert normalized is not None
+    assert normalized.kind == "tool_output"
+    assert normalized.text == '[{"type":"input_text","text":"Detailed Results:\\n\\nTitle: x"}]'
+
+
 def test_normalize_agent_update_event():
     agent = type("Agent", (), {"name": "Deepy"})()
     event = type("Event", (), {"type": "agent_updated_stream_event", "new_agent": agent})()

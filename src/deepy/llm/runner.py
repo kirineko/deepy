@@ -11,6 +11,7 @@ from typing import Any, Literal
 from deepy.config import Settings, load_settings
 from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import find_skill
+from deepy.mcp import DeepyMcpRuntime
 from deepy.tools import ToolRuntime
 from deepy.usage import TokenUsage, merge_usage, normalize_usage, usage_from_run_result
 from deepy.utils import json as json_utils
@@ -48,17 +49,23 @@ async def run_prompt_once(
     max_turns: int = DEFAULT_MAX_TURNS,
     session_id: str | None = None,
     skill_names: list[str] | None = None,
+    mcp_runtime: DeepyMcpRuntime | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
     from agents import RunConfig, Runner
-    from agents.exceptions import MaxTurnsExceeded
+    from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
     from openai import APIStatusError
 
     root = (project_root or Path.cwd()).resolve()
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
     runtime = ToolRuntime(cwd=root, settings=resolved_settings)
+    created_mcp_runtime: DeepyMcpRuntime | None = None
+    if mcp_runtime is None:
+        created_mcp_runtime = DeepyMcpRuntime(resolved_settings, project_root=root)
+        mcp_runtime = created_mcp_runtime
+        await mcp_runtime.connect()
     loaded_skills = _resolve_loaded_skills(root, prompt, skill_names)
     agent = build_deepy_agent(
         resolved_settings,
@@ -66,6 +73,8 @@ async def run_prompt_once(
         project_root=root,
         provider=resolved_provider,
         loaded_skills=loaded_skills,
+        mcp_servers=mcp_runtime.active_servers,
+        preferred_mcp_web_search_tools=mcp_runtime.preferred_web_search_tools,
     )
     session = (
         DeepyJsonlSession.open(root, session_id)
@@ -82,6 +91,7 @@ async def run_prompt_once(
         )
     except ContextCompactionError as exc:
         duration_ms = int((time.time() - started_at) * 1000) if "started_at" in locals() else 0
+        await _cleanup_created_mcp(created_mcp_runtime)
         return RunSummary(
             output=f"Context compaction failed: {exc}",
             session_id=session.session_id,
@@ -165,6 +175,7 @@ async def run_prompt_once(
             usage = result_usage
         duration_ms = int((time.time() - started_at) * 1000)
         session.record_usage(usage)
+        await _cleanup_created_mcp(created_mcp_runtime)
         return RunSummary(
             output=_max_turns_output(chunks, max_turns=max_turns),
             session_id=session.session_id,
@@ -196,11 +207,43 @@ async def run_prompt_once(
             usage = result_usage
         duration_ms = int((time.time() - started_at) * 1000)
         session.record_usage(usage)
+        await _cleanup_created_mcp(created_mcp_runtime)
         return RunSummary(
             output=format_deepseek_api_error(exc),
             session_id=session.session_id,
             complete=False,
             status="api_error",
+            usage=usage,
+            duration_ms=duration_ms,
+        )
+    except ModelBehaviorError as exc:
+        interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
+        log_api_error(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "location": "deepy.llm.runner.run_prompt_once",
+                "requestId": session.session_id,
+                "sessionId": session.session_id,
+                "model": resolved_settings.model.name,
+                "baseURL": resolved_settings.model.base_url,
+                "error": exc,
+                "request": {
+                    "input": prompt,
+                    "max_turns": max_turns,
+                },
+            }
+        )
+        result_usage = usage_from_run_result(result)
+        if result_usage.known:
+            usage = result_usage
+        duration_ms = int((time.time() - started_at) * 1000)
+        session.record_usage(usage)
+        await _cleanup_created_mcp(created_mcp_runtime)
+        return RunSummary(
+            output=f"Agent behavior error: {exc}",
+            session_id=session.session_id,
+            complete=False,
+            status="agent_error",
             usage=usage,
             duration_ms=duration_ms,
         )
@@ -221,6 +264,7 @@ async def run_prompt_once(
                 },
             }
         )
+        await _cleanup_created_mcp(created_mcp_runtime)
         raise
 
     interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
@@ -250,22 +294,31 @@ async def run_prompt_once(
         )
     if resolved_settings.notify.enabled and resolved_settings.notify.command:
         launch_notify_script(resolved_settings.notify.command, duration_ms, root)
-    return RunSummary(
-        output=output,
-        session_id=session.session_id,
-        complete=False
-        if interrupted or waiting_for_user
-        else bool(getattr(result, "is_complete", True)),
-        interrupted=interrupted,
-        status=_run_status(
+    try:
+        return RunSummary(
+            output=output,
+            session_id=session.session_id,
+            complete=False
+            if interrupted or waiting_for_user
+            else bool(getattr(result, "is_complete", True)),
             interrupted=interrupted,
-            waiting_for_user=waiting_for_user,
-            complete=bool(getattr(result, "is_complete", True)),
-        ),
-        pending_questions=pending_questions,
-        usage=usage,
-        duration_ms=duration_ms,
-    )
+            status=_run_status(
+                interrupted=interrupted,
+                waiting_for_user=waiting_for_user,
+                complete=bool(getattr(result, "is_complete", True)),
+            ),
+            pending_questions=pending_questions,
+            usage=usage,
+            duration_ms=duration_ms,
+        )
+    finally:
+        if created_mcp_runtime is not None:
+            await created_mcp_runtime.cleanup()
+
+
+async def _cleanup_created_mcp(mcp_runtime: DeepyMcpRuntime | None) -> None:
+    if mcp_runtime is not None:
+        await mcp_runtime.cleanup()
 
 
 def _resolve_loaded_skills(

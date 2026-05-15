@@ -23,6 +23,7 @@ def build_system_prompt(
     skills: list[SkillInfo] | None = None,
     loaded_skills: list[SkillInfo] | None = None,
     runtime_context: str | None = None,
+    preferred_mcp_web_search_tools: list[str] | None = None,
 ) -> str:
     resolved_project_rules = (
         load_project_rules(project_root) if project_rules is None else project_rules.strip()
@@ -36,6 +37,7 @@ def build_system_prompt(
         include_git_dirty=False,
     )
     tool_docs_block = load_tool_docs()
+    mcp_web_search_block = _format_mcp_web_search_guidance(preferred_mcp_web_search_tools or [])
     # Keep stable instructions before project/runtime blocks so DeepSeek can reuse
     # a longer request prefix through its context cache.
     return f"""You are Deepy, a terminal coding agent in the user's project.
@@ -54,6 +56,7 @@ Core rules:
 
 Tool protocol:
 Tool results are JSON strings: ok, name, output, error, metadata, awaitUserResponse.
+{mcp_web_search_block}
 
 Skill protocol:
 - Available skills are metadata only. Do not assume their full workflow is already loaded.
@@ -97,3 +100,17 @@ Runtime context:
 Runtime: root={project_root}; model={settings.model.name}; reasoning={settings.model.reasoning_mode}
 {runtime_context_block}
 """
+
+
+def _format_mcp_web_search_guidance(tool_names: list[str]) -> str:
+    if not tool_names:
+        return ""
+    joined = ", ".join(tool_names)
+    return (
+        "\nMCP web search preference:\n"
+        f"- Preferred MCP web search tools are available: {joined}.\n"
+        "- For web search, current information, or search-engine style queries, prefer these "
+        "MCP tools before Deepy's built-in WebSearch.\n"
+        "- Use built-in WebSearch only if MCP search is unavailable, fails, or the user "
+        "explicitly asks for Deepy's built-in search.\n"
+    )

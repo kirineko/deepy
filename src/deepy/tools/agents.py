@@ -7,7 +7,11 @@ from deepy.utils import json as json_utils
 from .builtin import ToolRuntime
 
 
-def build_function_tools(runtime: ToolRuntime) -> list[object]:
+def build_function_tools(
+    runtime: ToolRuntime,
+    *,
+    preferred_mcp_web_search_tools: list[str] | None = None,
+) -> list[object]:
     from agents.tool import FunctionTool
 
     async def invoke_shell(_context: object, raw_input: str) -> str:
@@ -50,6 +54,20 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
     async def invoke_load_skill(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
         return runtime.load_skill(_string_arg(args, "name"))
+
+    web_search_description = (
+        "Perform web searching using a natural language query. Use a small number of "
+        "targeted searches, then stop and synthesize once enough sources are available; "
+        "prefer WebFetch for exact URLs."
+    )
+    if preferred_mcp_web_search_tools:
+        web_search_description = (
+            "Built-in fallback web search. Preferred MCP web search tools are available: "
+            + ", ".join(preferred_mcp_web_search_tools)
+            + ". Prefer those MCP tools first for web/current-information searches; use "
+            "this built-in WebSearch if MCP search is unavailable, fails, or the user "
+            "explicitly requests Deepy's built-in search. Prefer WebFetch for exact URLs."
+        )
 
     return [
         FunctionTool(
@@ -94,11 +112,7 @@ def build_function_tools(runtime: ToolRuntime) -> list[object]:
         ),
         FunctionTool(
             name="WebSearch",
-            description=(
-                "Perform web searching using a natural language query. Use a small number of "
-                "targeted searches, then stop and synthesize once enough sources are available; "
-                "prefer WebFetch for exact URLs."
-            ),
+            description=web_search_description,
             params_json_schema=WEB_SEARCH_SCHEMA,
             on_invoke_tool=invoke_web_search,
             strict_json_schema=False,

@@ -169,6 +169,55 @@ def test_settings_to_toml_masks_api_key(tmp_path):
     assert "compact_prompt_token_threshold" not in data["context"]
 
 
+def test_loads_mcp_policy_from_toml(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp]
+enabled = false
+connect_timeout_seconds = 3
+cleanup_timeout_seconds = 4
+client_session_timeout_seconds = 20
+cache_tools_list = false
+allow_project_config = true
+prefer_mcp_web_search = false
+
+[mcp.web_search]
+prefer_mcp = false
+preferred_server = "tavily"
+preferred_tools = ["tavily_search"]
+fallback_to_builtin = false
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.mcp.enabled is False
+    assert settings.mcp.connect_timeout_seconds == 3
+    assert settings.mcp.cleanup_timeout_seconds == 4
+    assert settings.mcp.client_session_timeout_seconds == 20
+    assert settings.mcp.cache_tools_list is False
+    assert settings.mcp.allow_project_config is True
+    assert settings.mcp.prefer_mcp_web_search is False
+    assert settings.mcp.web_search.prefer_mcp is False
+    assert settings.mcp.web_search.preferred_server == "tavily"
+    assert settings.mcp.web_search.preferred_tools == ("tavily_search",)
+    assert settings.mcp.web_search.fallback_to_builtin is False
+
+
+def test_settings_to_toml_includes_mcp_policy_without_server_secrets(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[mcp.web_search]\npreferred_server = \"tavily\"\n", encoding="utf-8")
+
+    data = settings_to_toml_dict(load_settings(config, env={}))
+
+    assert data["mcp"]["enabled"] is True
+    assert data["mcp"]["web_search"]["preferred_server"] == "tavily"
+    assert "env" not in data["mcp"]
+    assert "headers" not in data["mcp"]
+
+
 def test_loads_ui_theme_values(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[ui]\ntheme = "light"\n', encoding="utf-8")

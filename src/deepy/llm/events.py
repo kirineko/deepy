@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from deepy.utils import json as json_utils
+
 StreamKind = Literal[
     "text_delta",
     "reasoning_delta",
@@ -84,7 +86,7 @@ def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
         return DeepyStreamEvent(
             kind="tool_output",
             name=_tool_name(item),
-            text=output if isinstance(output, str) else str(output),
+            text=_tool_output_text(output),
             payload={"call_id": _call_id(item)},
         )
     if name == "message_output_created":
@@ -157,6 +159,14 @@ def _tool_arguments(item: Any) -> str:
     function = getattr(raw_item, "function", None)
     value = getattr(function, "arguments", None)
     return value if isinstance(value, str) else ""
+
+
+def _tool_output_text(output: Any) -> str:
+    if isinstance(output, str):
+        return output
+    if output is None:
+        return ""
+    return json_utils.dumps(output)
 
 
 def _call_id(item: Any) -> str:
