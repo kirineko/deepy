@@ -142,6 +142,7 @@ def run_interactive(
     prompt_session = create_prompt_session(
         slash_commands=build_slash_commands(discover_skills(root)),
         palette=palette,
+        project_root=root,
     )
     output.print(
         build_welcome_panel(
@@ -206,6 +207,7 @@ def run_interactive(
                 prompt_session = create_prompt_session(
                     slash_commands=build_slash_commands(discover_skills(root)),
                     palette=palette,
+                    project_root=root,
                 )
             session_id = next_session
             if slash.name in {"new", "resume", "reset", "model", "compact"}:

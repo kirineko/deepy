@@ -3,7 +3,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
+
 from deepy.skills import SkillInfo
+from deepy.ui.file_mentions import FileMentionCompleter
+from deepy.ui.file_mentions import FileMentionDiscovery
+from deepy.ui.file_mentions import extract_file_mention_fragment
+from deepy.ui.file_mentions import is_ignored_file_mention_name
+from deepy.ui.file_mentions import rank_file_mention_candidates
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.prompt_input import PROMPT_MESSAGE
@@ -36,6 +44,130 @@ def _strip_ansi(text: str) -> str:
 
 def _skill(name: str, description: str) -> SkillInfo:
     return SkillInfo(name=name, path=Path(f"/skills/{name}/SKILL.md"), description=description)
+
+
+def _completion_texts(completer, text: str) -> list[str]:
+    document = Document(text=text, cursor_position=len(text))
+    event = CompleteEvent(completion_requested=True)
+    return [completion.text for completion in completer.get_completions(document, event)]
+
+
+def _completions(completer, text: str):
+    document = Document(text=text, cursor_position=len(text))
+    event = CompleteEvent(completion_requested=True)
+    return list(completer.get_completions(document, event))
+
+
+def test_extract_file_mention_fragment_handles_plain_scoped_and_invalid_tokens():
+    assert extract_file_mention_fragment("@").fragment == ""
+    assert extract_file_mention_fragment("please inspect @src/deepy").fragment == "src/deepy"
+    assert extract_file_mention_fragment("email@example.com") is None
+    assert extract_file_mention_fragment("look @src then continue") is None
+    assert extract_file_mention_fragment("literal@@src") is None
+
+
+def test_file_mention_top_level_discovery_filters_ignored_and_formats_dirs(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "README.md").write_text("# readme")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "draft file.txt").write_text("")
+
+    paths = FileMentionDiscovery(tmp_path).top_level_paths()
+
+    assert "src/" in paths
+    assert "README.md" in paths
+    assert "node_modules/" not in paths
+    assert ".git/" not in paths
+    assert "draft file.txt" not in paths
+    assert is_ignored_file_mention_name("node_modules")
+
+
+def test_file_mention_scoped_discovery_descends_under_typed_directory(tmp_path):
+    (tmp_path / "src" / "deepy").mkdir(parents=True)
+    (tmp_path / "src" / "deepy" / "cli.py").write_text("")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "cli.py").write_text("")
+
+    paths = FileMentionDiscovery(tmp_path).deep_paths("src")
+
+    assert "src/" in paths
+    assert "src/deepy/" in paths
+    assert "src/deepy/cli.py" in paths
+    assert "docs/cli.py" not in paths
+
+
+def test_file_mention_scoped_discovery_rejects_project_root_escape(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-file.txt"
+    outside.write_text("")
+    try:
+        assert FileMentionDiscovery(tmp_path).deep_paths("..") == []
+        assert FileMentionDiscovery(tmp_path).deep_paths("../") == []
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+def test_file_mention_ranking_prefers_basename_matches():
+    paths = [
+        "src/features/cache.py",
+        "src/web/prefetch.py",
+        "src/web/fetch.py",
+    ]
+
+    assert rank_file_mention_candidates(paths, "fetch") == [
+        "src/web/fetch.py",
+        "src/web/prefetch.py",
+        "src/features/cache.py",
+    ]
+
+
+def test_file_mention_discovery_uses_short_lived_cache(tmp_path):
+    (tmp_path / "README.md").write_text("")
+    discovery = FileMentionDiscovery(tmp_path, refresh_interval=999)
+
+    assert "README.md" in discovery.top_level_paths()
+    (tmp_path / "later.py").write_text("")
+
+    assert "later.py" not in discovery.top_level_paths()
+
+
+def test_file_mention_completer_short_circuits_existing_file(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "AGENTS.md").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    assert _completion_texts(completer, "@AGENTS.md") == []
+
+
+def test_file_mention_completer_replaces_only_current_fragment(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "deepy.py").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    completions = _completions(completer, "inspect @src/de")
+    selected = next(completion for completion in completions if completion.text == "src/deepy.py")
+
+    assert selected.start_position == -len("src/de")
+
+
+def test_create_prompt_session_combines_slash_and_file_mention_completion(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "deepy.py").write_text("")
+    session = create_prompt_session(
+        slash_commands=[
+            SlashCommandItem("new", "new", "/new", "Start fresh"),
+            SlashCommandItem("resume", "resume", "/resume", "Resume"),
+        ],
+        history_path=tmp_path / "history.txt",
+        project_root=tmp_path,
+    )
+
+    assert session.completer is not None
+    assert "/new" in _completion_texts(session.completer, "/")
+    assert "src/" in _completion_texts(session.completer, "see @")
 
 
 def test_selected_skill_helpers_format_dedupe_toggle_and_clear_slash_tokens():
@@ -176,6 +308,8 @@ def test_prompt_key_bindings_enter_submits_and_ctrl_j_inserts_newline():
     calls: list[str] = []
 
     class Buffer:
+        complete_state = None
+
         def validate_and_handle(self):
             calls.append("submit")
 
@@ -195,6 +329,72 @@ def test_prompt_key_bindings_enter_submits_and_ctrl_j_inserts_newline():
     ctrl_j.handler(Event())
 
     assert calls == ["submit", "\n"]
+
+
+def test_prompt_key_bindings_enter_accepts_completion_without_submitting():
+    bindings = build_prompt_key_bindings()
+    calls: list[str] = []
+
+    class CompletionState:
+        current_completion = "src/main.py"
+        completions = ["src/main.py", "README.md"]
+
+    class Buffer:
+        complete_state = CompletionState()
+
+        def apply_completion(self, completion):
+            calls.append(f"apply:{completion}")
+
+        def cancel_completion(self):
+            calls.append("cancel")
+
+        def validate_and_handle(self):
+            calls.append("submit")
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
+
+    enter.handler(Event())
+
+    assert calls == ["apply:src/main.py"]
+
+
+def test_prompt_key_bindings_enter_cancels_empty_completion_state_without_submitting():
+    bindings = build_prompt_key_bindings()
+    calls: list[str] = []
+
+    class CompletionState:
+        current_completion = None
+        completions = []
+
+    class Buffer:
+        complete_state = CompletionState()
+
+        def apply_completion(self, completion):
+            calls.append(f"apply:{completion}")
+
+        def cancel_completion(self):
+            calls.append("cancel")
+
+        def validate_and_handle(self):
+            calls.append("submit")
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
+
+    enter.handler(Event())
+
+    assert calls == ["cancel"]
 
 
 def test_prompt_key_bindings_do_not_register_shift_or_ctrl_enter_sequences():

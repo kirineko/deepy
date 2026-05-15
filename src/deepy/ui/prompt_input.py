@@ -6,13 +6,14 @@ from typing import Callable
 from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import WordCompleter, merge_completers
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
 from deepy.skills import SkillInfo
+from deepy.ui.file_mentions import FileMentionCompleter
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.slash_commands import SlashCommandItem
 from deepy.ui.styles import DARK_PALETTE, UiPalette
@@ -41,14 +42,23 @@ def create_prompt_session(
     history_path: Path | None = None,
     on_interrupt: Callable[[], None] | None = None,
     palette: UiPalette | None = None,
+    project_root: Path | None = None,
 ) -> PromptSession[str]:
     path = history_path or DEFAULT_PROMPT_HISTORY
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
     labels = [item.label for item in slash_commands or []]
+    root = project_root or Path.cwd()
+    completer = merge_completers(
+        [
+            WordCompleter(labels, ignore_case=True, sentence=True),
+            FileMentionCompleter(root),
+        ],
+        deduplicate=True,
+    )
     return PromptSession(
         history=FileHistory(str(path)),
-        completer=WordCompleter(labels, ignore_case=True, sentence=True),
+        completer=completer,
         complete_while_typing=True,
         multiline=True,
         key_bindings=build_prompt_key_bindings(on_interrupt=on_interrupt),
@@ -69,6 +79,16 @@ def build_prompt_key_bindings(
 
     @bindings.add("enter")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        complete_state = event.current_buffer.complete_state
+        if complete_state is not None:
+            completion = complete_state.current_completion
+            if completion is None and complete_state.completions:
+                completion = complete_state.completions[0]
+            if completion is not None:
+                event.current_buffer.apply_completion(completion)
+            else:
+                event.current_buffer.cancel_completion()
+            return
         event.current_buffer.validate_and_handle()
 
     @bindings.add("c-d")
