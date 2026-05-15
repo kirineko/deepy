@@ -33,6 +33,11 @@ def repeat_x_command(count: int) -> str:
     return f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * {count})\""
 
 
+def write_encoded_stdout_command(text: str, encoding: str) -> str:
+    payload = repr(text.encode(encoding))
+    return shlex.join([sys.executable, "-c", f"import sys; sys.stdout.buffer.write({payload})"])
+
+
 def test_tool_result_shape_is_stable():
     payload = decode(ToolResult.ok_result("read", "hello").to_json())
 
@@ -986,6 +991,41 @@ def test_extract_shell_sentinel_parses_cwd_and_exit_code(tmp_path):
     assert visible == "visible\n"
     assert cwd == tmp_path.resolve()
     assert exit_code == 7
+
+
+def test_shell_decodes_utf16le_output_before_extracting_sentinel(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.shell(write_encoded_stdout_command("WSL 状态: 正常\n", "utf-16le")))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "WSL 状态: 正常\n"
+    assert payload["metadata"]["cwd"] == str(tmp_path)
+    assert payload["metadata"]["exitCode"] == 0
+    assert payload["metadata"]["stdoutEncoding"] == "utf-16le"
+
+
+def test_shell_decodes_gbk_compatible_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.shell(write_encoded_stdout_command("状态: 正常\n", "gb18030")))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "状态: 正常\n"
+    assert payload["metadata"]["stdoutEncoding"] == "gb18030"
+
+
+def test_shell_keeps_utf8_output_decoding(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.shell(write_encoded_stdout_command("状态: 正常\n", "utf-8")))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "状态: 正常\n"
+    assert payload["metadata"]["stdoutEncoding"] == "utf-8"
 
 
 def test_shell_truncates_large_output(tmp_path, monkeypatch):

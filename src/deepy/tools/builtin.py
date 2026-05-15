@@ -1472,18 +1472,17 @@ class ToolRuntime:
         timeout = max(timeout_ms, 1) / 1000
         marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
         shell_invocation = _build_shell_command(command, marker)
-        process: subprocess.Popen[str] | None = None
+        process: subprocess.Popen[bytes] | None = None
         process_id: str | None = None
         try:
             with (
-                tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stdout_file,
-                tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_file,
+                tempfile.TemporaryFile(mode="w+b") as stdout_file,
+                tempfile.TemporaryFile(mode="w+b") as stderr_file,
             ):
                 process = subprocess.Popen(
                     [shell_invocation.shell_path, *shell_invocation.args],
                     cwd=self.cwd,
                     env=shell_invocation.env,
-                    text=True,
                     stdout=stdout_file,
                     stderr=stderr_file,
                     stdin=subprocess.DEVNULL,
@@ -1499,8 +1498,12 @@ class ToolRuntime:
                 except subprocess.TimeoutExpired:
                     _terminate_process(process)
                     process.wait()
-                    stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
-                    stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
+                    stdout, stdout_encoding, stdout_capture_truncated = _read_captured_output(
+                        stdout_file, marker=marker
+                    )
+                    stderr, stderr_encoding, stderr_capture_truncated = _read_captured_output(
+                        stderr_file
+                    )
                     output, output_truncated = _truncate_output((stdout or "") + (stderr or ""))
                     metadata = _shell_metadata(
                         self.cwd,
@@ -1513,6 +1516,8 @@ class ToolRuntime:
                         {
                             "timeoutMs": timeout_ms,
                             "interrupted": True,
+                            "stdoutEncoding": stdout_encoding,
+                            "stderrEncoding": stderr_encoding,
                         }
                     )
                     return ToolResult.error_result(
@@ -1521,8 +1526,12 @@ class ToolRuntime:
                         output=output,
                         metadata=metadata,
                     ).to_json()
-                stdout, stdout_capture_truncated = _read_captured_output(stdout_file)
-                stderr, stderr_capture_truncated = _read_captured_output(stderr_file)
+                stdout, stdout_encoding, stdout_capture_truncated = _read_captured_output(
+                    stdout_file, marker=marker
+                )
+                stderr, stderr_encoding, stderr_capture_truncated = _read_captured_output(
+                    stderr_file
+                )
         finally:
             if process_id is not None:
                 self.running_processes.pop(process_id, None)
@@ -1540,6 +1549,12 @@ class ToolRuntime:
             exit_code=returncode,
             output_truncated=output_truncated,
             capture_truncated=stdout_capture_truncated or stderr_capture_truncated,
+        )
+        metadata.update(
+            {
+                "stdoutEncoding": stdout_encoding,
+                "stderrEncoding": stderr_encoding,
+            }
         )
         if returncode == 0:
             return result(
@@ -2137,13 +2152,59 @@ def _truncate_output(output: str, max_chars: int = MAX_BASH_OUTPUT_CHARS) -> tup
     return output[:max_chars] + f"\n... [truncated {omitted} chars]", True
 
 
-def _read_captured_output(stream) -> tuple[str, bool]:
+def _read_captured_output(stream, *, marker: str | None = None) -> tuple[str, str, bool]:
     stream.flush()
     stream.seek(0)
-    text = stream.read(MAX_BASH_CAPTURE_CHARS + 1)
-    if len(text) <= MAX_BASH_CAPTURE_CHARS:
-        return text, False
-    return text[:MAX_BASH_CAPTURE_CHARS], True
+    data = stream.read(MAX_BASH_CAPTURE_CHARS + 1)
+    truncated = len(data) > MAX_BASH_CAPTURE_CHARS
+    if truncated:
+        data = data[:MAX_BASH_CAPTURE_CHARS]
+    text, encoding = _decode_shell_output(data, marker=marker)
+    return text, encoding, truncated
+
+
+def _decode_shell_output(data: bytes, *, marker: str | None = None) -> tuple[str, str]:
+    if not data:
+        return "", "empty"
+    if marker:
+        marker_bytes = marker.encode("ascii")
+        marker_index = data.find(marker_bytes)
+        if marker_index >= 0:
+            sentinel_start = marker_index
+            if sentinel_start > 0 and data[sentinel_start - 1 : sentinel_start] == b"\n":
+                sentinel_start -= 1
+                if sentinel_start > 0 and data[sentinel_start - 1 : sentinel_start] == b"\r":
+                    sentinel_start -= 1
+            visible, visible_encoding = _decode_shell_output_bytes(data[:sentinel_start])
+            sentinel = data[sentinel_start:].decode("utf-8", errors="replace")
+            return visible + sentinel, visible_encoding
+    return _decode_shell_output_bytes(data)
+
+
+def _decode_shell_output_bytes(data: bytes) -> tuple[str, str]:
+    if not data:
+        return "", "empty"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace"), "utf-16"
+    if _looks_like_utf16le(data):
+        return data.decode("utf-16le", errors="replace"), "utf-16le"
+    try:
+        return data.decode("utf-8-sig"), "utf-8-sig" if data.startswith(b"\xef\xbb\xbf") else "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("gb18030"), "gb18030"
+    except UnicodeDecodeError:
+        return data.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
+def _looks_like_utf16le(data: bytes) -> bool:
+    if len(data) < 4:
+        return False
+    sample = data[: min(len(data), 4096)]
+    odd_nuls = sample[1::2].count(0)
+    even_nuls = sample[0::2].count(0)
+    return odd_nuls >= max(2, len(sample) // 8) and odd_nuls > even_nuls * 2
 
 
 def _build_shell_command(

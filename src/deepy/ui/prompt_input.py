@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 from typing import Callable
 from unicodedata import normalize
 
@@ -11,7 +10,6 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
 
 from deepy.skills import SkillInfo
@@ -24,16 +22,11 @@ DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
 CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
 PROMPT_TOOLBAR_BACKGROUND = "#161821"
 PROMPT_TOOLBAR_FOREGROUND = "#a6adc8"
-PROMPT_TOOLBAR_HELP = "Shift+Enter newline · Ctrl+D twice exit"
-WINDOWS_PROMPT_TOOLBAR_HELP = "Ctrl+J newline · Ctrl+D twice exit"
+PROMPT_TOOLBAR_HELP = "Ctrl+J newline · Ctrl+D twice exit"
 PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
 PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
 PROMPT_TOOLBAR: AnyFormattedText = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
 PROMPT_STYLE = None
-SHIFT_ENTER_SEQUENCES = (
-    "\x1b[27;2;13~",  # xterm modified-key format.
-    "\x1b[13;2u",  # Kitty/fixterms CSI-u format, used by modern terminals.
-)
 
 
 @dataclass(frozen=True)
@@ -49,7 +42,6 @@ def create_prompt_session(
     on_interrupt: Callable[[], None] | None = None,
     palette: UiPalette | None = None,
 ) -> PromptSession[str]:
-    install_shift_enter_key_sequence_overrides()
     path = history_path or DEFAULT_PROMPT_HISTORY
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
@@ -68,7 +60,6 @@ def build_prompt_key_bindings(
     *,
     on_interrupt: Callable[[], None] | None = None,
 ) -> KeyBindings:
-    install_shift_enter_key_sequence_overrides()
     bindings = KeyBindings()
 
     @bindings.add("escape")
@@ -87,43 +78,15 @@ def build_prompt_key_bindings(
             return
         event.app.exit(result=CTRL_D_EXIT_CONFIRM_SIGNAL)
 
-    @bindings.add("escape", "enter")
-    @bindings.add("escape", "c-j")
+    @bindings.add("c-j")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         event.current_buffer.insert_text("\n")
-
-    if is_windows_newline_fallback_enabled():
-
-        @bindings.add("c-j")
-        def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
-            event.current_buffer.insert_text("\n")
 
     return bindings
 
 
-def install_shift_enter_key_sequence_overrides() -> None:
-    from prompt_toolkit.input import vt100_parser
-    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
-
-    for sequence in SHIFT_ENTER_SEQUENCES:
-        ANSI_SEQUENCES[sequence] = (Keys.Escape, Keys.ControlM)
-    prefix_cache = getattr(vt100_parser, "_IS_PREFIX_OF_LONGER_MATCH_CACHE", None)
-    if hasattr(prefix_cache, "clear"):
-        prefix_cache.clear()
-
-
-def is_windows_newline_fallback_enabled(platform_name: str | None = None) -> bool:
-    resolved_platform = platform_name or sys.platform
-    return resolved_platform.startswith("win")
-
-
 def prompt_toolbar(platform_name: str | None = None) -> AnyFormattedText:
-    help_text = (
-        WINDOWS_PROMPT_TOOLBAR_HELP
-        if is_windows_newline_fallback_enabled(platform_name)
-        else PROMPT_TOOLBAR_HELP
-    )
-    return [("class:toolbar.help", help_text)]
+    return PROMPT_TOOLBAR
 
 
 def prompt_for_input(

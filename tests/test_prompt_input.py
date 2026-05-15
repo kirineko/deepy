@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import deepy.ui.prompt_input as prompt_input
 from deepy.skills import SkillInfo
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
@@ -20,18 +19,14 @@ from deepy.ui.prompt_input import character_width
 from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
-from deepy.ui.prompt_input import install_shift_enter_key_sequence_overrides
-from deepy.ui.prompt_input import is_windows_newline_fallback_enabled
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import prompt_toolbar
 from deepy.ui.prompt_input import prompt_for_input
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
-from deepy.ui.prompt_input import SHIFT_ENTER_SEQUENCES
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
-from deepy.ui.prompt_input import WINDOWS_PROMPT_TOOLBAR_HELP
 from deepy.ui.slash_commands import SlashCommandItem
 
 
@@ -146,13 +141,13 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
     assert PROMPT_TOOLBAR_FOREGROUND == "#a6adc8"
 
 
-def test_prompt_toolbar_switches_newline_help_by_platform():
-    assert prompt_toolbar("win32") == [("class:toolbar.help", WINDOWS_PROMPT_TOOLBAR_HELP)]
-    assert WINDOWS_PROMPT_TOOLBAR_HELP == "Ctrl+J newline · Ctrl+D twice exit"
-    assert "Ctrl+J newline" in WINDOWS_PROMPT_TOOLBAR_HELP
-    assert "Shift+Enter" not in WINDOWS_PROMPT_TOOLBAR_HELP
+def test_prompt_toolbar_uses_cross_platform_newline_help():
+    assert prompt_toolbar("win32") == PROMPT_TOOLBAR
     assert prompt_toolbar("darwin") == PROMPT_TOOLBAR
-    assert PROMPT_TOOLBAR == [("class:toolbar.help", "Shift+Enter newline · Ctrl+D twice exit")]
+    assert PROMPT_TOOLBAR == [("class:toolbar.help", "Ctrl+J newline · Ctrl+D twice exit")]
+    assert "Ctrl+J" in str(PROMPT_TOOLBAR)
+    assert "Ctrl+Enter" not in str(PROMPT_TOOLBAR)
+    assert "Shift+Enter" not in str(PROMPT_TOOLBAR)
 
 
 def test_build_prompt_toolbar_shows_status_and_platform_help():
@@ -163,9 +158,10 @@ def test_build_prompt_toolbar_shows_status_and_platform_help():
     assert toolbar == [
         ("class:toolbar.context", status),
         ("class:toolbar.separator", " · "),
-        ("class:toolbar.help", WINDOWS_PROMPT_TOOLBAR_HELP),
+        ("class:toolbar.help", "Ctrl+J newline · Ctrl+D twice exit"),
     ]
-    assert "Ctrl+J newline" in str(toolbar)
+    assert "Ctrl+J" in str(toolbar)
+    assert "Ctrl+Enter" not in str(toolbar)
     assert "Shift+Enter" not in str(toolbar)
 
 
@@ -175,36 +171,7 @@ def test_build_prompt_key_bindings_registers_escape_interrupt():
     assert any("escape" in binding.keys for binding in bindings.bindings)
 
 
-def test_prompt_key_bindings_enter_submits_and_escape_enter_inserts_newline():
-    bindings = build_prompt_key_bindings()
-    calls: list[str] = []
-
-    class Buffer:
-        def validate_and_handle(self):
-            calls.append("submit")
-
-        def insert_text(self, text: str):
-            calls.append(text)
-
-    class Event:
-        current_buffer = Buffer()
-
-    def key_values(binding):
-        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
-
-    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
-    escape_enter = next(
-        binding for binding in bindings.bindings if key_values(binding) == ("escape", "c-m")
-    )
-
-    enter.handler(Event())
-    escape_enter.handler(Event())
-
-    assert calls == ["submit", "\n"]
-
-
-def test_prompt_key_bindings_windows_ctrl_j_fallback_inserts_newline(monkeypatch):
-    monkeypatch.setattr(prompt_input.sys, "platform", "win32")
+def test_prompt_key_bindings_enter_submits_and_ctrl_j_inserts_newline():
     bindings = build_prompt_key_bindings()
     calls: list[str] = []
 
@@ -230,16 +197,14 @@ def test_prompt_key_bindings_windows_ctrl_j_fallback_inserts_newline(monkeypatch
     assert calls == ["submit", "\n"]
 
 
-def test_prompt_key_bindings_ctrl_j_fallback_is_windows_only(monkeypatch):
-    monkeypatch.setattr(prompt_input.sys, "platform", "darwin")
+def test_prompt_key_bindings_do_not_register_shift_or_ctrl_enter_sequences():
     bindings = build_prompt_key_bindings()
 
     def key_values(binding):
         return tuple(getattr(key, "value", str(key)) for key in binding.keys)
 
-    assert not any(key_values(binding) == ("c-j",) for binding in bindings.bindings)
-    assert is_windows_newline_fallback_enabled("win32")
-    assert not is_windows_newline_fallback_enabled("linux")
+    assert any(key_values(binding) == ("c-j",) for binding in bindings.bindings)
+    assert not any(key_values(binding) == ("escape", "c-m") for binding in bindings.bindings)
 
 
 def test_prompt_key_bindings_ctrl_d_returns_exit_confirmation_when_empty():
@@ -296,25 +261,6 @@ def test_prompt_key_bindings_ctrl_d_deletes_when_buffer_has_text():
     ctrl_d.handler(Event())
 
     assert calls == ["delete"]
-
-
-def test_shift_enter_sequences_are_parsed_as_newline_binding_prefix():
-    from prompt_toolkit.input.vt100_parser import Vt100Parser
-
-    install_shift_enter_key_sequence_overrides()
-    parsed: list[list[tuple[str, str]]] = []
-
-    for sequence in SHIFT_ENTER_SEQUENCES:
-        keys: list[tuple[str, str]] = []
-        parser = Vt100Parser(lambda key_press: keys.append((str(key_press.key), key_press.data)))
-        parser.feed(sequence)
-        parser.flush()
-        parsed.append(keys)
-
-    assert parsed == [
-        [("Keys.Escape", sequence), ("Keys.ControlM", "")]
-        for sequence in SHIFT_ENTER_SEQUENCES
-    ]
 
 
 def test_text_width_counts_cjk_and_control_characters():
