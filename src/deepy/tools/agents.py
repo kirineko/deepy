@@ -107,7 +107,8 @@ def build_function_tools(
             name="modify",
             description=(
                 "Create new files or edit existing files. Use content only for files that do not "
-                "exist. For existing files, read first and use old_string/new_string."
+                "exist. For existing files, use old_string/new_string; read first when you need "
+                "to inspect context."
             ),
             params_json_schema=MODIFY_SCHEMA,
             on_invoke_tool=invoke_modify,

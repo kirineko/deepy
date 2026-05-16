@@ -235,6 +235,7 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## WebFetch" in prompt
     assert "## shell" in prompt
     assert "Use `modify` for file changes" in prompt
+    assert "exact `modify` edits can establish the managed snapshot internally" in prompt
     assert "Run shell commands using the Runtime context's command dialect" in prompt
     assert "Match visible thinking/reasoning language" in prompt
     assert "you MUST write visible thinking/reasoning in Chinese" in prompt

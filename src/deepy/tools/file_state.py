@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
+
+
+SnapshotStatus = Literal["missing", "full", "partial", "deleted", "stale"]
 
 
 @dataclass
@@ -57,6 +61,18 @@ class FileState:
         if stat.st_mtime_ns != snapshot.mtime_ns or stat.st_size != snapshot.size:
             return False, "File changed since it was read; read it again before editing."
         return True, None
+
+    def snapshot_status(self, path: Path) -> SnapshotStatus:
+        resolved = path.resolve()
+        snapshot = self._snapshots.get(resolved)
+        if snapshot is None:
+            return "missing"
+        if not resolved.exists():
+            return "deleted"
+        stat = resolved.stat()
+        if stat.st_mtime_ns != snapshot.mtime_ns or stat.st_size != snapshot.size:
+            return "stale"
+        return "full" if snapshot.full_read else "partial"
 
     def mark_written(self, path: Path) -> None:
         if path.exists():

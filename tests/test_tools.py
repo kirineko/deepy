@@ -346,11 +346,14 @@ def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
 
     payload = decode(runtime.read("a.txt", start_line=2, limit=1))
     denied = decode(runtime.edit("a.txt", "two", "TWO"))
+    denied_modify = decode(runtime.modify("a.txt", old="two", new="TWO"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["trackedForWrite"] is False
     assert denied["ok"] is False
     assert "read before" in denied["error"]
+    assert denied_modify["ok"] is False
+    assert "read before" in denied_modify["error"]
 
 
 def test_partial_read_returns_snippet_metadata(tmp_path):
@@ -521,6 +524,22 @@ def test_edit_detects_mtime_change_after_read(tmp_path):
     assert "changed since it was read" in payload["error"]
 
 
+def test_modify_preserves_stale_protection_after_read(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read("a.txt"))
+    target.write_text("changed\n", encoding="utf-8")
+    os.utime(target, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns + 1_000_000))
+
+    payload = decode(runtime.modify("a.txt", old="changed", new="updated"))
+
+    assert payload["ok"] is False
+    assert "changed since it was read" in payload["error"]
+    assert target.read_text(encoding="utf-8") == "changed\n"
+
+
 def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     existing = tmp_path / "existing.txt"
     existing.write_text("old", encoding="utf-8")
@@ -549,10 +568,13 @@ def test_modify_creates_new_files_and_edits_existing_files(tmp_path):
     assert denied["ok"] is False
     assert "old_string/new_string" in denied["error"]
 
-    decode(runtime.read("existing.txt"))
     edited = decode(runtime.modify("existing.txt", old="old", new="new"))
 
     assert edited["ok"] is True
+    assert edited["metadata"]["autoReadBeforeModify"] is True
+    assert "-old" in edited["metadata"]["diff"]
+    assert "+new" in edited["metadata"]["diff"]
+    assert edited["metadata"]["diff_preview"] == edited["metadata"]["diff"]
     assert target.read_text(encoding="utf-8") == "new\n"
 
 
@@ -1166,6 +1188,11 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "偏好" in ask_tool.description
     assert "for Chinese requests, ask in Chinese" in ask_tool.description
     assert "low-impact details" in ask_tool.description
+    modify_tool = tools[3]
+    assert modify_tool.name == "modify"
+    assert "old_string/new_string" in modify_tool.description
+    assert "read first when you need to inspect context" in modify_tool.description
+    assert "read first and use old_string/new_string" not in modify_tool.description
     skill_tool = tools[-1]
     assert skill_tool.name == "load_skill"
     assert "available Agent Skill" in skill_tool.description
@@ -1187,7 +1214,6 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
         "pages",
     ]
     assert tools["modify"].params_json_schema["required"] == []
-    assert "old_string/new_string" in tools["modify"].description
     assert list(tools["modify"].params_json_schema["properties"]) == [
         "file_path",
         "snippet_id",

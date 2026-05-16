@@ -45,7 +45,7 @@ def build_system_prompt(
 Core rules:
 - Work in the repo with tools: inspect, modify, test, verify.
 - Preserve user changes. Prefer small, verifiable edits.
-- Read before changing existing files.
+- Read existing files when you need context; exact `modify` edits can establish the managed snapshot internally.
 - Use `modify` for file changes: `content` only creates new files; existing files use `old_string`/`new_string`.
 - After project generators create scaffold files, read and edit the generated block instead of replacing the file.
 - Run shell commands using the Runtime context's command dialect and path style: `powershell` -> PowerShell with Windows paths; `cmd` -> cmd; `posix` -> POSIX shell.

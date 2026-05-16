@@ -1302,7 +1302,14 @@ class ToolRuntime:
                 "modify",
                 "Provide content for a new file, or both old_string and new_string for an existing file.",
             ).to_json()
-        return self.edit(path, old, new, replace_all=replace_all, snippet_id=snippet_id)
+        return self.edit(
+            path,
+            old,
+            new,
+            replace_all=replace_all,
+            snippet_id=snippet_id,
+            auto_read_if_missing_snapshot=True,
+        )
 
     def write(self, path: str, content: object) -> str:
         name = "write"
@@ -1351,6 +1358,7 @@ class ToolRuntime:
         new: str,
         replace_all: bool = False,
         snippet_id: str | None = None,
+        auto_read_if_missing_snapshot: bool = False,
     ) -> str:
         name = "edit"
         if not old:
@@ -1377,6 +1385,14 @@ class ToolRuntime:
             target = _resolve_in_cwd(self.cwd, path)
         if not target.exists():
             return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
+        auto_read_before_modify = False
+        if (
+            auto_read_if_missing_snapshot
+            and snippet is None
+            and self.file_state.snapshot_status(target) == "missing"
+        ):
+            self.file_state.mark_read(target)
+            auto_read_before_modify = True
         ok, error = self.file_state.check_writable(
             target,
             require_read=True,
@@ -1465,6 +1481,8 @@ class ToolRuntime:
             "diff": diff,
             "diff_preview": diff,
         }
+        if auto_read_before_modify:
+            metadata["autoReadBeforeModify"] = True
         if snippet is not None:
             metadata["scope"] = _format_scope_metadata(target, snippet, scope, text)
         return ToolResult.ok_result(name, f"Edited {target}", metadata=metadata).to_json()

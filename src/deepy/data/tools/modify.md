@@ -2,19 +2,23 @@
 
 Create new files or edit existing files.
 
-Use `content` only when the target file does not exist. For existing files, read the
-file first, then use `old_string` and `new_string` for the smallest reliable
-replacement. Do not rewrite an existing scaffolded file with full content; replace the
-specific generated block instead.
+Use `content` only when the target file does not exist. For existing files, use
+`old_string` and `new_string` for the smallest reliable replacement. You may
+attempt an exact replacement directly when you already know the current text;
+Deepy records the required file snapshot internally when no prior snapshot
+exists. Read first when you need to inspect context. Do not rewrite an existing
+scaffolded file with full content; replace the specific generated block instead.
 
 Args for new files: `file_path`, `content`.
 
 Args for existing files: `file_path`, `old_string`, `new_string`, optional
 `replace_all`, optional `snippet_id`.
 
-Existing files must be read before editing. Stale edits are rejected. Repeated matches
-are rejected unless `replace_all` is true; candidate snippets can be reused with
-`snippet_id`. Success includes diff metadata.
+Existing-file edits must have a managed snapshot before Deepy commits changes;
+`modify` can create that snapshot internally for direct exact replacements. Stale
+edits are rejected. Repeated matches are rejected unless `replace_all` is true;
+candidate snippets can be reused with `snippet_id`. Success includes diff
+metadata.
 
 If several `old_string` attempts fail and you know the complete desired file content,
 re-read the file and use the managed whole-file replacement path. Do not delete the file
