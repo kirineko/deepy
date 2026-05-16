@@ -1,6 +1,6 @@
 [project]
 name = "deepy-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Deepy - Vibe coding for DeepSeek models in your terminal"
 readme = "README.md"
 authors = [
@@ -39,10 +39,10 @@ Issues = "https://github.com/kirineko/deepy/issues"
 
 [dependency-groups]
 dev = [
-    "pyright>=1.1.407",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.14",
+    "ty>=0.0.32",
 ]
 
 [tool.pytest.ini_options]
@@ -53,13 +53,6 @@ line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
 exclude = ["dist", "reference", "spec"]
-
-[tool.pyright]
-pythonVersion = "3.12"
-typeCheckingMode = "off"
-include = ["src", "tests"]
-exclude = ["dist", "reference", "spec"]
-reportMissingTypeStubs = false
 
 [tool.uv.build-backend]
 module-name = "deepy"

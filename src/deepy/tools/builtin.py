@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, Settings, mask_secret
+from deepy.types.tool_payloads import AskUserOption, AskUserQuestion
 from deepy.utils import json as json_utils
 
 from .file_state import FileSnippet, FileState
@@ -728,7 +729,7 @@ def _decide_search_language_with_llm(query: str, settings: Settings) -> dict[str
     )
     parsed = _parse_json_response(_web_search_chat(settings, prompt))
     dominant_language = parsed.get("dominant_language")
-    if dominant_language not in {"en", "zh"}:
+    if not isinstance(dominant_language, str) or dominant_language not in {"en", "zh"}:
         raise ValueError(f"Unexpected dominant language: {dominant_language}")
     reason = parsed.get("reason")
     return {
@@ -1249,7 +1250,7 @@ class ToolRuntime:
             )
             self.file_state.mark_read(target, full=False)
             snippet_metadata = _snippet_metadata(snippet)
-        metadata = {
+        metadata: dict[str, object] = {
             "path": str(target),
             "kind": "file",
             "startLine": start + 1,
@@ -1322,7 +1323,7 @@ class ToolRuntime:
         encoding = (
             existing_metadata.encoding
             if existing_metadata is not None
-            else _default_new_text_encoding(text_content, platform_name=self.platform_name)
+            else _default_new_text_encoding()
         )
         line_endings = _detect_line_endings(old_content or text_content)
         normalized_content = _normalize_line_endings(text_content, line_endings)
@@ -1453,7 +1454,7 @@ class ToolRuntime:
         _write_text_with_encoding(target, updated, text_metadata.encoding)
         self.file_state.mark_written(target)
         diff = _unified_diff(text, updated, path=str(target))
-        metadata = {
+        metadata: dict[str, object] = {
             "path": str(target),
             "file_path": str(target),
             "occurrences": occurrences if replace_all else 1,
@@ -1542,7 +1543,6 @@ class ToolRuntime:
             self.cwd = final_cwd
         returncode = exit_code if exit_code is not None else process.returncode
         output, output_truncated = _truncate_output(stdout + (stderr or ""))
-        result = ToolResult.ok_result if returncode == 0 else ToolResult.error_result
         metadata = _shell_metadata(
             self.cwd,
             process_id,
@@ -1558,12 +1558,12 @@ class ToolRuntime:
             }
         )
         if returncode == 0:
-            return result(
+            return ToolResult.ok_result(
                 name,
                 output,
                 metadata=metadata,
             ).to_json()
-        return result(
+        return ToolResult.error_result(
             name,
             f"Command exited with code {returncode}.",
             output=output,
@@ -1916,15 +1916,8 @@ def _python_text_encoding(encoding: str) -> str:
     return "utf8"
 
 
-def _default_new_text_encoding(content: str, *, platform_name: str | None = None) -> str:
-    resolved_platform = platform_name or sys.platform
-    if resolved_platform.startswith("win") and _contains_non_ascii(content):
-        return "utf8-sig"
+def _default_new_text_encoding() -> str:
     return "utf8"
-
-
-def _contains_non_ascii(text: str) -> bool:
-    return any(ord(char) > 0x7F for char in text)
 
 
 def _write_text_with_encoding(path: Path, content: str, encoding: str) -> None:
@@ -1974,24 +1967,24 @@ def _format_notebook(path: Path) -> tuple[str, str | None]:
     cells = parsed.get("cells")
     lines: list[str] = []
     if isinstance(cells, list):
-        for index, cell in enumerate(cells):
-            if not isinstance(cell, dict):
+        for index, raw_cell in enumerate(cells):
+            cell = _string_key_dict(raw_cell)
+            if cell is None:
                 continue
-            cell_type = cell.get("cell_type") if isinstance(cell.get("cell_type"), str) else "unknown"
+            raw_cell_type = cell.get("cell_type")
+            cell_type = raw_cell_type if isinstance(raw_cell_type, str) else "unknown"
             lines.append(f"# Cell {index + 1} ({cell_type})")
             lines.extend(_normalize_notebook_field(cell.get("source")))
 
             outputs = cell.get("outputs")
             if not isinstance(outputs, list):
                 continue
-            for output_index, output in enumerate(outputs):
-                if not isinstance(output, dict):
+            for output_index, raw_output in enumerate(outputs):
+                output = _string_key_dict(raw_output)
+                if output is None:
                     continue
-                output_type = (
-                    output.get("output_type")
-                    if isinstance(output.get("output_type"), str)
-                    else "output"
-                )
+                raw_output_type = output.get("output_type")
+                output_type = raw_output_type if isinstance(raw_output_type, str) else "output"
                 lines.append(f"# Output {output_index + 1} ({output_type})")
                 lines.extend(_format_notebook_output(output))
 
@@ -2011,18 +2004,27 @@ def _normalize_notebook_field(value: object) -> list[str]:
 def _format_notebook_output(output: dict[str, object]) -> list[str]:
     lines = _normalize_notebook_field(output.get("text"))
     data = output.get("data")
-    if isinstance(data, dict):
-        lines.extend(_normalize_notebook_field(data.get("text/plain")))
-        image_png = data.get("image/png")
+    data_dict = _string_key_dict(data)
+    if data_dict is not None:
+        lines.extend(_normalize_notebook_field(data_dict.get("text/plain")))
+        image_png = data_dict.get("image/png")
         if isinstance(image_png, str):
             lines.append(f"[image/png {len(image_png)} chars]")
-        image_jpeg = data.get("image/jpeg")
+        image_jpeg = data_dict.get("image/jpeg")
         if isinstance(image_jpeg, str):
             lines.append(f"[image/jpeg {len(image_jpeg)} chars]")
     traceback = output.get("traceback")
     if isinstance(traceback, list):
         lines.extend(str(item).removesuffix("\n").removesuffix("\r") for item in traceback)
     return lines or ["[output omitted]"]
+
+
+def _string_key_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    if not all(isinstance(key, str) for key in value):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 @dataclass(frozen=True)
@@ -2360,7 +2362,7 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _terminate_process(process: subprocess.Popen[str]) -> None:
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     try:
         if os.name != "nt":
             os.killpg(process.pid, signal.SIGKILL)
@@ -2483,13 +2485,14 @@ def _gitignore_pattern_matches(pattern: str, relative_path: str, is_dir: bool) -
     return any(fnmatch(part, normalized_pattern) for part in parts)
 
 
-def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], str | None]:
+def _parse_ask_user_questions(value: object) -> tuple[list[AskUserQuestion], str | None]:
     if not isinstance(value, list) or not value:
         return [], '"questions" must be a non-empty array.'
 
-    questions: list[dict[str, object]] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, dict):
+    questions: list[AskUserQuestion] = []
+    for index, raw_item in enumerate(value):
+        item = _string_key_dict(raw_item)
+        if item is None:
             return [], f"Question at index {index} must be an object."
 
         question = _trimmed_string(item.get("question"))
@@ -2500,9 +2503,10 @@ def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], s
         if not isinstance(raw_options, list) or not raw_options:
             return [], f'Question at index {index} must include a non-empty "options" array.'
 
-        options: list[dict[str, str]] = []
-        for option_index, option in enumerate(raw_options):
-            if not isinstance(option, dict):
+        options: list[AskUserOption] = []
+        for option_index, raw_option in enumerate(raw_options):
+            option = _string_key_dict(raw_option)
+            if option is None:
                 return [], f"Option {option_index} for question {index} must be an object."
 
             label = _trimmed_string(option.get("label"))
@@ -2512,13 +2516,13 @@ def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], s
                     f'Option {option_index} for question {index} is missing a non-empty "label" string.',
                 )
 
-            parsed_option = {"label": label}
+            parsed_option: AskUserOption = {"label": label}
             description = _trimmed_string(option.get("description"))
             if description:
                 parsed_option["description"] = description
             options.append(parsed_option)
 
-        parsed_question: dict[str, object] = {
+        parsed_question: AskUserQuestion = {
             "question": question,
             "options": options,
         }
@@ -2530,15 +2534,13 @@ def _parse_ask_user_questions(value: object) -> tuple[list[dict[str, object]], s
     return questions, None
 
 
-def _build_question_summary(questions: list[dict[str, object]]) -> str:
+def _build_question_summary(questions: list[AskUserQuestion]) -> str:
     lines = ["Waiting for user input."]
     for index, item in enumerate(questions):
         lines.append("")
         lines.append(f"{index + 1}. {item['question']}")
         lines.append(f"   Mode: {'multi-select' if item.get('multiSelect') else 'single-select'}")
         for option in item["options"]:
-            if not isinstance(option, dict):
-                continue
             lines.append(f"   - {option['label']}")
             if option.get("description"):
                 lines.append(f"     {option['description']}")

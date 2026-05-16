@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import queue
 import shlex
 import sys
 
@@ -10,6 +11,7 @@ import pytest
 from deepy.sessions import DeepyJsonlSession, list_session_entries
 from deepy.ui.local_command import (
     LocalCommandResult,
+    _read_pipe_output,
     build_synthetic_shell_transcript_items,
     parse_local_command,
     run_local_command,
@@ -28,6 +30,27 @@ def _run_windows_test_command(command: str, tmp_path, **kwargs) -> LocalCommandR
         env={"PATH": "/bin:/usr/bin"},
         **kwargs,
     )
+
+
+def test_read_pipe_output_uses_read1_to_preserve_nonblocking_pipe_semantics():
+    class FakePipe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read1(self, size: int) -> bytes:
+            assert size == 4096
+            self.calls += 1
+            return b"ok" if self.calls == 1 else b""
+
+        def read(self, size: int) -> bytes:
+            raise AssertionError("read() must not replace read1() for pipe capture")
+
+    stream = FakePipe()
+    output_queue: queue.Queue[bytes] = queue.Queue()
+    _read_pipe_output(type("Process", (), {"stdout": stream})(), output_queue)
+
+    assert output_queue.get_nowait() == b"ok"
+    assert stream.calls == 2
 
 
 def test_parse_local_command_detects_bang_command():

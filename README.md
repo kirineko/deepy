@@ -313,7 +313,7 @@ A concise `AGENTS.md` works best:
 ## Commands
 - Test: `uv run pytest`
 - Lint: `uv run ruff check`
-- Type check: `uv run pyright`
+- Type check: `uv run ty check src`
 
 ## Architecture
 - Keep CLI entry points thin; put reusable behavior under `src/`.
@@ -340,7 +340,7 @@ create or refresh the project root `AGENTS.md`.
 uv sync --group dev
 uv run pytest
 uv run ruff check
-uv run pyright
+uv run ty check src
 uv build
 ```
 

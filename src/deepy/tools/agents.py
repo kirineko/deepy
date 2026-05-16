@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from deepy.utils import json as json_utils
 
 from .builtin import ToolRuntime
+
+if TYPE_CHECKING:
+    from agents import Tool
 
 
 def build_function_tools(
     runtime: ToolRuntime,
     *,
     preferred_mcp_web_search_tools: list[str] | None = None,
-) -> list[object]:
+) -> list[Tool]:
     from agents.tool import FunctionTool
 
     async def invoke_shell(_context: object, raw_input: str) -> str:

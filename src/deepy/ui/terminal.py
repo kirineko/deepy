@@ -8,22 +8,10 @@ import select
 import shutil
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-
-try:
-    import termios
-    import tty
-except ImportError:  # pragma: no cover - exercised on Windows.
-    termios = None  # type: ignore[assignment]
-    tty = None  # type: ignore[assignment]
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - exercised on non-Windows platforms.
-    msvcrt = None  # type: ignore[assignment]
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -96,9 +84,11 @@ from deepy.ui.session_picker import format_resume_session_choices
 from deepy.ui.session_picker import pick_resume_session
 from deepy.ui.skill_picker import (
     InstalledSkillView,
+    SkillDetailView,
     SkillMenuAction,
     pick_skill_install_scope,
     pick_skill_menu_action,
+    show_skill_detail_view,
 )
 from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.styles import (
@@ -115,7 +105,26 @@ from deepy.usage import TokenUsage, context_window_usage, format_usage_line
 from deepy.utils import json as json_utils
 
 
-RunOnce = Callable[..., Awaitable[RunSummary]]
+try:
+    import termios as _termios
+    import tty as _tty
+except ImportError:  # pragma: no cover - exercised on Windows.
+    termios: Any | None = None
+    tty: Any | None = None
+else:
+    termios = _termios
+    tty = _tty
+
+msvcrt: Any | None
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised on non-Windows platforms.
+    msvcrt = None
+else:
+    msvcrt = _msvcrt
+
+
+RunOnce = Callable[..., Coroutine[Any, Any, RunSummary]]
 InputFunc = Callable[[str], str]
 VersionUpdateChecker = Callable[[str], VersionUpdate | None]
 MAX_CLARIFICATION_ROUNDS_PER_TURN = 5
@@ -448,7 +457,7 @@ def _run_once_with_status(
     console: Console,
     run_once: RunOnce,
     prompt: str,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> RunSummary:
     async_runner = kwargs.pop("async_runner", None)
     palette = kwargs.pop("palette", DARK_PALETTE)
@@ -463,7 +472,9 @@ def _run_once_with_status(
     def should_interrupt() -> bool:
         if interrupt_requested.is_set():
             return True
-        return bool(callable(original_should_interrupt) and original_should_interrupt())
+        if callable(original_should_interrupt):
+            return bool(original_should_interrupt())
+        return False
 
     kwargs["should_interrupt"] = should_interrupt
 
@@ -629,12 +640,16 @@ def _watch_windows_esc_keypress(
 ) -> None:
     if msvcrt is None:
         return
+    kbhit = getattr(msvcrt, "kbhit", None)
+    getwch = getattr(msvcrt, "getwch", None)
+    if not callable(kbhit) or not callable(getwch):
+        return
     while not stop_event.is_set() and not interrupt_requested.is_set():
         try:
-            if not msvcrt.kbhit():
+            if not kbhit():
                 time.sleep(0.05)
                 continue
-            key = msvcrt.getwch()
+            key = getwch()
         except Exception:
             return
         if key == "\x1b":
@@ -1022,6 +1037,21 @@ def _handle_skill_menu_action(
     if action.action == "remove-local":
         return _remove_local_skill(action, console, loaded_skill_names, palette)
     if action.action == "show":
+        if action.market_skill is not None and action.path is None:
+            market_skill = action.market_skill
+            show_skill_detail_view(
+                SkillDetailView(
+                    name=market_skill.name,
+                    scope="market",
+                    version=market_skill.version,
+                    description=market_skill.description,
+                    uploaded_at=market_skill.uploaded_at,
+                    sha256=market_skill.sha256,
+                    installed=market_skill.installed,
+                    markdown=True,
+                )
+            )
+            return False
         if action.path is not None:
             skill = SkillInfo(
                 name=action.name,
@@ -1033,7 +1063,18 @@ def _handle_skill_menu_action(
         if skill is None:
             console.print(f"[{palette.error}]Skill not installed:[/] {action.name}")
             return False
-        console.print(read_skill_body(skill) or "(empty skill)")
+        show_skill_detail_view(
+            SkillDetailView(
+                name=skill.name,
+                body=read_skill_body(skill) or "(empty skill)",
+                scope=skill.scope,
+                path=skill.path.parent,
+                version=action.version,
+                installed_at=action.installed_at,
+                managed_by_market=action.managed_by_market,
+                markdown=True,
+            )
+        )
         return False
     return False
 
@@ -1680,19 +1721,23 @@ def _content_text(value: object) -> str:
         return "\n".join(parts)
     if value is None:
         return ""
+    value_dict = _string_key_dict(value)
+    if value_dict is not None:
+        text = _content_text_part(value_dict)
+        return text or json_utils.dumps(value_dict)
     if isinstance(value, dict):
-        text = _content_text_part(value)
-        return text or json_utils.dumps(value)
+        return json_utils.dumps(value)
     return str(value)
 
 
 def _content_text_part(part: object) -> str:
     if isinstance(part, str):
         return part
-    if not isinstance(part, dict):
+    part_dict = _string_key_dict(part)
+    if part_dict is None:
         return ""
     for key in ("text", "input_text", "output_text", "refusal"):
-        value = part.get(key)
+        value = part_dict.get(key)
         if isinstance(value, str):
             return value
     return ""
@@ -1715,6 +1760,14 @@ def _tool_call_name(item: dict[str, Any]) -> str:
         if isinstance(function_name, str) and function_name:
             return function_name
     return "tool"
+
+
+def _string_key_dict(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if not all(isinstance(key, str) for key in value):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _tool_call_arguments(item: dict[str, Any]) -> str:

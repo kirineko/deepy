@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.formatted_text import StyleAndTextTuples
@@ -17,8 +18,10 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Box
 from prompt_toolkit.widgets import Frame
 from prompt_toolkit.widgets import RadioList
+from prompt_toolkit.widgets import TextArea
 
 from deepy.skill_market import MarketSkill
+from deepy.ui.markdown import render_markdown
 
 
 _EMPTY_VALUE = "__empty__"
@@ -31,12 +34,15 @@ class SkillMenuAction:
     name: str = ""
     scope: str = ""
     path: Path | None = None
+    version: str = ""
+    installed_at: str = ""
     managed_by_market: bool = False
+    market_skill: MarketSkill | None = None
 
 
 @dataclass(frozen=True)
 class SkillInstallScope:
-    scope: str
+    scope: Literal["user", "project"]
     path: Path
 
 
@@ -48,6 +54,22 @@ class InstalledSkillView:
     version: str = ""
     installed_at: str = ""
     managed_by_market: bool = False
+
+
+@dataclass(frozen=True)
+class SkillDetailView:
+    name: str
+    body: str = ""
+    scope: str = ""
+    path: Path | None = None
+    version: str = ""
+    installed_at: str = ""
+    managed_by_market: bool = False
+    description: str = ""
+    uploaded_at: str = ""
+    sha256: str = ""
+    installed: bool | None = None
+    markdown: bool = False
 
 
 def pick_skill_menu_action(
@@ -69,6 +91,10 @@ def pick_skill_install_scope(name: str, *, home: Path, project_root: Path) -> Sk
     return SkillInstallScopePicker(name, home=home, project_root=project_root).run()
 
 
+def show_skill_detail_view(detail: SkillDetailView) -> None:
+    SkillDetailViewer(detail).run()
+
+
 def format_market_skill_label(skill: MarketSkill) -> str:
     marker = "[x]" if skill.installed else "[ ]"
     version = f"  {skill.version}" if skill.version else ""
@@ -86,6 +112,39 @@ def format_installed_skill_label(skill: InstalledSkillView) -> str:
     return f"{marker} {skill.name}{version}{installed}\n  {path}"
 
 
+def format_skill_detail_text(detail: SkillDetailView) -> str:
+    metadata = [f"Name: {detail.name}"]
+    if detail.scope:
+        metadata.append(f"Scope: {detail.scope}")
+    if detail.path is not None:
+        metadata.append(f"Path: {detail.path}")
+    if detail.version:
+        metadata.append(f"Version: {detail.version}")
+    if detail.installed_at:
+        metadata.append(f"Installed: {detail.installed_at}")
+    if detail.uploaded_at:
+        metadata.append(f"Uploaded: {detail.uploaded_at}")
+    if detail.managed_by_market:
+        metadata.append("Managed by market: yes")
+    if detail.installed is not None:
+        metadata.append(f"Installed locally: {'yes' if detail.installed else 'no'}")
+    if detail.sha256:
+        metadata.append(f"SHA256: {detail.sha256}")
+    if detail.description:
+        metadata.append(f"Description: {detail.description}")
+    body = _render_detail_body(detail)
+    return "\n".join(metadata) + "\n\n" + body
+
+
+def _render_detail_body(detail: SkillDetailView) -> str:
+    source = detail.body.strip() or detail.description.strip()
+    if not source:
+        return "(no details available)"
+    if not detail.markdown:
+        return source
+    return render_markdown(source, width=100).plain
+
+
 class SkillMenuPicker:
     def __init__(
         self,
@@ -99,6 +158,7 @@ class SkillMenuPicker:
         self._installed_skills = list(installed_skills)
         self._installed_names = {skill.name for skill in self._installed_skills}
         self._installed_by_name = {skill.name: skill for skill in self._installed_skills}
+        self._market_by_name = {skill.name: skill for skill in self._market_skills}
         self._market_loader = market_loader
         self._market_loading = market_loader is not None and market_skills is None
         self._market_error = ""
@@ -132,6 +192,7 @@ class SkillMenuPicker:
             self._market_error = str(exc)
             loaded = []
         self._market_skills = loaded
+        self._market_by_name = {skill.name: skill for skill in self._market_skills}
         self._market_loading = False
         if self._view == "market":
             self._set_view("market")
@@ -157,6 +218,8 @@ class SkillMenuPicker:
             name,
             scope=installed.scope if installed is not None else "",
             path=installed.path if installed is not None else None,
+            version=installed.version if installed is not None else "",
+            installed_at=installed.installed_at if installed is not None else "",
             managed_by_market=bool(installed and installed.managed_by_market),
         )
 
@@ -183,11 +246,31 @@ class SkillMenuPicker:
         if not name:
             return None
         installed = self._installed_by_name.get(name)
+        if self._view == "market":
+            if installed is not None:
+                return SkillMenuAction(
+                    "show",
+                    name,
+                    scope=installed.scope,
+                    path=installed.path,
+                    version=installed.version,
+                    installed_at=installed.installed_at,
+                    managed_by_market=installed.managed_by_market,
+                )
+            market_skill = self._market_by_name.get(name)
+            return SkillMenuAction(
+                "show",
+                name,
+                scope="market",
+                market_skill=market_skill,
+            )
         return SkillMenuAction(
             "show",
             name,
             scope=installed.scope if installed is not None else "",
             path=installed.path if installed is not None else None,
+            version=installed.version if installed is not None else "",
+            installed_at=installed.installed_at if installed is not None else "",
             managed_by_market=bool(installed and installed.managed_by_market),
         )
 
@@ -317,6 +400,72 @@ class SkillMenuPicker:
         )
         return Application(
             layout=Layout(HSplit([header, body, footer]), focused_element=self._radio_list),
+            key_bindings=kb,
+            full_screen=True,
+            erase_when_done=True,
+            mouse_support=True,
+            style=_skill_picker_style(),
+        )
+
+
+class SkillDetailViewer:
+    def __init__(self, detail: SkillDetailView) -> None:
+        self._detail = detail
+        self._body = TextArea(
+            text=format_skill_detail_text(detail),
+            read_only=True,
+            scrollbar=True,
+            line_numbers=False,
+            wrap_lines=True,
+            focusable=True,
+            style="class:skill-list",
+        )
+        self._app = self._build_app()
+
+    def run(self) -> None:
+        self._app.run()
+
+    def _header_fragments(self) -> StyleAndTextTuples:
+        scope = f" {self._detail.scope} " if self._detail.scope else ""
+        return [
+            ("class:header.title", " Skill details "),
+            ("class:header.meta", f" {self._detail.name}"),
+            ("class:header.meta", scope),
+        ]
+
+    def _footer_fragments(self) -> StyleAndTextTuples:
+        return [
+            ("class:footer.text", " ↑/↓ scroll"),
+            ("class:footer.text", " · "),
+            ("class:footer.text", "PgUp/PgDn page"),
+            ("class:footer.text", " · "),
+            ("class:footer.text", "Esc/q close "),
+        ]
+
+    def _build_app(self) -> Application[None]:
+        kb = KeyBindings()
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        @kb.add("q")
+        def _close(event: KeyPressEvent) -> None:
+            event.app.exit()
+
+        _ = _close
+
+        header = Window(
+            FormattedTextControl(self._header_fragments),
+            height=1,
+            style="class:header",
+        )
+        body = Frame(Box(self._body, padding=1), title=lambda: " View Skill ")
+        footer = Window(
+            FormattedTextControl(self._footer_fragments),
+            height=1,
+            style="class:footer",
+        )
+        return Application(
+            layout=Layout(HSplit([header, body, footer]), focused_element=self._body),
             key_bindings=kb,
             full_screen=True,
             erase_when_done=True,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from agents import Model, ModelSettings
 from agents import OpenAIChatCompletionsModel
 
 from deepy.config import Settings
@@ -17,8 +18,8 @@ from .replay import (
 @dataclass(frozen=True)
 class ProviderBundle:
     client: object
-    model: object
-    model_settings: object
+    model: Model
+    model_settings: ModelSettings
 
 
 class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):

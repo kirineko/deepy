@@ -22,10 +22,13 @@ from deepy.tools.shell_output import decode_shell_output_bytes
 from deepy.tools.shell_utils import RuntimeEnvironment, detect_runtime_environment
 from deepy.utils import json as json_utils
 
+pty: Any | None
 try:
-    import pty
+    import pty as _pty
 except ImportError:  # pragma: no cover - exercised on Windows.
-    pty = None  # type: ignore[assignment]
+    pty = None
+else:
+    pty = _pty
 
 DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 120_000
 DEFAULT_DISPLAY_OUTPUT_LIMIT = 30_000
@@ -389,9 +392,12 @@ def _read_pipe_output(
     stream = process.stdout
     if stream is None:
         return
+    read1 = getattr(stream, "read1", None)
+    if not callable(read1):
+        return
     while True:
         try:
-            chunk = stream.read1(4096)
+            chunk = read1(4096)
         except Exception:
             return
         if not chunk:

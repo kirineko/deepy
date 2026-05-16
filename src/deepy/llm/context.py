@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from math import ceil
 from typing import Any
 
 from deepy.config import Settings
+from deepy.types.sdk import SessionInputCallback
 from deepy.utils import json as json_utils
 
+tiktoken: Any | None
 try:
-    import tiktoken
+    import tiktoken as _tiktoken
 except Exception:  # pragma: no cover - optional dependency fallback.
-    tiktoken = None  # type: ignore[assignment]
+    tiktoken = None
+else:
+    tiktoken = _tiktoken
 
 _ENCODING = None
 
@@ -38,11 +41,8 @@ def estimate_tokens_for_items(items: list[dict[str, Any]]) -> int:
     return sum(estimate_tokens_for_item(item) for item in items)
 
 
-def build_session_input_callback(settings: Settings) -> Callable[
-    [list[dict[str, Any]], list[dict[str, Any]]],
-    list[dict[str, Any]],
-]:
-    def callback(history: list[dict[str, Any]], new_input: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_session_input_callback(settings: Settings) -> SessionInputCallback:
+    def callback(history: list[Any], new_input: list[Any]) -> list[Any]:
         return [*history, *new_input]
 
     return callback

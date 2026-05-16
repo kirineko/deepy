@@ -301,7 +301,7 @@ Deepy 会自动加载面向 Agent 的指令和技能文件：
 ## 命令
 - 测试：`uv run pytest`
 - Lint：`uv run ruff check`
-- 类型检查：`uv run pyright`
+- 类型检查：`uv run ty check src`
 
 ## 架构
 - CLI 入口保持轻量，可复用逻辑放在 `src/` 下。
@@ -328,7 +328,7 @@ Skills 仍然采用标准 Agent Skills，放在 `.agents/skills/*/SKILL.md`，
 uv sync --group dev
 uv run pytest
 uv run ruff check
-uv run pyright
+uv run ty check src
 uv build
 ```
 

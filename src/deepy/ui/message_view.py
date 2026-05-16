@@ -331,15 +331,16 @@ def _diff_syntax_theme(palette: UiPalette) -> str:
     return "default" if palette.name == "light" else "monokai"
 
 
-def _syntax_style_on_diff_background(style: Style, base: Style) -> Style:
+def _syntax_style_on_diff_background(style: str | Style, base: Style) -> Style:
+    syntax_style = Style.parse(style) if isinstance(style, str) else style
     return Style(
-        color=style.color or base.color,
+        color=syntax_style.color or base.color,
         bgcolor=base.bgcolor,
-        bold=style.bold,
-        italic=style.italic,
-        underline=style.underline,
-        dim=style.dim,
-        strike=style.strike,
+        bold=syntax_style.bold,
+        italic=syntax_style.italic,
+        underline=syntax_style.underline,
+        dim=syntax_style.dim,
+        strike=syntax_style.strike,
     )
 
 
@@ -405,29 +406,32 @@ def build_thinking_summary(content: str, message_params: object | None = None) -
             result = result[:-1]
         return result
 
-    if isinstance(message_params, dict):
-        reasoning_content = message_params.get("reasoning_content")
+    params = _string_key_dict(message_params)
+    if params is not None:
+        reasoning_content = params.get("reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content.strip():
             return "(reasoning...)"
     return ""
 
 
 def build_tool_params_snippet(tool_function: object | None, *, project_root: str | None = None) -> str:
-    if not isinstance(tool_function, dict):
+    tool_params = _string_key_dict(tool_function)
+    if tool_params is None:
         return ""
-    args = tool_function.get("arguments")
-    tool_name = tool_function.get("name")
+    args = tool_params.get("arguments")
+    tool_name = tool_params.get("name")
     if not isinstance(args, str) or not args.strip():
         return ""
     try:
         parsed = json_utils.loads(args)
     except json_utils.JSONDecodeError:
         return args.strip()
-    if not isinstance(parsed, dict):
+    parsed_params = _string_key_dict(parsed)
+    if parsed_params is None:
         return args.strip()
     return _format_tool_params_snippet(
         tool_name if isinstance(tool_name, str) else None,
-        parsed,
+        parsed_params,
         project_root=project_root,
     )
 
@@ -583,7 +587,7 @@ def _tool_progress_detail(view: ToolOutputView) -> str:
     if view.error:
         return _truncate(view.error)
     if view.await_user_response:
-        return _truncate(_first_nonempty_line(view.output))
+        return _truncate(_first_nonempty_line(view.output) or "")
     return ""
 
 
@@ -817,6 +821,14 @@ def _first_nonempty_line(value: str) -> str | None:
         if stripped:
             return stripped
     return None
+
+
+def _string_key_dict(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if not all(isinstance(key, str) for key in value):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _truncate(value: str, max_chars: int = MAX_SUMMARY_CHARS) -> str:

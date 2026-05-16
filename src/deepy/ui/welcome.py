@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,7 +132,7 @@ def build_deepy_ascii_logo(*, palette: UiPalette | None = None) -> Text:
 
 def _build_section(
     title: str,
-    rows: list[WelcomeSetting | WelcomeTip],
+    rows: Sequence[WelcomeSetting | WelcomeTip],
     *,
     palette: UiPalette,
 ) -> Table:

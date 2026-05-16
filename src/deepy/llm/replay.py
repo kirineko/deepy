@@ -105,9 +105,9 @@ def sanitize_chat_completion_stream_event(event: Any) -> Any | None:
     if getattr(event, "type", None) == "response.completed":
         response = getattr(event, "response", None)
         output = getattr(response, "output", None)
-        if isinstance(output, list):
+        if response is not None and isinstance(output, list):
             try:
-                response.output = sanitize_model_response_output(output)
+                cast(Any, response).output = sanitize_model_response_output(output)
             except Exception:
                 pass
     return event

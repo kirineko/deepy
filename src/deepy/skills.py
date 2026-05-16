@@ -116,7 +116,7 @@ def _format_skills(skills: Iterable[SkillInfo], *, include_paths: bool) -> str:
 
 
 def _builtin_skills_root() -> Path:
-    return Path(resources.files("deepy.data").joinpath("skills"))
+    return Path(str(resources.files("deepy.data").joinpath("skills")))
 
 
 def _discover_skills_root(root: Path, *, scope: str) -> list[SkillInfo]:

@@ -15,6 +15,7 @@ from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.mcp import McpServerStatus
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.skill_market import MarketSkill
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
@@ -232,6 +233,78 @@ def test_skills_menu_remove_local_skill_deletes_standard_skill_dir(tmp_path):
     assert not skill_dir.exists()
     assert loaded == []
     assert "Removed local skill: manual" in console.export_text()
+
+
+def test_skills_menu_show_installed_skill_opens_detail_view(tmp_path, monkeypatch):
+    console = Console(record=True)
+    skill_dir = tmp_path / ".agents" / "skills" / "manual"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: manual\n---\n# Body\nUse this skill.",
+        encoding="utf-8",
+    )
+    shown: list[object] = []
+
+    monkeypatch.setattr(terminal, "show_skill_detail_view", shown.append)
+
+    changed = terminal._handle_skill_menu_action(
+        SkillMenuAction("show", "manual", scope="project", path=skill_dir),
+        console,
+        tmp_path,
+        [],
+        terminal.DARK_PALETTE,
+    )
+
+    assert changed is False
+    assert len(shown) == 1
+    detail = shown[0]
+    assert detail.name == "manual"
+    assert detail.scope == "project"
+    assert detail.path == skill_dir
+    assert "Use this skill." in detail.body
+    assert detail.markdown is True
+    assert "Use this skill." not in console.export_text()
+
+
+def test_skills_menu_show_uninstalled_market_skill_opens_metadata_view(tmp_path, monkeypatch):
+    console = Console(record=True)
+    market_skill = MarketSkill(
+        name="docx",
+        description="Create Word documents.",
+        version="1.0",
+        uploaded_at="2026-05-15T00:00:00+00:00",
+        sha256="abc123",
+        installed=False,
+    )
+    shown: list[object] = []
+
+    monkeypatch.setattr(terminal, "show_skill_detail_view", shown.append)
+    monkeypatch.setattr(
+        terminal,
+        "find_skill",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("find_skill should not run for market metadata view")
+        ),
+    )
+
+    changed = terminal._handle_skill_menu_action(
+        SkillMenuAction("show", "docx", scope="market", market_skill=market_skill),
+        console,
+        tmp_path,
+        [],
+        terminal.DARK_PALETTE,
+    )
+
+    assert changed is False
+    assert len(shown) == 1
+    detail = shown[0]
+    assert detail.name == "docx"
+    assert detail.scope == "market"
+    assert detail.description == "Create Word documents."
+    assert detail.version == "1.0"
+    assert detail.installed is False
+    assert detail.markdown is True
+    assert "Skill not installed" not in console.export_text()
 
 
 def test_skills_list_command_lists_project_skills(tmp_path):

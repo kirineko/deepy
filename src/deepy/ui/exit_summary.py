@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 
@@ -55,7 +56,7 @@ def extract_usage_fields(usage: Any) -> UsageFields:
 def build_exit_summary_text(
     *,
     session: Any | None = None,
-    messages: list[Mapping[str, Any]] | None = None,
+    messages: Sequence[Mapping[str, Any]] | None = None,
     model: str | None = None,
 ) -> str:
     usage = extract_usage_fields(_get_usage(session))

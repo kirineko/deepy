@@ -17,7 +17,7 @@ class ToolResult:
     followUpMessages: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "ok": self.ok,
             "name": self.name,
             "output": self.output,

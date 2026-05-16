@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+orjson: Any | None
 try:
-    import orjson
+    import orjson as _orjson
 except Exception:  # pragma: no cover - exercised when optional wheel is unavailable.
-    orjson = None  # type: ignore[assignment]
+    orjson = None
+else:
+    orjson = _orjson
 
 JSONDecodeError = json.JSONDecodeError
 

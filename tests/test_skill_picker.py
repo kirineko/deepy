@@ -5,8 +5,10 @@ from pathlib import Path
 from deepy.skill_market import MarketSkill
 from deepy.ui.skill_picker import (
     InstalledSkillView,
+    SkillDetailView,
     SkillInstallScope,
     SkillMenuPicker,
+    format_skill_detail_text,
     format_installed_skill_label,
     format_market_skill_label,
 )
@@ -69,6 +71,51 @@ def test_skill_menu_picker_actions_match_view():
     assert picker._toggle_action().action == "uninstall"
 
 
+def test_skill_menu_picker_view_uses_installed_details_from_market_view():
+    picker = SkillMenuPicker(
+        [MarketSkill(name="pdf", installed=True)],
+        [
+            InstalledSkillView(
+                name="pdf",
+                scope="project",
+                path=Path("/tmp/project/.agents/skills/pdf"),
+                version="1.0",
+                installed_at="2026-05-15T00:00:00+00:00",
+                managed_by_market=True,
+            )
+        ],
+    )
+
+    action = picker._view_action()
+
+    assert action is not None
+    assert action.action == "show"
+    assert action.path == Path("/tmp/project/.agents/skills/pdf")
+    assert action.version == "1.0"
+    assert action.installed_at == "2026-05-15T00:00:00+00:00"
+    assert action.market_skill is None
+
+
+def test_skill_menu_picker_view_carries_uninstalled_market_metadata():
+    market_skill = MarketSkill(
+        name="docx",
+        description="Create Word documents.",
+        version="1.0",
+        uploaded_at="2026-05-15T00:00:00+00:00",
+        sha256="abc123",
+        installed=False,
+    )
+    picker = SkillMenuPicker([market_skill], [])
+
+    action = picker._view_action()
+
+    assert action is not None
+    assert action.action == "show"
+    assert action.scope == "market"
+    assert action.path is None
+    assert action.market_skill == market_skill
+
+
 def test_skill_menu_picker_remove_local_for_manual_installed_skill():
     picker = SkillMenuPicker(
         [],
@@ -104,3 +151,26 @@ def test_skill_install_scope_paths(tmp_path):
 
     assert choice.scope == "project"
     assert choice.path == tmp_path / ".agents" / "skills" / "docx"
+
+
+def test_format_skill_detail_text_handles_missing_metadata():
+    text = format_skill_detail_text(SkillDetailView(name="manual"))
+
+    assert "Name: manual" in text
+    assert "(no details available)" in text
+
+
+def test_format_skill_detail_text_renders_markdown_body():
+    text = format_skill_detail_text(
+        SkillDetailView(
+            name="manual",
+            body="# Title\n- item\n```py\nprint(1)\n```",
+            markdown=True,
+        )
+    )
+
+    assert "# Title" not in text
+    assert "Title" in text
+    assert "• item" in text
+    assert "code py" in text
+    assert "  print(1)" in text

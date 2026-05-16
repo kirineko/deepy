@@ -7,7 +7,7 @@ from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter, merge_completers
-from prompt_toolkit.formatted_text import AnyFormattedText
+from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
@@ -24,9 +24,9 @@ CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
 PROMPT_TOOLBAR_BACKGROUND = "#161821"
 PROMPT_TOOLBAR_FOREGROUND = "#a6adc8"
 PROMPT_TOOLBAR_HELP = "Ctrl+J newline · Ctrl+D twice exit"
-PROMPT_MESSAGE: AnyFormattedText = [("class:prompt", "> ")]
-PROMPT_PLACEHOLDER: AnyFormattedText = [("class:placeholder", "Type your message...")]
-PROMPT_TOOLBAR: AnyFormattedText = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
+PROMPT_MESSAGE: StyleAndTextTuples = [("class:prompt", "> ")]
+PROMPT_PLACEHOLDER: StyleAndTextTuples = [("class:placeholder", "Type your message...")]
+PROMPT_TOOLBAR: StyleAndTextTuples = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
 PROMPT_STYLE = None
 
 
@@ -105,7 +105,7 @@ def build_prompt_key_bindings(
     return bindings
 
 
-def prompt_toolbar(platform_name: str | None = None) -> AnyFormattedText:
+def prompt_toolbar(platform_name: str | None = None) -> StyleAndTextTuples:
     return PROMPT_TOOLBAR
 
 
@@ -129,11 +129,12 @@ def build_prompt_toolbar(
 ) -> AnyFormattedText:
     if not context_status:
         return prompt_toolbar(platform_name)
-    return [
+    toolbar: StyleAndTextTuples = [
         ("class:toolbar.context", context_status),
         ("class:toolbar.separator", " · "),
         *prompt_toolbar(platform_name),
     ]
+    return toolbar
 
 
 def prompt_style(palette: UiPalette | None = None) -> Style:

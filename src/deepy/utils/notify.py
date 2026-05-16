@@ -40,8 +40,8 @@ def launch_notify_script(
 
     cwd = str(working_directory) if working_directory is not None else None
     env = build_notify_env(duration_ms)
-    spawn = spawn_process or subprocess.Popen
-    options = {
+    spawn: Spawn = spawn_process or subprocess.Popen
+    options: dict[str, Any] = {
         "cwd": cwd,
         "env": env,
         "stdin": subprocess.DEVNULL,

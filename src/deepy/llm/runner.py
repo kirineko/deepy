@@ -130,7 +130,7 @@ async def run_prompt_once(
             input=prompt,
             max_turns=max_turns,
             run_config=run_config,
-            session=session,
+            session=session,  # ty: ignore[invalid-argument-type] - DeepyJsonlSession matches the SDK Session protocol at runtime.
         )
         if should_interrupt is not None:
             interrupt_task = asyncio.create_task(
@@ -349,7 +349,7 @@ def _max_turns_output(chunks: list[str], *, max_turns: int) -> str:
 
 def format_deepseek_api_error(error: Any) -> str:
     status_code = _safe_int(getattr(error, "status_code", None))
-    status = DEEPSEEK_ERROR_CODES.get(status_code)
+    status = DEEPSEEK_ERROR_CODES.get(status_code) if status_code is not None else None
     title = f"DeepSeek API error {status_code}" if status_code is not None else "DeepSeek API error"
     if status is not None:
         title = f"{title}: {status.title}"

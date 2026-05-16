@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from deepy.config import Settings
 from deepy.prompts import build_system_prompt
@@ -10,6 +11,9 @@ from deepy.tools.agents import build_function_tools
 
 from .provider import ProviderBundle, build_provider_bundle
 
+if TYPE_CHECKING:
+    from agents.mcp import MCPServer
+
 
 def build_deepy_agent(
     settings: Settings,
@@ -18,7 +22,7 @@ def build_deepy_agent(
     project_root: Path,
     provider: ProviderBundle | None = None,
     loaded_skills: list[SkillInfo] | None = None,
-    mcp_servers: list[object] | None = None,
+    mcp_servers: list[MCPServer] | None = None,
     preferred_mcp_web_search_tools: list[str] | None = None,
 ):
     from agents import Agent

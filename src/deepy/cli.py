@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import tomli_w
 
@@ -198,7 +198,7 @@ def _cmd_config_theme(args: argparse.Namespace) -> int:
     return 0
 
 
-def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
+def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     settings = load_settings(args.config)
     checks: list[dict[str, object]] = []
 
@@ -251,7 +251,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
     }
 
 
-async def _doctor_live(settings: Settings) -> dict[str, object]:
+async def _doctor_live(settings: Settings) -> dict[str, Any]:
     from agents import Agent, RunConfig, Runner
 
     provider = build_provider_bundle(settings)

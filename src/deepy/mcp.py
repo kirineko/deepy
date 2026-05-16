@@ -155,7 +155,12 @@ class DeepyMcpRuntime:
             await self._manager.cleanup_all()
 
     def _build_sdk_servers(self) -> list[Any]:
-        from agents.mcp import MCPServerStdio, MCPServerStreamableHttp
+        from agents.mcp import (
+            MCPServerStdio,
+            MCPServerStdioParams,
+            MCPServerStreamableHttp,
+            MCPServerStreamableHttpParams,
+        )
 
         servers: list[Any] = []
         for definition in self.definitions:
@@ -173,7 +178,7 @@ class DeepyMcpRuntime:
                 )
                 continue
             if definition.transport == "stdio":
-                params: dict[str, Any] = {"command": definition.command or ""}
+                params: MCPServerStdioParams = {"command": definition.command or ""}
                 if definition.args:
                     params["args"] = list(definition.args)
                 if definition.env:
@@ -189,7 +194,7 @@ class DeepyMcpRuntime:
                     ),
                 )
             else:
-                params = {"url": definition.url or ""}
+                params: MCPServerStreamableHttpParams = {"url": definition.url or ""}
                 if definition.headers:
                     params["headers"] = dict(definition.headers)
                 server = MCPServerStreamableHttp(

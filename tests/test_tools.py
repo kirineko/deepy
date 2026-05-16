@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import gzip
 import json
 import os
@@ -634,16 +635,29 @@ def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
     assert payload["metadata"]["encoding"] == "utf8"
 
 
-def test_windows_new_non_ascii_text_file_uses_utf8_signature(tmp_path):
+def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
     payload = decode(runtime.modify("notes.py", content="# 中文注释\nprint('ok')\n"))
     target = tmp_path / "notes.py"
 
     assert payload["ok"] is True
-    assert payload["metadata"]["encoding"] == "utf8-sig"
-    assert target.read_bytes().startswith(b"\xef\xbb\xbf")
-    assert target.read_bytes().decode("utf-8-sig") == "# 中文注释\nprint('ok')\n"
+    assert payload["metadata"]["encoding"] == "utf8"
+    assert not target.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert target.read_bytes().decode("utf-8") == "# 中文注释\nprint('ok')\n"
+
+
+def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    payload = decode(runtime.modify("script.py", content="# 中文注释\nprint('ok')\n"))
+    target = tmp_path / "script.py"
+    source = target.read_text(encoding="utf-8")
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["encoding"] == "utf8"
+    assert not source.startswith("\ufeff")
+    ast.parse(source)
 
 
 def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
