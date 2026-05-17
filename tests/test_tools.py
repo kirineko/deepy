@@ -52,6 +52,74 @@ def test_tool_result_shape_is_stable():
     }
 
 
+def test_todo_write_updates_reads_and_clears_state(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    todos = [
+        {"id": "inspect", "content": "Inspect code", "status": "completed"},
+        {"id": "implement", "content": "Implement todo tool", "status": "in_progress"},
+        {"id": "verify", "content": "Run tests", "status": "pending"},
+    ]
+
+    written = decode(runtime.todo_write(todos))
+
+    assert written["ok"] is True
+    assert written["name"] == "todo_write"
+    assert written["metadata"]["kind"] == "todo_list"
+    assert written["metadata"]["counts"] == {
+        "total": 3,
+        "pending": 1,
+        "in_progress": 1,
+        "completed": 1,
+    }
+    assert written["metadata"]["changed"] is True
+
+    read = decode(runtime.todo_write())
+    assert read["ok"] is True
+    assert read["metadata"]["readOnly"] is True
+    assert read["metadata"]["todos"] == todos
+
+    unchanged = decode(runtime.todo_write(todos))
+    assert unchanged["metadata"]["changed"] is False
+
+    cleared = decode(runtime.todo_write([]))
+    assert cleared["ok"] is True
+    assert cleared["metadata"]["todos"] == []
+
+
+def test_todo_write_rejects_invalid_updates_and_preserves_previous_state(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    first = [{"id": "one", "content": "One", "status": "in_progress"}]
+    assert decode(runtime.todo_write(first))["ok"] is True
+
+    failed = decode(
+        runtime.todo_write(
+            [
+                {"id": "one", "content": "One", "status": "in_progress"},
+                {"id": "two", "content": "Two", "status": "in_progress"},
+            ]
+        )
+    )
+
+    assert failed["ok"] is False
+    assert "only one todo item may be in_progress" in failed["error"]
+    assert decode(runtime.todo_write())["metadata"]["todos"] == first
+
+
+def test_build_function_tools_registers_todo_write(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tools = build_function_tools(runtime)
+
+    todo_tool = next(tool for tool in tools if tool.name == "todo_write")
+    schema = todo_tool.params_json_schema
+
+    assert schema["properties"]["todos"]["items"]["required"] == ["id", "content", "status"]
+    assert schema["properties"]["todos"]["items"]["properties"]["status"]["enum"] == [
+        "pending",
+        "in_progress",
+        "completed",
+    ]
+
+
 def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
@@ -101,7 +169,9 @@ def test_read_directory_lists_entries(tmp_path):
 
 
 def test_read_directory_respects_gitignore(tmp_path):
-    (tmp_path / ".gitignore").write_text("ignored.log\nignored_dir/\nspec/\nreference/\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(
+        "ignored.log\nignored_dir/\nspec/\nreference/\n", encoding="utf-8"
+    )
     (tmp_path / "ignored.log").write_text("secret", encoding="utf-8")
     (tmp_path / "ignored_dir").mkdir()
     (tmp_path / "visible.txt").write_text("ok", encoding="utf-8")
@@ -412,7 +482,10 @@ def test_edit_returns_candidate_snippets_when_old_text_is_not_unique(tmp_path):
     payload = decode(runtime.edit("duplicate.txt", "city", "location"))
 
     assert payload["ok"] is False
-    assert payload["error"] == "old_string is not unique; use snippet_id, replace_all, or provide more context."
+    assert (
+        payload["error"]
+        == "old_string is not unique; use snippet_id, replace_all, or provide more context."
+    )
     assert payload["metadata"]["match_count"] == 2
     assert payload["metadata"]["scope"]["type"] == "full"
     assert len(payload["metadata"]["candidates"]) == 2
@@ -743,7 +816,10 @@ def test_modify_content_after_out_of_band_delete_preserves_stale_protection(tmp_
     assert payload["ok"] is False
     assert payload["error"] == "File changed since it was read: it no longer exists."
     assert payload["metadata"]["recovery_kind"] == "stale_deleted_file"
-    assert "do not recreate Unicode files through shell here-strings" in payload["metadata"]["recovery"]
+    assert (
+        "do not recreate Unicode files through shell here-strings"
+        in payload["metadata"]["recovery"]
+    )
 
 
 def test_edit_preserves_existing_crlf_line_endings(tmp_path):
@@ -781,9 +857,7 @@ def test_edit_matches_crlf_file_with_lf_old_string(tmp_path):
     assert payload["metadata"]["matched_via"] == "line_endings"
     assert payload["metadata"]["line_endings"] == "CRLF"
     assert target.read_bytes() == (
-        b"def demo():\r\n"
-        b"    title = 'Unicode Character Demo Program'\r\n"
-        b"    return title\r\n"
+        b"def demo():\r\n    title = 'Unicode Character Demo Program'\r\n    return title\r\n"
     )
 
 
@@ -1176,6 +1250,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
         "WebSearch",
         "WebFetch",
         "load_skill",
+        "todo_write",
     ]
     assert all(tool.description for tool in tools)
     shell_tool = tools[0]
@@ -1193,8 +1268,11 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "old_string/new_string" in modify_tool.description
     assert "read first when you need to inspect context" in modify_tool.description
     assert "read first and use old_string/new_string" not in modify_tool.description
-    skill_tool = tools[-1]
+    skill_tool = tools[-2]
     assert skill_tool.name == "load_skill"
+    todo_tool = tools[-1]
+    assert todo_tool.name == "todo_write"
+    assert "complex multi-step work" in todo_tool.description
     assert "available Agent Skill" in skill_tool.description
 
 
@@ -1505,12 +1583,14 @@ def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
 
 def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+        ),
         tools=ToolsConfig(
             web_search=WebSearchToolConfig(
                 searxng_url="https://search.example",
             )
-        )
+        ),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     requested_urls: list[str] = []
@@ -1566,10 +1646,10 @@ def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
 
 def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
-        tools=ToolsConfig(
-            web_search=WebSearchToolConfig(searxng_url="https://search.example")
-        )
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+        ),
+        tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     requested_urls: list[str] = []
@@ -1619,10 +1699,10 @@ def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkey
 
 def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
-        tools=ToolsConfig(
-            web_search=WebSearchToolConfig(searxng_url="https://search.example")
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
         ),
+        tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     requested_urls: list[str] = []
@@ -1671,15 +1751,15 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     assert payload["metadata"]["dominantLanguage"] == "en"
     assert payload["metadata"]["translated"] is True
     assert payload["metadata"]["resolvedQuery"] == "latest DeepSeek model"
-    assert requested_urls == [
-        "https://search.example/search?q=latest+DeepSeek+model&format=json"
-    ]
+    assert requested_urls == ["https://search.example/search?q=latest+DeepSeek+model&format=json"]
     assert len(chat_prompts) == 2
 
 
 def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+        ),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     requested: list[object] = []
@@ -1729,9 +1809,7 @@ def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch):
     assert requested[0].get_header("Accept-language") == "zh-CN,zh;q=0.9,en;q=0.8"
     assert requested[0].get_header("Accept-encoding") == "gzip, deflate"
     assert payload["metadata"]["backend"] == "searxng_json"
-    assert payload["metadata"]["providerAttempts"] == [
-        {"provider": "searxng_json", "ok": True}
-    ]
+    assert payload["metadata"]["providerAttempts"] == [{"provider": "searxng_json", "ok": True}]
 
 
 def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypatch):
@@ -1762,7 +1840,9 @@ def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypat
 
 def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+        ),
         tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
@@ -1820,7 +1900,9 @@ def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path
 
 def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path, monkeypatch):
     settings = Settings(
-        model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"),
+        model=ModelConfig(
+            api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+        ),
         tools=ToolsConfig(
             web_search=WebSearchToolConfig(
                 searxng_url="https://search.example/?token=secret-token-value"
@@ -1856,7 +1938,9 @@ def test_web_search_limits_calls_per_turn(tmp_path, monkeypatch):
     runtime = ToolRuntime(
         cwd=tmp_path,
         settings=Settings(
-            model=ModelConfig(api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat")
+            model=ModelConfig(
+                api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
+            )
         ),
     )
 

@@ -16,7 +16,9 @@ async def test_session_manager_creates_and_replies_to_active_session(monkeypatch
 
     async def fake_run_prompt_once(prompt, **kwargs):
         calls.append({"prompt": prompt, **kwargs})
-        return RunSummary(output="ok", session_id=kwargs.get("session_id") or "created", complete=True)
+        return RunSummary(
+            output="ok", session_id=kwargs.get("session_id") or "created", complete=True
+        )
 
     monkeypatch.setattr("deepy.sessions.manager.run_prompt_once", fake_run_prompt_once)
     manager = DeepySessionManager(project_root=tmp_path)
@@ -35,9 +37,17 @@ async def test_session_manager_creates_and_replies_to_active_session(monkeypatch
 
 @pytest.mark.asyncio
 async def test_session_manager_append_and_compact_session(monkeypatch, tmp_path):
-    async def fake_run_compaction_model(items, settings, *, provider=None, focus_instruction=None):
+    async def fake_run_compaction_model(
+        items,
+        settings,
+        *,
+        provider=None,
+        focus_instruction=None,
+        todo_state=None,
+    ):
         assert [item["content"] for item in items] == ["one"]
         assert focus_instruction == "keep decisions"
+        assert todo_state == []
         from deepy.usage import TokenUsage
 
         return "Summary of one.", TokenUsage(completion_tokens=4, total_tokens=4)
@@ -130,7 +140,9 @@ async def test_session_manager_passes_interrupt_check_to_runner(monkeypatch, tmp
 
     async def fake_run_prompt_once(prompt, **kwargs):
         observed_interrupt.append(kwargs["should_interrupt"]())
-        return RunSummary(output="", session_id=kwargs["session_id"], complete=False, interrupted=True)
+        return RunSummary(
+            output="", session_id=kwargs["session_id"], complete=False, interrupted=True
+        )
 
     monkeypatch.setattr("deepy.sessions.manager.run_prompt_once", fake_run_prompt_once)
     manager = DeepySessionManager(project_root=tmp_path)

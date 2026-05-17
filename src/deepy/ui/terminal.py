@@ -72,6 +72,7 @@ from deepy.ui.message_view import (
     format_tool_progress_summary,
     parse_tool_output,
     render_shell_output_block,
+    render_todo_board,
     render_tool_diff_preview,
 )
 from deepy.ui.markdown import render_markdown
@@ -2365,6 +2366,9 @@ def _print_stream_event(
         shell_output = render_shell_output_block(event.text, palette=palette)
         if shell_output:
             console.print(shell_output)
+        todo_board = render_todo_board(event.text, palette=palette, width=console.width)
+        if todo_board:
+            console.print(todo_board)
         diff = render_tool_diff_preview(event.text, palette=palette, width=console.width)
         if diff:
             console.print(diff)

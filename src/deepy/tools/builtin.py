@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, Settings, mask_secret
+from deepy.todos import TodoItem, normalize_todo_items, todo_counts, todo_items_to_payload
 from deepy.types.tool_payloads import AskUserOption, AskUserQuestion
 from deepy.utils import json as json_utils
 
@@ -335,8 +336,7 @@ def _build_candidate_preview(text: str, start_line: int, end_line: int) -> str:
     lines = text.splitlines()
     selected = lines[start_line - 1 : end_line]
     return "\n".join(
-        f"{str(start_line + index).rjust(6)}\t{line}"
-        for index, line in enumerate(selected)
+        f"{str(start_line + index).rjust(6)}\t{line}" for index, line in enumerate(selected)
     )
 
 
@@ -367,8 +367,7 @@ def _build_closest_match_metadata(
 def _renumber_preview(preview: str, start_line: int) -> str:
     lines = [line.split("\t", 1)[1] if "\t" in line else line for line in preview.splitlines()]
     return "\n".join(
-        f"{str(start_line + index).rjust(6)}\t{line}"
-        for index, line in enumerate(lines)
+        f"{str(start_line + index).rjust(6)}\t{line}" for index, line in enumerate(lines)
     )
 
 
@@ -908,7 +907,9 @@ def _parse_searxng_results(body: str) -> list[WebSearchResult]:
         content = item.get("content")
         snippet = content if isinstance(content, str) else ""
         seen_urls.add(url)
-        results.append(WebSearchResult(title=" ".join(title.split()), url=url, snippet=snippet.strip()))
+        results.append(
+            WebSearchResult(title=" ".join(title.split()), url=url, snippet=snippet.strip())
+        )
     return results
 
 
@@ -1168,6 +1169,15 @@ class ToolRuntime:
     file_state: FileState = field(default_factory=FileState)
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
     web_search_calls: int = 0
+    todo_items: list[TodoItem] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        raw_items = [
+            item.to_dict() if isinstance(item, TodoItem) else item for item in self.todo_items
+        ]
+        normalized, error = normalize_todo_items(raw_items)
+        if error is None and normalized is not None:
+            self.todo_items = normalized
 
     def read(
         self,
@@ -1199,7 +1209,9 @@ class ToolRuntime:
         if target.suffix.lower() == ".ipynb":
             output, error = _format_notebook(target)
             if error is not None:
-                return ToolResult.error_result(name, error, metadata={"path": str(target)}).to_json()
+                return ToolResult.error_result(
+                    name, error, metadata={"path": str(target)}
+                ).to_json()
             return ToolResult.ok_result(
                 name,
                 output,
@@ -1288,7 +1300,9 @@ class ToolRuntime:
             ).to_json()
         if has_content:
             if not path:
-                return ToolResult.error_result("modify", "file_path is required for new files.").to_json()
+                return ToolResult.error_result(
+                    "modify", "file_path is required for new files."
+                ).to_json()
             target = _resolve_in_cwd(self.cwd, path)
             if target.exists():
                 return ToolResult.error_result(
@@ -1600,6 +1614,31 @@ class ToolRuntime:
             awaitUserResponse=True,
         ).to_json()
 
+    def todo_write(self, todos: object | None = None) -> str:
+        name = "todo_write"
+        if todos is None:
+            return ToolResult.ok_result(
+                name,
+                _todo_tool_output(self.todo_items, changed=False, read_only=True),
+                metadata=_todo_tool_metadata(self.todo_items, changed=False, read_only=True),
+            ).to_json()
+        parsed, error = normalize_todo_items(todos)
+        if error is not None or parsed is None:
+            return ToolResult.error_result(
+                name,
+                error or "Invalid todo list.",
+                metadata={"kind": "todo_list_error"},
+            ).to_json()
+        previous = todo_items_to_payload(self.todo_items)
+        current = todo_items_to_payload(parsed)
+        changed = previous != current
+        self.todo_items = parsed
+        return ToolResult.ok_result(
+            name,
+            _todo_tool_output(parsed, changed=changed, read_only=False),
+            metadata=_todo_tool_metadata(parsed, changed=changed, read_only=False),
+        ).to_json()
+
     def load_skill(self, name: str) -> str:
         from deepy.skills import find_skill, read_skill_body
 
@@ -1656,7 +1695,9 @@ class ToolRuntime:
         name = "WebFetch"
         target_url, validation_error = _validate_web_fetch_url(url)
         if validation_error is not None or target_url is None:
-            return ToolResult.error_result(name, validation_error or 'Missing required "url" string.').to_json()
+            return ToolResult.error_result(
+                name, validation_error or 'Missing required "url" string.'
+            ).to_json()
 
         activity_label = f"WebFetch: {target_url}"
         activity_id = f"web-fetch-{uuid.uuid4().hex}"
@@ -1754,7 +1795,9 @@ class ToolRuntime:
             **({"queryPreparationWarning": prepare_error} if prepare_error else {}),
         }
         try:
-            searxng_url = self.settings.tools.web_search.searxng_url or DEFAULT_WEB_SEARCH_SEARXNG_URL
+            searxng_url = (
+                self.settings.tools.web_search.searxng_url or DEFAULT_WEB_SEARCH_SEARXNG_URL
+            )
             result, failure = self._try_searxng_search(prepared.resolved_query, searxng_url)
             if result is not None:
                 return ToolResult.ok_result(
@@ -1765,9 +1808,7 @@ class ToolRuntime:
                         "backend": result.provider,
                         "provider": result.provider,
                         "searchUrl": _mask_url_secrets(result.search_url),
-                        "providerAttempts": [
-                            {**item.metadata(), "ok": False} for item in failures
-                        ]
+                        "providerAttempts": [{**item.metadata(), "ok": False} for item in failures]
                         + [{"provider": result.provider, "ok": True}],
                         "resultCount": min(len(result.results), DEFAULT_WEB_SEARCH_RESULTS),
                     },
@@ -1785,9 +1826,7 @@ class ToolRuntime:
                         "backend": result.provider,
                         "provider": result.provider,
                         "searchUrl": _mask_url_secrets(result.search_url),
-                        "providerAttempts": [
-                            {**item.metadata(), "ok": False} for item in failures
-                        ]
+                        "providerAttempts": [{**item.metadata(), "ok": False} for item in failures]
                         + [{"provider": result.provider, "ok": True}],
                         "resultCount": min(len(result.results), DEFAULT_WEB_SEARCH_RESULTS),
                     },
@@ -1801,9 +1840,7 @@ class ToolRuntime:
                 metadata={
                     **query_metadata,
                     "backend": "provider_chain",
-                    "providerAttempts": [
-                        {**item.metadata(), "ok": False} for item in failures
-                    ],
+                    "providerAttempts": [{**item.metadata(), "ok": False} for item in failures],
                 },
             ).to_json()
         finally:
@@ -1814,7 +1851,9 @@ class ToolRuntime:
         query: str,
     ) -> tuple[WebSearchProviderResult | None, WebSearchProviderFailure | None]:
         provider = "duckduckgo_html"
-        search_url = DEFAULT_WEB_SEARCH_URL + "?" + urllib.parse.urlencode({"q": query}, doseq=False)
+        search_url = (
+            DEFAULT_WEB_SEARCH_URL + "?" + urllib.parse.urlencode({"q": query}, doseq=False)
+        )
         request = urllib.request.Request(
             search_url,
             headers={
@@ -1842,7 +1881,9 @@ class ToolRuntime:
                 error="no parseable results",
                 search_url=search_url,
             )
-        return WebSearchProviderResult(provider=provider, search_url=search_url, results=results), None
+        return WebSearchProviderResult(
+            provider=provider, search_url=search_url, results=results
+        ), None
 
     def _try_searxng_search(
         self,
@@ -1878,7 +1919,9 @@ class ToolRuntime:
                 error="no parseable results",
                 search_url=search_url,
             )
-        return WebSearchProviderResult(provider=provider, search_url=search_url, results=results), None
+        return WebSearchProviderResult(
+            provider=provider, search_url=search_url, results=results
+        ), None
 
 
 def _unified_diff(old: str, new: str, *, path: str) -> str:
@@ -2275,7 +2318,7 @@ def _build_posix_shell_args(command: str, marker: str, shell_path: str) -> list[
             build_disable_extglob_command(shell_path),
             normalized_command,
             "__deepy_exit=$?",
-            f"printf '\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n' \"$PWD\" \"$__deepy_exit\"",
+            f'printf \'\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n\' "$PWD" "$__deepy_exit"',
             "exit $__deepy_exit",
         )
         if part
@@ -2564,6 +2607,40 @@ def _build_question_summary(questions: list[AskUserQuestion]) -> str:
                 lines.append(f"     {option['description']}")
         lines.append("   - Other")
     return "\n".join(lines)
+
+
+def _todo_tool_metadata(
+    todos: list[TodoItem],
+    *,
+    changed: bool,
+    read_only: bool,
+) -> dict[str, object]:
+    return {
+        "kind": "todo_list",
+        "todos": todo_items_to_payload(todos),
+        "counts": todo_counts(todos),
+        "changed": changed,
+        "readOnly": read_only,
+    }
+
+
+def _todo_tool_output(
+    todos: list[TodoItem],
+    *,
+    changed: bool,
+    read_only: bool,
+) -> str:
+    counts = todo_counts(todos)
+    if read_only:
+        prefix = "Current todo list"
+    elif changed:
+        prefix = "Todo list updated"
+    else:
+        prefix = "Todo list unchanged"
+    return (
+        f"{prefix}: {counts['completed']}/{counts['total']} completed. "
+        "Continue the task without narrating this internal progress update unless it helps the user."
+    )
 
 
 def _trimmed_string(value: object) -> str:

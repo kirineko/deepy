@@ -16,7 +16,9 @@ def test_project_code_matches_deepcode_shape(tmp_path):
 
 @pytest.mark.asyncio
 async def test_jsonl_session_round_trips_sdk_items(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
 
     await session.add_items([{"role": "user", "content": "hello"}])
     await session.add_items([{"role": "assistant", "content": "hi"}])
@@ -98,6 +100,85 @@ async def test_session_index_preserves_usage_and_processes_on_touch(tmp_path):
     assert entry.usage == {"prompt_tokens": 12, "completion_tokens": 3}
     assert entry.processes == {"123": {"startTime": "now", "command": "pytest"}}
     assert session.latest_context_window_usage() is None
+
+
+@pytest.mark.asyncio
+async def test_session_index_persists_latest_todo_state_from_tool_output(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+    todo_output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [
+                    {"id": "one", "content": "Inspect code", "status": "completed"},
+                    {"id": "two", "content": "Implement", "status": "in_progress"},
+                ],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    await session.add_items(
+        [
+            {
+                "type": "function_call",
+                "call_id": "call-todo",
+                "name": "todo_write",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "call-todo", "output": todo_output},
+        ]
+    )
+
+    expected = [
+        {"id": "one", "content": "Inspect code", "status": "completed"},
+        {"id": "two", "content": "Implement", "status": "in_progress"},
+    ]
+    assert session.todo_state() == expected
+    assert list_session_entries(project, deepy_home=home)[0].todo_state == expected
+
+
+@pytest.mark.asyncio
+async def test_session_index_preserves_previous_todo_state_on_invalid_update(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+    valid_output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [{"id": "one", "content": "One", "status": "in_progress"}],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    invalid_output = json.dumps(
+        {
+            "ok": False,
+            "name": "todo_write",
+            "output": "",
+            "error": "only one todo item may be in_progress.",
+            "metadata": {"kind": "todo_list_error"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    await session.add_items(
+        [{"type": "function_call_output", "call_id": "valid", "output": valid_output}]
+    )
+    await session.add_items(
+        [{"type": "function_call_output", "call_id": "invalid", "output": invalid_output}]
+    )
+
+    assert session.todo_state() == [{"id": "one", "content": "One", "status": "in_progress"}]
 
 
 @pytest.mark.asyncio
@@ -233,6 +314,32 @@ async def test_replace_items_resets_checkpoint_to_compacted_estimate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_replace_items_preserves_todo_state(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+    todo_output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [{"id": "one", "content": "One", "status": "in_progress"}],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    await session.add_items(
+        [{"type": "function_call_output", "call_id": "todo", "output": todo_output}]
+    )
+
+    await session.replace_items([{"role": "user", "content": "summary"}], active_tokens=10)
+
+    assert session.todo_state() == [{"id": "one", "content": "One", "status": "in_progress"}]
+
+
+@pytest.mark.asyncio
 async def test_context_token_state_reestimates_when_history_is_shortened(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"
@@ -283,6 +390,7 @@ async def test_clear_session_resets_active_tokens(tmp_path):
     latest_usage = session.latest_context_window_usage()
     assert latest_usage is not None
     assert latest_usage.used_tokens == 0
+    assert entry.todo_state == []
 
 
 @pytest.mark.asyncio
@@ -345,7 +453,9 @@ def test_list_session_entries_ignores_legacy_entries_shape(tmp_path):
 
 @pytest.mark.asyncio
 async def test_jsonl_session_ignores_records_without_sdk_item(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
     session.path.parent.mkdir(parents=True)
     records = [
         {
@@ -353,7 +463,9 @@ async def test_jsonl_session_ignores_records_without_sdk_item(tmp_path):
             "sessionId": "s1",
             "role": "user",
             "content": "look",
-            "contentParams": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}}],
+            "contentParams": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}}
+            ],
             "messageParams": None,
             "compacted": False,
             "visible": True,
@@ -407,7 +519,9 @@ async def test_jsonl_session_ignores_records_without_sdk_item(tmp_path):
 
 @pytest.mark.asyncio
 async def test_jsonl_session_does_not_repair_legacy_missing_tool_pairs(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
     session.path.parent.mkdir(parents=True)
     records = [
         {
@@ -439,14 +553,18 @@ async def test_jsonl_session_does_not_repair_legacy_missing_tool_pairs(tmp_path)
             "visible": True,
         },
     ]
-    session.path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    session.path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
 
     assert await session.get_items() == []
 
 
 @pytest.mark.asyncio
 async def test_jsonl_session_round_trips_sdk_tool_items(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
 
     sdk_items = [
         {
@@ -474,7 +592,9 @@ async def test_jsonl_session_round_trips_sdk_tool_items(tmp_path):
 
 @pytest.mark.asyncio
 async def test_jsonl_session_drops_empty_assistant_between_function_calls_and_outputs(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
 
     sdk_items = [
         {
@@ -508,7 +628,9 @@ async def test_jsonl_session_drops_empty_assistant_between_function_calls_and_ou
 
 @pytest.mark.asyncio
 async def test_jsonl_session_sanitizes_loaded_cache_after_append(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepyJsonlSession.create(
+        tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1"
+    )
     first_item = {"role": "user", "content": "hello"}
     await session.add_items([first_item])
     assert await session.get_items() == [first_item]

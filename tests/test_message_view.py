@@ -20,6 +20,7 @@ from deepy.ui.message_view import parse_tool_output
 from deepy.ui.message_view import render_diff_preview_line
 from deepy.ui.message_view import render_message
 from deepy.ui.message_view import render_shell_output_block
+from deepy.ui.message_view import render_todo_board
 from deepy.ui.message_view import render_tool_diff_preview
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
@@ -62,6 +63,80 @@ def test_format_tool_display_label_normalizes_protocol_names():
     assert format_tool_display_label("AskUserQuestion") == "[AskUserQuestion]"
     assert format_tool_display_label("WebFetch") == "[WebFetch]"
     assert format_tool_display_label("edit") == "[Modify]"
+    assert format_tool_display_label("todo_write") == "[Todo]"
+
+
+def test_todo_tool_params_snippet_hides_raw_json():
+    snippet = build_tool_params_snippet(
+        {
+            "name": "todo_write",
+            "arguments": json.dumps(
+                {
+                    "todos": [
+                        {"id": "one", "content": "One", "status": "in_progress"},
+                        {"id": "two", "content": "Two", "status": "pending"},
+                    ]
+                }
+            ),
+        }
+    )
+
+    assert snippet == "2 items"
+    assert "content" not in snippet
+
+
+def test_parse_tool_output_recognizes_todo_metadata():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [{"id": "one", "content": "One", "status": "in_progress"}],
+                "counts": {"total": 1, "pending": 0, "in_progress": 1, "completed": 0},
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.name == "todo_write"
+    assert view.metadata is not None
+    assert view.metadata["kind"] == "todo_list"
+    assert format_tool_progress_summary("[Todo] 1 item", output) == "[Todo] 1 item  ok - 0/1 - One"
+
+
+def test_render_todo_board_shows_progress_and_current_task():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [
+                    {"id": "one", "content": "Inspect code", "status": "completed"},
+                    {"id": "two", "content": "Implement todo board", "status": "in_progress"},
+                    {"id": "three", "content": "Run tests", "status": "pending"},
+                ],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    console = Console(record=True, width=60, color_system=None)
+
+    board = render_todo_board(output, palette=DARK_PALETTE, width=60)
+    assert board is not None
+    console.print(board)
+    rendered = console.export_text()
+
+    assert "Todo List 1/3" in rendered
+    assert "Current: Implement todo board" in rendered
+    assert "[x] Inspect code" in rendered
+    assert "[*] Implement todo board" in rendered
+    assert "[ ] Run tests" in rendered
 
 
 def test_raw_tool_output_is_truncated():
@@ -648,7 +723,9 @@ def test_render_message_renders_system_skill_and_summary_labels():
     console = Console(record=True, width=120)
 
     console.print(render_message({"role": "system", "content": "Loaded skills:\nreview"}))
-    console.print(render_message({"role": "system", "content": "Earlier conversation was compacted."}))
+    console.print(
+        render_message({"role": "system", "content": "Earlier conversation was compacted."})
+    )
 
     rendered = console.export_text()
     assert "System Skill" in rendered
@@ -671,7 +748,9 @@ def test_render_message_renders_tool_outputs():
 
 
 def test_parse_diff_preview_removes_headers_and_classifies_lines():
-    lines = parse_diff_preview("--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n context\n-old\n+new")
+    lines = parse_diff_preview(
+        "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n context\n-old\n+new"
+    )
 
     assert lines == [
         DiffPreviewLine(marker=" ", content="context", kind="context", old_lineno=1, new_lineno=1),
@@ -743,7 +822,7 @@ def test_format_tool_call_summary_formats_write_without_content_body():
         json.dumps(
             {
                 "file_path": "/repo/src/lib.rs",
-                "content": "fn main() {\n    println!(\"hi\");\n}\n",
+                "content": 'fn main() {\n    println!("hi");\n}\n',
             }
         ),
         project_root="/repo",
@@ -759,7 +838,7 @@ def test_format_tool_call_summary_formats_modify_create_without_content_body():
         json.dumps(
             {
                 "file_path": "/repo/src/lib.rs",
-                "content": "fn main() {\n    println!(\"hi\");\n}\n",
+                "content": 'fn main() {\n    println!("hi");\n}\n',
             }
         ),
         project_root="/repo",

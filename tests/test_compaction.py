@@ -33,9 +33,19 @@ def test_prepare_compaction_items_preserves_recent_messages_and_tool_group():
 
 @pytest.mark.asyncio
 async def test_compact_session_generates_summary_archives_and_rewrites(monkeypatch, tmp_path):
-    async def fake_run_compaction_model(items, settings, *, provider=None, focus_instruction=None):
+    async def fake_run_compaction_model(
+        items,
+        settings,
+        *,
+        provider=None,
+        focus_instruction=None,
+        todo_state=None,
+    ):
         assert items == [{"role": "user", "content": "old"}]
         assert focus_instruction == "focus"
+        assert todo_state == [
+            {"id": "one", "content": "Continue implementation", "status": "in_progress"}
+        ]
         return "<analysis>hidden</analysis><summary>Important summary.</summary>", TokenUsage(
             completion_tokens=3,
             total_tokens=3,
@@ -56,6 +66,7 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
         last_usage_tokens=87_058,
         pending_tokens=0,
         last_usage_record_count=3,
+        todo_state=[{"id": "one", "content": "Continue implementation", "status": "in_progress"}],
     )
 
     result = await compact_session(
@@ -80,11 +91,21 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
     assert entry.latest_context_window_tokens == result.after_tokens
     assert session.latest_context_window_usage() is not None
     assert session.latest_context_window_usage().used_tokens == result.after_tokens
+    assert session.todo_state() == [
+        {"id": "one", "content": "Continue implementation", "status": "in_progress"}
+    ]
 
 
 @pytest.mark.asyncio
 async def test_compact_session_restores_archive_when_rewrite_fails(monkeypatch, tmp_path):
-    async def fake_run_compaction_model(items, settings, *, provider=None, focus_instruction=None):
+    async def fake_run_compaction_model(
+        items,
+        settings,
+        *,
+        provider=None,
+        focus_instruction=None,
+        todo_state=None,
+    ):
         return "summary", TokenUsage(completion_tokens=1, total_tokens=1)
 
     async def fail_replace_items(self, items, *, active_tokens=None):
@@ -154,7 +175,9 @@ async def test_ensure_context_ready_does_not_compact_after_short_latest_context_
     session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items([{"role": "user", "content": "large prompt"}])
     session.record_usage({"prompt_tokens": 900, "completion_tokens": 5, "total_tokens": 905})
-    await session.add_items([{"role": "assistant", "content": "answer"}, {"role": "user", "content": "hi"}])
+    await session.add_items(
+        [{"role": "assistant", "content": "answer"}, {"role": "user", "content": "hi"}]
+    )
     session.record_usage({"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22})
 
     readiness = await ensure_context_ready(

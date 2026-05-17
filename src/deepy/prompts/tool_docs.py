@@ -10,6 +10,7 @@ TOOL_DOC_FILES = (
     "AskUserQuestion.md",
     "WebSearch.md",
     "WebFetch.md",
+    "todo_write.md",
 )
 
 

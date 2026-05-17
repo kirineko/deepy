@@ -8,13 +8,21 @@ from typing import Any
 
 from deepy.llm.context import estimate_tokens_for_item
 from deepy.llm.replay import sanitize_sdk_items_for_replay
-from deepy.usage import ContextWindowUsage, TokenUsage, context_window_usage, merge_usage, normalize_usage
+from deepy.todos import normalize_persisted_todo_state, todo_state_from_tool_output
+from deepy.usage import (
+    ContextWindowUsage,
+    TokenUsage,
+    context_window_usage,
+    merge_usage,
+    normalize_usage,
+)
 from deepy.utils import json as json_utils
 
 SESSION_INDEX_VERSION = 2
 MAX_SESSION_INDEX_ENTRIES = 50
 CONTEXT_UNDERCOUNT_REPAIR_RATIO = 2
 CONTEXT_UNDERCOUNT_REPAIR_MIN_DELTA = 128
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,7 @@ class SessionEntry:
     last_usage_tokens: int | None = None
     pending_tokens: int = 0
     last_usage_record_count: int | None = None
+    todo_state: list[dict[str, str]] | None = None
 
 
 def project_code(project_root: Path) -> str:
@@ -123,7 +132,9 @@ class DeepyJsonlSession:
         with self.path.open("w", encoding="utf-8") as fh:
             for record in records:
                 fh.write(json_utils.dumps(record) + "\n")
-        self._loaded_items = [item for item in (_sdk_item_from_record(record) for record in records) if item]
+        self._loaded_items = [
+            item for item in (_sdk_item_from_record(record) for record in records) if item
+        ]
         state = self.context_token_state(records)
         self._touch_index(
             active_tokens=state.active_tokens,
@@ -144,6 +155,7 @@ class DeepyJsonlSession:
             last_usage_tokens=0,
             pending_tokens=0,
             last_usage_record_count=0,
+            todo_state=[],
         )
 
     def record_usage(self, usage: TokenUsage | dict[str, Any] | None) -> None:
@@ -186,7 +198,9 @@ class DeepyJsonlSession:
                         last_usage_record_count=None,
                         estimated=True,
                     )
-                pending_tokens = sum(_estimate_record_tokens(record) for record in source[last_usage_record_count:])
+                pending_tokens = sum(
+                    _estimate_record_tokens(record) for record in source[last_usage_record_count:]
+                )
                 checkpoint_tokens = last_usage_tokens + pending_tokens
                 estimated_tokens = self._estimate_active_tokens(source)
                 active_tokens = _repair_undercounted_context_tokens(
@@ -211,7 +225,9 @@ class DeepyJsonlSession:
 
     def latest_context_window_usage(self) -> ContextWindowUsage | None:
         previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
-        latest_tokens = _optional_int(previous.get("latestContextWindowTokens")) if previous else None
+        latest_tokens = (
+            _optional_int(previous.get("latestContextWindowTokens")) if previous else None
+        )
         if latest_tokens is not None:
             return ContextWindowUsage(
                 used_tokens=latest_tokens,
@@ -222,6 +238,13 @@ class DeepyJsonlSession:
         if isinstance(usage, dict) and usage.get("request_usage_entries"):
             return context_window_usage(usage)
         return None
+
+    def todo_state(self) -> list[dict[str, str]]:
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        if not previous:
+            return []
+        todo_state = normalize_persisted_todo_state(previous.get("todoState"))
+        return todo_state or []
 
     async def replace_items(
         self,
@@ -308,6 +331,7 @@ class DeepyJsonlSession:
         last_usage_tokens: int | None = None,
         pending_tokens: int | None = None,
         last_usage_record_count: int | None = None,
+        todo_state: object = _UNSET,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         index_path = self.path.parent / "sessions-index.json"
@@ -316,61 +340,64 @@ class DeepyJsonlSession:
         sessions = _index_sessions(raw)
         previous = next((entry for entry in sessions if entry.get("id") == self.session_id), {})
         sessions = [entry for entry in sessions if entry.get("id") != self.session_id]
-        sessions.insert(
-            0,
-            {
-                "id": self.session_id,
-                "path": self.path.name,
-                "activeTokens": active_tokens
-                if active_tokens is not None
-                else _coerce_int(previous.get("activeTokens"), 0),
-                **(
-                    {"latestContextWindowTokens": latest_context_window_tokens}
-                    if latest_context_window_tokens is not None
-                    else (
-                        {"latestContextWindowTokens": previous["latestContextWindowTokens"]}
-                        if "latestContextWindowTokens" in previous
-                        else {}
-                    )
-                ),
-                **(
-                    {"lastUsageTokens": last_usage_tokens}
-                    if last_usage_tokens is not None
-                    else (
-                        {"lastUsageTokens": previous["lastUsageTokens"]}
-                        if "lastUsageTokens" in previous
-                        else {}
-                    )
-                ),
-                **(
-                    {"pendingTokens": pending_tokens}
-                    if pending_tokens is not None
-                    else (
-                        {"pendingTokens": previous["pendingTokens"]}
-                        if "pendingTokens" in previous
-                        else {}
-                    )
-                ),
-                **(
-                    {"lastUsageRecordCount": last_usage_record_count}
-                    if last_usage_record_count is not None
-                    else (
-                        {"lastUsageRecordCount": previous["lastUsageRecordCount"]}
-                        if "lastUsageRecordCount" in previous
-                        else {}
-                    )
-                ),
-                "createdAt": _coerce_int(previous.get("createdAt"), now),
-                "updatedAt": now,
-                **({"usage": usage} if usage is not None else {}),
-                **(
-                    {"usage": previous["usage"]}
-                    if usage is None and isinstance(previous.get("usage"), dict)
+        entry = {
+            "id": self.session_id,
+            "path": self.path.name,
+            "activeTokens": active_tokens
+            if active_tokens is not None
+            else _coerce_int(previous.get("activeTokens"), 0),
+            **(
+                {"latestContextWindowTokens": latest_context_window_tokens}
+                if latest_context_window_tokens is not None
+                else (
+                    {"latestContextWindowTokens": previous["latestContextWindowTokens"]}
+                    if "latestContextWindowTokens" in previous
                     else {}
-                ),
-                **({"processes": previous["processes"]} if "processes" in previous else {}),
-            },
-        )
+                )
+            ),
+            **(
+                {"lastUsageTokens": last_usage_tokens}
+                if last_usage_tokens is not None
+                else (
+                    {"lastUsageTokens": previous["lastUsageTokens"]}
+                    if "lastUsageTokens" in previous
+                    else {}
+                )
+            ),
+            **(
+                {"pendingTokens": pending_tokens}
+                if pending_tokens is not None
+                else (
+                    {"pendingTokens": previous["pendingTokens"]}
+                    if "pendingTokens" in previous
+                    else {}
+                )
+            ),
+            **(
+                {"lastUsageRecordCount": last_usage_record_count}
+                if last_usage_record_count is not None
+                else (
+                    {"lastUsageRecordCount": previous["lastUsageRecordCount"]}
+                    if "lastUsageRecordCount" in previous
+                    else {}
+                )
+            ),
+            "createdAt": _coerce_int(previous.get("createdAt"), now),
+            "updatedAt": now,
+            **({"usage": usage} if usage is not None else {}),
+            **(
+                {"usage": previous["usage"]}
+                if usage is None and isinstance(previous.get("usage"), dict)
+                else {}
+            ),
+            **({"processes": previous["processes"]} if "processes" in previous else {}),
+        }
+        if todo_state is _UNSET:
+            if "todoState" in previous:
+                entry["todoState"] = previous["todoState"]
+        elif todo_state is not None:
+            entry["todoState"] = todo_state
+        sessions.insert(0, entry)
         payload = {
             "version": SESSION_INDEX_VERSION,
             "sessions": sessions[:MAX_SESSION_INDEX_ENTRIES],
@@ -379,10 +406,13 @@ class DeepyJsonlSession:
 
     def _touch_index_after_append(self, appended_items: list[dict[str, Any]]) -> None:
         previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        todo_state = _latest_todo_state_from_items(appended_items)
         if previous and _optional_int(previous.get("lastUsageTokens")) is not None:
             last_usage_tokens = _optional_int(previous.get("lastUsageTokens")) or 0
             previous_pending = _coerce_int(previous.get("pendingTokens"), 0)
-            pending_tokens = previous_pending + sum(estimate_tokens_for_item(item) for item in appended_items)
+            pending_tokens = previous_pending + sum(
+                estimate_tokens_for_item(item) for item in appended_items
+            )
             self._touch_index(
                 active_tokens=last_usage_tokens + pending_tokens,
                 last_usage_tokens=last_usage_tokens,
@@ -391,9 +421,13 @@ class DeepyJsonlSession:
                     previous.get("lastUsageRecordCount"),
                     max(0, len(self._load_records()) - len(appended_items)),
                 ),
+                todo_state=todo_state if todo_state is not None else _UNSET,
             )
             return
-        self._touch_index(active_tokens=self._estimate_active_tokens())
+        self._touch_index(
+            active_tokens=self._estimate_active_tokens(),
+            todo_state=todo_state if todo_state is not None else _UNSET,
+        )
 
 
 @dataclass(frozen=True)
@@ -436,6 +470,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 last_usage_tokens=_optional_int(item.get("lastUsageTokens")),
                 pending_tokens=_coerce_int(item.get("pendingTokens"), 0),
                 last_usage_record_count=_optional_int(item.get("lastUsageRecordCount")),
+                todo_state=normalize_persisted_todo_state(item.get("todoState")),
             )
         )
     return entries
@@ -460,7 +495,11 @@ def _index_sessions(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _entry_for_session(index_path: Path, session_id: str) -> dict[str, Any] | None:
     return next(
-        (entry for entry in _index_sessions(_read_index(index_path)) if entry.get("id") == session_id),
+        (
+            entry
+            for entry in _index_sessions(_read_index(index_path))
+            if entry.get("id") == session_id
+        ),
         None,
     )
 
@@ -471,6 +510,18 @@ def _sdk_item_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
         return None
     item = meta.get("sdk_item")
     return dict(item) if isinstance(item, dict) else None
+
+
+def _latest_todo_state_from_items(items: list[dict[str, Any]]) -> list[dict[str, str]] | None:
+    latest: list[dict[str, str]] | None = None
+    for item in items:
+        output = item.get("output")
+        if output is None and item.get("role") == "tool":
+            output = item.get("content")
+        todo_state = todo_state_from_tool_output(output)
+        if todo_state is not None:
+            latest = todo_state
+    return latest
 
 
 def _coerce_int(value: Any, default: int) -> int:

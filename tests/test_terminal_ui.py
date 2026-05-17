@@ -831,6 +831,39 @@ def test_print_stream_event_renders_shell_output_block():
     assert "stderr line" in rendered
 
 
+def test_print_stream_event_renders_todo_board_separate_from_footer():
+    console = Console(record=True, width=120)
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "todo_write",
+                    "output": "Todo list updated",
+                    "metadata": {
+                        "kind": "todo_list",
+                        "todos": [
+                            {"id": "one", "content": "Inspect code", "status": "completed"},
+                            {"id": "two", "content": "Implement board", "status": "in_progress"},
+                        ],
+                    },
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+    )
+
+    rendered = console.export_text()
+    assert "[Todo]  ok - 1/2 - Implement board" in rendered
+    assert "Todo List 1/2" in rendered
+    assert "Current: Implement board" in rendered
+    assert "model deepseek" not in rendered
+    assert "ctx " not in rendered
+
+
 def test_status_line_emphasizes_only_tool_label():
     line = terminal._status_line("[Read] Cargo.toml  ok", "green")
 

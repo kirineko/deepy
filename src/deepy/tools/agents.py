@@ -58,6 +58,10 @@ def build_function_tools(
         args = _tool_args(raw_input)
         return runtime.load_skill(_string_arg(args, "name"))
 
+    async def invoke_todo_write(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return runtime.todo_write(args.get("todos") if "todos" in args else None)
+
     web_search_description = (
         "Perform web searching using a natural language query. Use a small number of "
         "targeted searches, then stop and synthesize once enough sources are available; "
@@ -137,6 +141,17 @@ def build_function_tools(
             ),
             params_json_schema=LOAD_SKILL_SCHEMA,
             on_invoke_tool=invoke_load_skill,
+            strict_json_schema=False,
+        ),
+        FunctionTool(
+            name="todo_write",
+            description=(
+                "Create, replace, read, or clear the session todo list for complex multi-step "
+                "work. Use it for meaningful task tracking, not simple questions or one-step edits. "
+                "Provide the complete todo list when updating; omit todos only to read current state."
+            ),
+            params_json_schema=TODO_WRITE_SCHEMA,
+            on_invoke_tool=invoke_todo_write,
             strict_json_schema=False,
         ),
     ]
@@ -393,5 +408,37 @@ LOAD_SKILL_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["name"],
+    "additionalProperties": False,
+}
+TODO_WRITE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "todos": {
+            "type": "array",
+            "description": (
+                "Complete replacement todo list. Omit this property to read the current todo list; "
+                "pass an empty list to clear it."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Stable id for this todo item.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "User-facing task text.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed"],
+                    },
+                },
+                "required": ["id", "content", "status"],
+                "additionalProperties": False,
+            },
+        },
+    },
     "additionalProperties": False,
 }

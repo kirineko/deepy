@@ -11,6 +11,7 @@ from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
 
+from deepy.todos import normalize_todo_items, todo_counts
 from deepy.utils import json as json_utils
 from deepy.ui.styles import (
     DARK_PALETTE,
@@ -38,6 +39,7 @@ TOOL_DISPLAY_LABELS = {
     "write": "Write",
     "read": "Read",
     "shell": "Shell",
+    "todo_write": "Todo",
 }
 ROLE_TITLES = {
     "user": "You",
@@ -76,6 +78,7 @@ class ToolOutputView:
     diff: str | None = None
     diff_preview: str | None = None
     await_user_response: bool = False
+    metadata: dict[str, Any] | None = None
     raw: str = ""
 
 
@@ -121,6 +124,7 @@ def parse_tool_output(output: str) -> ToolOutputView:
         diff=diff,
         diff_preview=diff_preview,
         await_user_response=await_user_response,
+        metadata=metadata_dict,
         raw=output,
     )
 
@@ -201,7 +205,10 @@ def render_tool_diff_preview(
     syntax = _diff_preview_syntax(preview, palette)
     return Group(
         render_diff_preview_header(preview, tool_name=view.name, palette=palette),
-        *(render_diff_preview_line(line, palette=palette, width=width, syntax=syntax) for line in preview.lines),
+        *(
+            render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
+            for line in preview.lines
+        ),
     )
 
 
@@ -414,7 +421,9 @@ def build_thinking_summary(content: str, message_params: object | None = None) -
     return ""
 
 
-def build_tool_params_snippet(tool_function: object | None, *, project_root: str | None = None) -> str:
+def build_tool_params_snippet(
+    tool_function: object | None, *, project_root: str | None = None
+) -> str:
     tool_params = _string_key_dict(tool_function)
     if tool_params is None:
         return ""
@@ -458,7 +467,9 @@ def is_invisible_execution(content: str) -> bool:
         parsed = json_utils.loads(content)
     except json_utils.JSONDecodeError:
         return False
-    return isinstance(parsed, dict) and parsed.get("name") == "shell" and parsed.get("ok") is not True
+    return (
+        isinstance(parsed, dict) and parsed.get("name") == "shell" and parsed.get("ok") is not True
+    )
 
 
 def render_tool_output(
@@ -470,6 +481,9 @@ def render_tool_output(
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
     parts: list[Any] = [_render_tool_summary(view, palette)]
+    todo_board = render_todo_board(output, palette=palette, width=width)
+    if todo_board:
+        parts.append(todo_board)
     shell_output = render_shell_output_block(output, palette=palette)
     if shell_output:
         parts.append(shell_output)
@@ -477,6 +491,46 @@ def render_tool_output(
     if diff:
         parts.append(diff)
     return Group(*parts)
+
+
+def render_todo_board(
+    output: str,
+    *,
+    palette: UiPalette | None = None,
+    width: int | None = None,
+) -> Panel | None:
+    palette = palette or DARK_PALETTE
+    view = parse_tool_output(output)
+    if not view.metadata or view.metadata.get("kind") != "todo_list":
+        return None
+    todos, error = normalize_todo_items(view.metadata.get("todos"))
+    if error is not None or todos is None or not todos:
+        return None
+    counts = todo_counts(todos)
+    current = next((item for item in todos if item.status == "in_progress"), None)
+    if current is None:
+        current = next((item for item in todos if item.status == "pending"), None)
+    content_width = _todo_content_width(width)
+    lines = Text()
+    if current is not None:
+        lines.append("Current: ", style=f"bold {palette.info}")
+        lines.append(_truncate_cells(current.content, content_width), style=palette.info)
+        lines.append("\n")
+    for item in todos:
+        marker, style = _todo_marker_and_style(item.status, palette)
+        lines.append(f"{marker} ", style=style)
+        text = _truncate_cells(item.content, content_width)
+        item_style = f"strike {palette.muted}" if item.status == "completed" else style
+        lines.append(text, style=item_style)
+        lines.append("\n")
+    if lines.plain.endswith("\n"):
+        lines.rstrip()
+    return Panel(
+        lines,
+        title=f"Todo List {counts['completed']}/{counts['total']}",
+        border_style=palette.panel_border,
+        expand=False,
+    )
 
 
 def render_shell_output_block(
@@ -554,6 +608,37 @@ def _tool_label_line(text: str, *, style: str, bullet: bool = False) -> Text:
     return Text.assemble(*parts)
 
 
+def _todo_marker_and_style(status: str, palette: UiPalette) -> tuple[str, str]:
+    if status == "completed":
+        return "[x]", palette.success
+    if status == "in_progress":
+        return "[*]", palette.warning
+    return "[ ]", palette.muted
+
+
+def _todo_content_width(width: int | None) -> int:
+    if width is None or width <= 0:
+        return 80
+    # Account for panel border, padding, marker, and a small safety margin.
+    return max(16, min(100, width - 12))
+
+
+def _truncate_cells(text: str, width: int) -> str:
+    if width <= 0 or cell_len(text) <= width:
+        return text
+    suffix = "..."
+    available = max(1, width - len(suffix))
+    result = ""
+    used = 0
+    for char in text:
+        char_width = cell_len(char)
+        if used + char_width > available:
+            break
+        result += char
+        used += char_width
+    return result + suffix
+
+
 def _parse_hunk_header(line: str) -> tuple[int, int] | None:
     match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
     if not match:
@@ -586,6 +671,15 @@ def _line_number_text(value: int | None) -> str:
 def _tool_progress_detail(view: ToolOutputView) -> str:
     if view.error:
         return _truncate(view.error)
+    if view.metadata and view.metadata.get("kind") == "todo_list":
+        todos, error = normalize_todo_items(view.metadata.get("todos"))
+        if error is None and todos is not None:
+            counts = todo_counts(todos)
+            current = next((item for item in todos if item.status == "in_progress"), None)
+            if current is None:
+                current = next((item for item in todos if item.status == "pending"), None)
+            suffix = f" - {current.content}" if current is not None else ""
+            return _truncate(f"{counts['completed']}/{counts['total']}{suffix}")
     if view.await_user_response:
         return _truncate(_first_nonempty_line(view.output) or "")
     return ""
@@ -624,6 +718,14 @@ def _format_tool_params_snippet(
 ) -> str:
     if tool_name == "AskUserQuestion":
         return ""
+
+    if tool_name == "todo_write":
+        todos = args.get("todos")
+        if isinstance(todos, list):
+            count = len(todos)
+            label = "item" if count == 1 else "items"
+            return f"{count} {label}"
+        return "read current list"
 
     if tool_name in {"write", "modify"} and "content" in args:
         return _format_write_params_snippet(args, project_root=project_root)
@@ -699,7 +801,11 @@ def _sdk_tool_error_output(output: str) -> ToolOutputView | None:
 
 
 def _sdk_content_tool_output(payload: Any, *, raw: str) -> ToolOutputView | None:
-    is_error = bool(payload.get("isError") or payload.get("is_error")) if isinstance(payload, dict) else False
+    is_error = (
+        bool(payload.get("isError") or payload.get("is_error"))
+        if isinstance(payload, dict)
+        else False
+    )
     if _is_sdk_content_block(payload):
         content = payload
     else:

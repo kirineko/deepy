@@ -12,6 +12,7 @@ from deepy.config import Settings, load_settings
 from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import find_skill
 from deepy.mcp import DeepyMcpRuntime
+from deepy.todos import normalize_todo_items
 from deepy.tools import ToolRuntime
 from deepy.usage import TokenUsage, merge_usage, normalize_usage, usage_from_run_result
 from deepy.utils import json as json_utils
@@ -60,7 +61,15 @@ async def run_prompt_once(
     root = (project_root or Path.cwd()).resolve()
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
-    runtime = ToolRuntime(cwd=root, settings=resolved_settings)
+    session = (
+        DeepyJsonlSession.open(root, session_id) if session_id else DeepyJsonlSession.create(root)
+    )
+    initial_todos, _ = normalize_todo_items(session.todo_state())
+    runtime = ToolRuntime(
+        cwd=root,
+        settings=resolved_settings,
+        todo_items=initial_todos or [],
+    )
     created_mcp_runtime: DeepyMcpRuntime | None = None
     if mcp_runtime is None:
         created_mcp_runtime = DeepyMcpRuntime(resolved_settings, project_root=root)
@@ -75,11 +84,6 @@ async def run_prompt_once(
         loaded_skills=loaded_skills,
         mcp_servers=mcp_runtime.active_servers,
         preferred_mcp_web_search_tools=mcp_runtime.preferred_web_search_tools,
-    )
-    session = (
-        DeepyJsonlSession.open(root, session_id)
-        if session_id
-        else DeepyJsonlSession.create(root)
     )
     started_at = time.time()
     try:

@@ -8,6 +8,7 @@ from typing import Any, Literal
 from deepy.config import Settings
 from deepy.prompts.compact import build_compact_prompt, build_compact_summary_message
 from deepy.sessions.jsonl import DeepyJsonlSession
+from deepy.todos import todo_state_prompt_text
 from deepy.usage import TokenUsage, usage_from_run_result
 
 from .context import estimate_tokens_for_item, estimate_tokens_for_items
@@ -81,6 +82,7 @@ async def compact_session(
         settings,
         provider=provider,
         focus_instruction=focus_instruction,
+        todo_state=session.todo_state(),
     )
     replacement = sanitize_sdk_items_for_replay(
         [build_compact_summary_message(summary), *to_preserve]
@@ -124,9 +126,7 @@ async def ensure_context_ready(
     before_tokens = state.active_tokens + additional_tokens
     latest_context_usage = session.latest_context_window_usage()
     trigger_tokens = (
-        latest_context_usage.used_tokens
-        if latest_context_usage is not None
-        else before_tokens
+        latest_context_usage.used_tokens if latest_context_usage is not None else before_tokens
     )
     compacted: CompactionResult | None = None
     if trigger_tokens >= settings.context.resolved_compact_threshold:
@@ -144,9 +144,7 @@ async def ensure_context_ready(
     else:
         after_context_usage = session.latest_context_window_usage()
         fit_tokens = (
-            after_context_usage.used_tokens
-            if after_context_usage is not None
-            else after_tokens
+            after_context_usage.used_tokens if after_context_usage is not None else after_tokens
         )
     if fit_tokens + settings.context.reserved_context_tokens >= settings.context.window_tokens:
         raise ContextCompactionError(
@@ -198,11 +196,16 @@ async def run_compaction_model(
     *,
     provider: ProviderBundle | None = None,
     focus_instruction: str | None = None,
+    todo_state: list[dict[str, str]] | None = None,
 ) -> tuple[str, TokenUsage]:
     from agents import Agent, RunConfig, Runner
 
     resolved_provider = provider or build_provider_bundle(settings)
-    prompt = build_compact_prompt(items, focus_instruction=focus_instruction)
+    prompt = build_compact_prompt(
+        items,
+        focus_instruction=focus_instruction,
+        todo_context=todo_state_prompt_text(todo_state or []),
+    )
     agent = Agent(
         name="Deepy Context Compactor",
         instructions="Create a compact continuation summary. Do not call tools.",
@@ -254,7 +257,10 @@ def _expand_preserve_start_for_tool_group(items: list[dict[str, Any]], preserve_
     if not needed_call_ids:
         return preserve_start
     for index in range(preserve_start - 1, -1, -1):
-        if items[index].get("type") == "function_call" and _call_id(items[index]) in needed_call_ids:
+        if (
+            items[index].get("type") == "function_call"
+            and _call_id(items[index]) in needed_call_ids
+        ):
             preserve_start = index
             needed_call_ids.discard(_call_id(items[index]))
             if not needed_call_ids:

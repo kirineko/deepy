@@ -94,6 +94,7 @@ def build_compact_prompt(
     session_messages: list[dict[str, Any]],
     *,
     focus_instruction: str | None = None,
+    todo_context: str | None = None,
 ) -> str:
     jsonl = "\n".join(_compact_message_json(message) for message in session_messages)
     focus = ""
@@ -104,7 +105,15 @@ def build_compact_prompt(
             "dropping current task state:\n"
             f"{focus_instruction.strip()}"
         )
-    return f"{COMPACT_PROMPT_BASE}{focus}\n\nconversation below:\n\n```jsonl\n{jsonl}\n```"
+    todo = ""
+    if todo_context and todo_context.strip():
+        todo = (
+            "\n\nCurrent todo state:\n"
+            "Preserve this active task plan in the summary so the next model turn can continue "
+            "or reconcile progress:\n"
+            f"{todo_context.strip()}"
+        )
+    return f"{COMPACT_PROMPT_BASE}{focus}{todo}\n\nconversation below:\n\n```jsonl\n{jsonl}\n```"
 
 
 def build_compact_summary_message(summary: str) -> dict[str, str]:

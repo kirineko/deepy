@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from deepy.config import Settings
 from deepy.prompts import build_system_prompt
+from deepy.prompts.compact import build_compact_prompt
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import load_project_rules
 from deepy.prompts.runtime_context import build_runtime_context
@@ -242,7 +243,12 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Do not switch visible thinking/reasoning to English for Chinese requests" in prompt
     assert "clarification would materially improve the result" in prompt
     assert "reasonable assumption" in prompt
+    assert "Use `todo_write` for complex multi-step work" in prompt
+    assert "Skip `todo_write` for simple questions" in prompt
+    assert "Do not treat it as subagent" in prompt
     assert "## modify" in prompt
+    assert "## todo_write" in prompt
+    assert "plan approval" in prompt
     assert "## AskUserQuestion" in prompt
     assert "范围不清楚" in prompt
     assert "用户使用中文提问" in prompt
@@ -252,6 +258,21 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Skill protocol:" in prompt
     assert "call `load_skill`" in prompt
     assert "Runtime context here." in prompt
+
+
+def test_compact_prompt_includes_todo_context():
+    prompt = build_compact_prompt(
+        [{"role": "user", "content": "old"}],
+        todo_context=(
+            "Active todo plan:\n"
+            "- Progress: 1/2 completed\n"
+            "- [in_progress] implement: Implement todo board"
+        ),
+    )
+
+    assert "Current todo state:" in prompt
+    assert "Active todo plan:" in prompt
+    assert "Implement todo board" in prompt
 
 
 def test_system_prompt_includes_powershell_tool_guidance(tmp_path):
