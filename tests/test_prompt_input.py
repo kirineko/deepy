@@ -31,15 +31,21 @@ from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import prompt_toolbar
 from deepy.ui.prompt_input import prompt_for_input
+from deepy.ui.prompt_input import prompt_style
 from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
 from deepy.ui.slash_commands import SlashCommandItem
+from deepy.ui.status_footer import StatusFooter, StatusFooterSegment
 
 
 def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _toolbar_text(toolbar: object) -> str:
+    return "".join(text for _style, text in toolbar) if isinstance(toolbar, list) else str(toolbar)
 
 
 def _skill(name: str, description: str) -> SkillInfo:
@@ -276,25 +282,49 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
 def test_prompt_toolbar_uses_cross_platform_newline_help():
     assert prompt_toolbar("win32") == PROMPT_TOOLBAR
     assert prompt_toolbar("darwin") == PROMPT_TOOLBAR
-    assert PROMPT_TOOLBAR == [("class:toolbar.help", "Ctrl+J newline · Ctrl+D twice exit")]
-    assert "Ctrl+J" in str(PROMPT_TOOLBAR)
+    assert PROMPT_TOOLBAR == [("class:toolbar.help", "newline: ctrl+j")]
+    assert "ctrl+j" in str(PROMPT_TOOLBAR)
+    assert "Ctrl+D" not in str(PROMPT_TOOLBAR)
     assert "Ctrl+Enter" not in str(PROMPT_TOOLBAR)
     assert "Shift+Enter" not in str(PROMPT_TOOLBAR)
 
 
-def test_build_prompt_toolbar_shows_status_and_platform_help():
-    status = "model deepseek-v4-pro · thinking max · cwd ~/repo · context 100 / 1,000 (10.0%)"
+def test_build_prompt_toolbar_renders_structured_status_without_exit_help():
+    status = StatusFooter(
+        (
+            StatusFooterSegment("model deepseek-v4-pro[max]", "identity"),
+            StatusFooterSegment("cwd ~/repo", "metadata"),
+            StatusFooterSegment("ctx 100/1K (10.0%, 900 left)", "context"),
+        )
+    )
     toolbar = build_prompt_toolbar(status, platform_name="win32")
 
     assert isinstance(toolbar, list)
     assert toolbar == [
-        ("class:toolbar.context", status),
+        ("class:toolbar.title", "model"),
+        ("class:toolbar.metadata", " deepseek-v4-pro[max]"),
         ("class:toolbar.separator", " · "),
-        ("class:toolbar.help", "Ctrl+J newline · Ctrl+D twice exit"),
+        ("class:toolbar.title", "cwd"),
+        ("class:toolbar.metadata", " ~/repo"),
+        ("class:toolbar.separator", " · "),
+        ("class:toolbar.title", "ctx"),
+        ("class:toolbar.context", " 100/1K (10.0%, 900 left)"),
+        ("class:toolbar.separator", " · "),
+        ("class:toolbar.title", "newline"),
+        ("class:toolbar.metadata", ": ctrl+j"),
     ]
-    assert "Ctrl+J" in str(toolbar)
+    assert "newline: ctrl+j" in _toolbar_text(toolbar)
+    assert "Ctrl+D twice exit" not in str(toolbar)
     assert "Ctrl+Enter" not in str(toolbar)
     assert "Shift+Enter" not in str(toolbar)
+
+
+def test_prompt_toolbar_style_disables_reverse_background():
+    rules = dict(prompt_style().style_rules)
+
+    assert rules["bottom-toolbar"].startswith("noreverse bg:#161821")
+    assert rules["toolbar.title"].startswith("noreverse bg:#161821")
+    assert rules["toolbar.separator"].startswith("noreverse bg:#161821")
 
 
 def test_build_prompt_key_bindings_registers_escape_interrupt():

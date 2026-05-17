@@ -67,7 +67,6 @@ from deepy.ui.local_command import (
     shell_tool_result_json,
 )
 from deepy.ui.message_view import (
-    build_thinking_summary,
     format_tool_display_label,
     format_tool_call_summary,
     format_tool_progress_summary,
@@ -91,6 +90,7 @@ from deepy.ui.skill_picker import (
     show_skill_detail_view,
 )
 from deepy.ui.slash_commands import build_slash_commands
+from deepy.ui.status_footer import StatusFooter, StatusFooterSegment
 from deepy.ui.styles import (
     DARK_PALETTE,
     UiPalette,
@@ -167,7 +167,7 @@ def run_interactive(
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
-    context_status = _format_context_footer(
+    context_footer = _build_status_footer(
         session_id,
         project_root=root,
         settings=settings,
@@ -176,7 +176,7 @@ def run_interactive(
     async_runner = asyncio.Runner()
     mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
     async_runner.run(mcp_runtime.connect())
-    context_status = _format_context_footer(
+    context_footer = _build_status_footer(
         session_id,
         project_root=root,
         settings=settings,
@@ -202,7 +202,7 @@ def run_interactive(
             try:
                 text = prompt_for_input(
                     prompt_session,
-                    bottom_toolbar=build_prompt_toolbar(context_status),
+                    bottom_toolbar=build_prompt_toolbar(context_footer),
                 )
             except EOFError:
                 if ctrl_d_exit_pending:
@@ -236,8 +236,9 @@ def run_interactive(
                     session_id,
                     settings=settings,
                     palette=palette,
+                    mcp_runtime=mcp_runtime,
                 )
-                context_status = _format_context_footer(
+                context_footer = _build_status_footer(
                     session_id,
                     project_root=root,
                     settings=settings,
@@ -295,7 +296,7 @@ def run_interactive(
                         session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-                    context_status = _format_context_footer(
+                    context_footer = _build_status_footer(
                         summary.session_id,
                         project_root=root,
                         settings=settings,
@@ -319,7 +320,7 @@ def run_interactive(
                     session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-                    context_status = _format_context_footer(
+                    context_footer = _build_status_footer(
                         summary.session_id,
                         project_root=root,
                         settings=settings,
@@ -344,8 +345,8 @@ def run_interactive(
                 if slash.name in {"skills", "theme", "reset", "model"}:
                     prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
                 session_id = next_session
-                if slash.name in {"new", "resume", "reset", "model", "compact"}:
-                    context_status = _format_context_footer(
+                if slash.name in {"new", "resume", "reset", "model", "compact", "skills", "theme", "mcp"}:
+                    context_footer = _build_status_footer(
                         session_id,
                         project_root=root,
                         settings=settings,
@@ -394,7 +395,7 @@ def run_interactive(
                 session_id = summary.session_id
             _print_assistant_output(output, summary.output, palette=palette)
             _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
-            context_status = _format_context_footer(
+            context_footer = _build_status_footer(
                 summary.session_id,
                 project_root=root,
                 settings=settings,
@@ -465,6 +466,13 @@ def _run_once_with_status(
     original_should_interrupt = kwargs.pop("should_interrupt", None)
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
+    settings = kwargs.get("settings")
+    footer = _build_status_footer(
+        kwargs.get("session_id"),
+        project_root=project_root if isinstance(project_root, Path) else None,
+        settings=settings if isinstance(settings, Settings) else None,
+        mcp_runtime=kwargs.get("mcp_runtime"),
+    )
     renderer: TerminalStreamRenderer | None = None
     started_at = time.monotonic()
     interrupt_requested = threading.Event()
@@ -479,13 +487,19 @@ def _run_once_with_status(
     kwargs["should_interrupt"] = should_interrupt
 
     active_palette = palette if isinstance(palette, UiPalette) else DARK_PALETTE
-    with console.status(_working_status_text(started_at, palette=active_palette), spinner="dots") as status:
+    with _status_display(
+        console,
+        _working_status_text(started_at, palette=active_palette, footer=footer),
+        footer.to_rich_text(active_palette) if footer.segments else None,
+        palette=active_palette,
+    ) as status:
         renderer = TerminalStreamRenderer(
             console,
             project_root=project_root_text,
             status=status,
             status_started_at=started_at,
             palette=active_palette,
+            footer=footer,
         )
         stop_status_refresh = threading.Event()
         status_thread = threading.Thread(
@@ -523,6 +537,7 @@ def _handle_local_command(
     *,
     settings: Settings,
     palette: UiPalette | None = None,
+    mcp_runtime: DeepyMcpRuntime | None = None,
 ) -> str | None:
     palette = palette or resolve_ui_palette(settings.ui.theme)
     if not command_input.command:
@@ -532,9 +547,27 @@ def _handle_local_command(
     _print_user_input(console, command_input.raw_text, palette=palette)
     started_at = time.monotonic()
     interrupt_requested = threading.Event()
-    with console.status(
-        _local_command_status_text(command_input.command, started_at, palette=palette),
-        spinner="dots",
+    with _status_display(
+        console,
+        _local_command_status_text(
+            command_input.command,
+            started_at,
+            palette=palette,
+            footer=_build_status_footer(
+                current_session_id,
+                project_root=project_root,
+                settings=settings,
+                mcp_runtime=mcp_runtime,
+                active_work="running local command",
+            ),
+        ),
+        _build_status_footer(
+            current_session_id,
+            project_root=project_root,
+            settings=settings,
+            mcp_runtime=mcp_runtime,
+        ).to_rich_text(palette),
+        palette=palette,
     ):
         with _esc_interrupt_watcher(interrupt_requested):
             result = run_local_command(
@@ -666,11 +699,13 @@ class TerminalStreamRenderer:
         status: Any | None = None,
         status_started_at: float | None = None,
         palette: UiPalette | None = None,
+        footer: StatusFooter | None = None,
     ) -> None:
         self.console = console
         self.project_root = project_root
         self.status = status
         self.palette = palette or DARK_PALETTE
+        self.footer = footer
         self.status_started_at = (
             status_started_at if status_started_at is not None else time.monotonic()
         )
@@ -700,15 +735,14 @@ class TerminalStreamRenderer:
                 ),
             )
             self.reasoning_started = True
-        self.reasoning_buffer += text
-        self._print_stable_reasoning()
-        summary = build_thinking_summary(self.reasoning_buffer or text)
-        if self.status is not None and summary:
-            self.update_status(f"Thinking {summary}")
+        self.reasoning_buffer = "printed"
+        self.console.print(Text(text, style=self.palette.muted), end="")
+        if self.status is not None and self.status_detail != "thinking":
+            self.update_status("thinking")
 
     def set_tool_status(self, summary: str) -> None:
         if self.status is not None and summary:
-            self.update_status(f"Running {summary}")
+            self.update_status(f"tool {summary}")
 
     def update_status(self, detail: str | None = None) -> None:
         if detail is not None:
@@ -719,22 +753,15 @@ class TerminalStreamRenderer:
                     self.status_started_at,
                     self.status_detail,
                     palette=self.palette,
+                    footer=self.footer,
                 )
             )
 
     def flush(self) -> None:
-        self._print_stable_reasoning(force=True)
+        if self.reasoning_buffer:
+            self.console.print()
         self.reasoning_started = False
         self.reasoning_buffer = ""
-
-    def _print_stable_reasoning(self, *, force: bool = False) -> None:
-        text, self.reasoning_buffer = _split_stable_reasoning_text(
-            self.reasoning_buffer,
-            force=force,
-        )
-        if text:
-            self.console.print(Text(text.rstrip("\n"), style=self.palette.muted))
-
 
 def _handle_slash_command(
     command: SlashCommand,
@@ -1856,32 +1883,55 @@ def _format_context_footer(
     settings: Settings | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
 ) -> str:
-    if settings is None:
-        return ""
+    return _build_status_footer(
+        session_id,
+        project_root=project_root,
+        settings=settings,
+        mcp_runtime=mcp_runtime,
+    ).plain
 
-    parts = [
-        f"model {settings.model.name}",
-        f"thinking {settings.model.reasoning_mode}",
+
+def _build_status_footer(
+    session_id: str | None,
+    *,
+    project_root: Path | None = None,
+    settings: Settings | None = None,
+    mcp_runtime: DeepyMcpRuntime | None = None,
+    active_work: str | None = None,
+) -> StatusFooter:
+    if settings is None:
+        return StatusFooter(())
+
+    segments = [
+        StatusFooterSegment(
+            f"model {settings.model.name}[{settings.model.reasoning_mode}]",
+            "identity",
+        ),
     ]
     if project_root is not None:
-        parts.append(f"cwd {format_home_relative_path(project_root)}")
+        segments.append(StatusFooterSegment(f"cwd {format_home_relative_path(project_root)}", "metadata"))
         if has_agents_instructions(project_root):
-            parts.append("AGENTS.md loaded")
+            segments.append(StatusFooterSegment("[AGENTS.md]", "loaded"))
         if mcp_runtime is not None and mcp_runtime.active_servers:
-            parts.append(f"MCP {len(mcp_runtime.active_servers)} server(s)")
+            segments.append(StatusFooterSegment(f"mcp {len(mcp_runtime.active_servers)}", "loaded"))
     else:
-        parts.append("cwd unknown")
+        segments.append(StatusFooterSegment("cwd unknown", "metadata"))
 
     window_tokens = settings.context.window_tokens
     compact_threshold = settings.context.resolved_compact_threshold
     if window_tokens <= 0:
-        parts.append("context unknown")
-        return " · ".join(parts)
+        segments.append(StatusFooterSegment("ctx unknown", "context"))
+        return StatusFooter(tuple(segments)).with_active(active_work)
 
     session_entry = _session_entry(project_root, session_id)
-    parts.append(_format_context_window_status(session_entry, window_tokens, compact_threshold))
+    segments.append(
+        StatusFooterSegment(
+            _format_context_window_status(session_entry, window_tokens, compact_threshold),
+            "context",
+        )
+    )
 
-    return " · ".join(parts)
+    return StatusFooter(tuple(segments)).with_active(active_work)
 
 
 def _format_context_window_status(
@@ -1901,11 +1951,11 @@ def _format_context_window_status(
         )
         used_tokens = usage.used_tokens if usage is not None else None
     if used_tokens is None:
-        return f"ctx win unknown/{window_text}"
+        return f"ctx unknown/{window_text}"
     remaining_tokens = max(window_tokens - used_tokens, 0)
     percentage = used_tokens / window_tokens * 100
     status = (
-        f"ctx win {_format_token_count_short(used_tokens)}/{window_text} "
+        f"ctx {_format_token_count_short(used_tokens)}/{window_text} "
         f"({percentage:.1f}%, {_format_token_count_short(remaining_tokens)} left)"
     )
     if compact_threshold > 0 and used_tokens >= compact_threshold:
@@ -1947,8 +1997,191 @@ def _refresh_working_status(
     renderer: TerminalStreamRenderer,
     stop_event: threading.Event,
 ) -> None:
-    while not stop_event.wait(1):
+    while not stop_event.wait(0.2):
         renderer.update_status()
+
+
+@contextlib.contextmanager
+def _status_display(
+    console: Console,
+    initial_status: Text,
+    footer_status: Text | None = None,
+    *,
+    palette: UiPalette,
+):
+    if _should_use_bottom_status_overlay(console):
+        status = _TerminalBottomStatus(console, footer_status=footer_status, palette=palette)
+        status.start()
+        status.update(initial_status)
+        try:
+            yield status
+        finally:
+            status.clear()
+        return
+
+    yield _SilentStatus()
+
+
+def _should_use_bottom_status_overlay(console: Console) -> bool:
+    isatty = getattr(console.file, "isatty", None)
+    return bool(callable(isatty) and isatty())
+
+
+class _TerminalBottomStatus:
+    def __init__(
+        self,
+        console: Console,
+        *,
+        footer_status: Text | None,
+        palette: UiPalette,
+    ) -> None:
+        self.console = console
+        self.footer_status = footer_status
+        self.palette = palette
+        self.rows = 0
+        self.columns = 0
+
+    @property
+    def _reserved_lines(self) -> int:
+        return 2 if self.footer_status is not None else 1
+
+    def start(self) -> None:
+        self.columns, self.rows = shutil.get_terminal_size((80, 24))
+        if self.rows <= self._reserved_lines:
+            return
+        scroll_bottom = self.rows - self._reserved_lines
+        self.console.file.write(f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8")
+        self._write_footer()
+        self.console.file.flush()
+
+    def update(self, status: Text) -> None:
+        columns, rows = shutil.get_terminal_size((80, 24))
+        self.columns = columns
+        self.rows = rows
+        if rows <= self._reserved_lines:
+            return
+        runtime_row = rows - self._reserved_lines + 1
+        self._write_line(runtime_row, status.plain, _terminal_runtime_status_style(self.palette))
+        self._write_footer()
+        self.console.file.flush()
+
+    def clear(self) -> None:
+        columns, rows = shutil.get_terminal_size((80, 24))
+        self.columns = columns
+        self.rows = rows
+        if rows <= self._reserved_lines:
+            return
+        self.console.file.write("\x1b7\x1b[r")
+        for row in range(rows - self._reserved_lines + 1, rows + 1):
+            self.console.file.write(f"\x1b[{row};1H\x1b[2K")
+        self.console.file.write("\x1b8")
+        self.console.file.flush()
+
+    def _write_footer(self) -> None:
+        if self.footer_status is None or self.rows <= self._reserved_lines:
+            return
+        self._write_text_line(self.rows, self.footer_status)
+
+    def _write_line(self, row: int, text: str, style: str) -> None:
+        width = max(self.columns - 1, 1)
+        line = _truncate_status_line(text, max_width=width)
+        padded = line.ljust(width)
+        self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K{style}{padded}\x1b[0m\x1b8")
+
+    def _write_text_line(self, row: int, text: Text) -> None:
+        width = max(self.columns - 1, 1)
+        plain = text.plain
+        truncated = len(plain) > width
+        body_width = max(width - 1, 0) if truncated else min(len(plain), width)
+        background = _hex_color(self.palette.toolbar_background)
+        default_style = _terminal_text_style(self.palette.toolbar_metadata, background=background)
+
+        self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K")
+        cursor = 0
+        for span in sorted(text.spans, key=lambda item: item.start):
+            start = max(span.start, 0)
+            end = min(span.end, body_width)
+            if end <= cursor or start >= body_width:
+                continue
+            if start > cursor:
+                self.console.file.write(f"{default_style}{plain[cursor:start]}")
+            self.console.file.write(
+                f"{_terminal_text_style(str(span.style), background=background)}{plain[start:end]}"
+            )
+            cursor = end
+        if cursor < body_width:
+            self.console.file.write(f"{default_style}{plain[cursor:body_width]}")
+        if truncated and width > 0:
+            self.console.file.write(f"{default_style}…")
+        padding = width - len(_truncate_status_line(plain, max_width=width))
+        if padding > 0:
+            self.console.file.write(f"{default_style}{' ' * padding}")
+        self.console.file.write("\x1b[0m\x1b8")
+
+
+class _SilentStatus:
+    def update(self, status: Text) -> None:
+        return None
+
+
+def _terminal_status_style(palette: UiPalette) -> str:
+    return _terminal_footer_status_style(palette)
+
+
+def _terminal_footer_status_style(palette: UiPalette) -> str:
+    foreground = _hex_color(palette.toolbar_metadata)
+    background = _hex_color(palette.toolbar_background)
+    return _terminal_ansi_style(foreground=foreground, background=background)
+
+
+def _terminal_runtime_status_style(palette: UiPalette) -> str:
+    foreground = _hex_color(palette.toolbar_background) or "#161821"
+    background = _hex_color(palette.warning) or "#facc15"
+    return _terminal_ansi_style(foreground=foreground, background=background, bold=True)
+
+
+def _terminal_text_style(style: str, *, background: str = "") -> str:
+    parts = style.split()
+    foreground = _hex_color(style)
+    return _terminal_ansi_style(
+        foreground=foreground,
+        background=background,
+        bold="bold" in parts,
+    )
+
+
+def _terminal_ansi_style(
+    *,
+    foreground: str = "",
+    background: str = "",
+    bold: bool = False,
+) -> str:
+    codes: list[str] = []
+    codes.append("1" if bold else "22")
+    if foreground:
+        codes.append(_ansi_rgb("38", foreground))
+    if background:
+        codes.append(_ansi_rgb("48", background))
+    return f"\x1b[{';'.join(codes)}m" if codes else ""
+
+
+def _hex_color(style: str) -> str:
+    return next((part for part in style.split() if part.startswith("#") and len(part) == 7), "")
+
+
+def _ansi_rgb(prefix: str, color: str) -> str:
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    return f"{prefix};2;{red};{green};{blue}"
+
+
+def _truncate_status_line(text: str, *, max_width: int) -> str:
+    if len(text) <= max_width:
+        return text
+    if max_width <= 1:
+        return text[:max_width]
+    return f"{text[: max_width - 1]}…"
 
 
 def _working_status_text(
@@ -1956,9 +2189,17 @@ def _working_status_text(
     detail: str = "",
     *,
     palette: UiPalette | None = None,
+    footer: StatusFooter | None = None,
 ) -> Text:
     palette = palette or DARK_PALETTE
     elapsed = _format_duration_ms(int((time.monotonic() - started_at) * 1000)) or "0s"
+    if footer is not None and footer.segments:
+        return _runtime_status_text(
+            elapsed=elapsed,
+            detail=detail or "status working",
+            spinner=_runtime_spinner_frame(started_at),
+            palette=palette,
+        )
     text = Text.assemble(
         ("Working ", f"bold {palette.muted}"),
         (f"({elapsed} · esc to interrupt)", palette.muted),
@@ -1974,15 +2215,63 @@ def _local_command_status_text(
     started_at: float,
     *,
     palette: UiPalette | None = None,
+    footer: StatusFooter | None = None,
 ) -> Text:
     palette = palette or DARK_PALETTE
     elapsed = _format_duration_ms(int((time.monotonic() - started_at) * 1000)) or "0s"
-    return Text.assemble(
+    if footer is not None and footer.segments:
+        text = _runtime_status_text(
+            elapsed=elapsed,
+            detail="local command",
+            spinner=_runtime_spinner_frame(started_at),
+            palette=palette,
+        )
+        text.append(" · ", style=palette.toolbar_separator)
+        text.append(command, style=palette.toolbar_metadata)
+        return text
+    text = Text.assemble(
         ("Running local command ", f"bold {palette.muted}"),
         (f"({elapsed})", palette.muted),
-        (" · ", palette.muted),
-        (command, palette.muted),
     )
+    text.append(" · ", style=palette.muted)
+    text.append(command, style=palette.muted)
+    return text
+
+
+def _runtime_status_text(
+    *,
+    elapsed: str,
+    detail: str,
+    spinner: str = "",
+    palette: UiPalette,
+) -> Text:
+    parts: list[tuple[str, str]] = []
+    style = _runtime_text_style(palette)
+    if spinner:
+        parts.extend([(spinner, style), (" ", style)])
+    parts.extend(
+        [
+            ("time ", style),
+            (elapsed, style),
+            (" · ", style),
+            ("esc to interrupt", style),
+        ]
+    )
+    text = Text.assemble(*parts)
+    if detail:
+        text.append(" · ", style=style)
+        text.append(detail, style=style)
+    return text
+
+
+def _runtime_text_style(palette: UiPalette) -> str:
+    return f"bold {palette.toolbar_background}"
+
+
+def _runtime_spinner_frame(started_at: float) -> str:
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    index = int(max(0.0, time.monotonic() - started_at) * 10) % len(frames)
+    return frames[index]
 
 
 def _format_duration_ms(duration_ms: int) -> str:
@@ -2109,20 +2398,6 @@ def _format_tool_output_debug(output: str) -> str:
     except json_utils.JSONDecodeError:
         return output
     return json_utils.dumps_pretty(parsed)
-
-
-_REASONING_BUFFER_TARGET_CHARS = 180
-
-
-def _split_stable_reasoning_text(text: str, *, force: bool = False) -> tuple[str, str]:
-    if force:
-        return text, ""
-    newline_index = text.rfind("\n")
-    if newline_index >= 0:
-        return text[: newline_index + 1], text[newline_index + 1 :]
-    if len(text) >= _REASONING_BUFFER_TARGET_CHARS:
-        return text, ""
-    return "", text
 
 
 def _status_line(text: str, style: str) -> Text:

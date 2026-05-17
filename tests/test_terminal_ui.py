@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from deepy.ui.local_command import LocalCommandResult
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.skill_picker import SkillMenuAction
 from deepy.ui.terminal import _collect_pending_question_response
+from deepy.ui.terminal import _build_status_footer
 from deepy.ui.terminal import _format_context_footer
 from deepy.ui.terminal import _handle_slash_command
 from deepy.ui.terminal import _print_assistant_output
@@ -34,7 +36,12 @@ from deepy.ui.terminal import _format_token_count_short
 from deepy.ui.terminal import _tool_output_text
 from deepy.ui.terminal import _run_once_with_status
 from deepy.ui.terminal import _working_status_text
+from deepy.ui.styles import LIGHT_PALETTE
 from deepy.utils import json as json_utils
+
+
+def _toolbar_text(toolbar: object) -> str:
+    return "".join(text for _style, text in toolbar) if isinstance(toolbar, list) else str(toolbar)
 
 
 def test_terminal_import_does_not_require_termios():
@@ -908,6 +915,45 @@ def test_terminal_stream_renderer_keeps_reasoning_visible_under_status_refresh()
     assert "中\n文" not in rendered
 
 
+def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_path):
+    class FakeStatus:
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    started_at = time.monotonic()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=started_at,
+        footer=footer,
+    )
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="第一段很长的思考内容。"))
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="第二段仍然是正文，不应该进入 footer。"))
+    renderer.flush()
+
+    rendered = console.export_text()
+    assert "第一段很长的思考内容。" in rendered
+    assert "第二段仍然是正文，不应该进入 footer。" in rendered
+    assert len(status.updates) == 1
+    assert "thinking" in status.updates[0]
+    assert "第一段很长的思考内容" not in status.updates[0]
+    assert "第二段仍然是正文" not in status.updates[0]
+
+
 def test_status_slash_command_prints_status(tmp_path):
     console = Console(record=True, width=200)
 
@@ -1380,6 +1426,168 @@ def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
     assert "Running read README.md" in rendered
 
 
+def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path):
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+        active_work="thinking",
+    )
+
+    rendered = _working_status_text(time.monotonic(), "running read README.md", footer=footer).plain
+
+    assert rendered[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    assert "time 0s" in rendered
+    assert "esc to interrupt" in rendered
+    assert "running read README.md" in rendered
+    assert "model deepseek-v4-pro[max]" not in rendered
+    assert f"cwd {tmp_path}" not in rendered
+    assert "ctx unknown/1K" not in rendered
+    assert "Working (" not in rendered
+    assert "model " not in rendered
+    assert "ctx win" not in rendered
+
+
+def test_runtime_spinner_frame_advances(monkeypatch):
+    monkeypatch.setattr(terminal.time, "monotonic", lambda: 10.0)
+    first = terminal._runtime_spinner_frame(10.0)
+    monkeypatch.setattr(terminal.time, "monotonic", lambda: 10.2)
+    second = terminal._runtime_spinner_frame(10.0)
+
+    assert first in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    assert second in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    assert first != second
+
+
+def test_light_runtime_footer_uses_completed_prompt_background():
+    runtime_style = terminal._terminal_runtime_status_style(LIGHT_PALETTE)
+    footer_style = terminal._terminal_footer_status_style(LIGHT_PALETTE)
+
+    assert "48;2;161;98;7" in runtime_style
+    assert "48;2;216;216;242" in footer_style
+    assert "48;2;226;232;240" not in footer_style
+    assert terminal._runtime_status_text(
+        elapsed="0s",
+        detail="status working",
+        spinner="⠋",
+        palette=LIGHT_PALETTE,
+    ).plain.startswith("⠋ time 0s")
+
+
+def test_local_command_status_text_preserves_compact_footer(tmp_path):
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        active_work="running local command",
+    )
+
+    rendered = terminal._local_command_status_text(
+        "printf ok",
+        time.monotonic(),
+        footer=footer,
+    ).plain
+
+    assert "time 0s" in rendered
+    assert "esc to interrupt" in rendered
+    assert "local command" in rendered
+    assert "model deepseek-v4-pro[max]" not in rendered
+    assert "ctx unknown/2K" not in rendered
+    assert "printf ok" in rendered
+    assert "Running local command (" not in rendered
+
+
+def test_status_display_uses_reserved_bottom_line_for_tty_console():
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+
+    with terminal._status_display(
+        console,
+        terminal.Text("model deepseek-v4-pro[max] · ctx unknown/1K"),
+        palette=terminal.DARK_PALETTE,
+    ):
+        pass
+
+    output = buffer.getvalue()
+    assert "\x1b[1;23r" in output
+    assert "\x1b[24;1H\x1b[2K" in output
+    assert "model deepseek-v4-pro[max] · ctx unknown/1K" in output
+    assert "\x1b[r" in output
+    assert "\n" not in output
+
+
+def test_status_display_keeps_footer_on_bottom_and_runtime_above_it():
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+
+    with terminal._status_display(
+        console,
+        terminal.Text("time 0s · esc to interrupt · thinking"),
+        terminal.Text("model deepseek-v4-pro[max] · cwd ~/test · ctx unknown/1K"),
+        palette=terminal.DARK_PALETTE,
+    ):
+        pass
+
+    output = buffer.getvalue()
+    assert "\x1b[1;22r" in output
+    assert "\x1b[23;1H\x1b[2K" in output
+    assert "\x1b[24;1H\x1b[2K" in output
+    assert "time 0s · esc to interrupt · thinking" in output
+    assert "model deepseek-v4-pro[max] · cwd ~/test · ctx unknown/1K" in output
+    assert "\n" not in output
+
+
+def test_status_display_preserves_footer_identity_bold_in_light_theme(tmp_path):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+    )
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+
+    with terminal._status_display(
+        console,
+        terminal.Text("time 0s · esc to interrupt · thinking"),
+        footer.to_rich_text(LIGHT_PALETTE),
+        palette=LIGHT_PALETTE,
+    ):
+        pass
+
+    output = buffer.getvalue()
+    assert "\x1b[1;38;2;51;65;85;48;2;216;216;242mmodel" in output
+    assert "\x1b[22;38;2;51;65;85;48;2;216;216;242m deepseek-v4-pro[max]" in output
+    assert "\x1b[1;38;2;51;65;85;48;2;216;216;242mcwd" in output
+    assert "\x1b[22;38;2;51;65;85;48;2;216;216;242m " in output
+
+
+def test_status_display_is_silent_for_recorded_console():
+    console = Console(record=True)
+
+    with terminal._status_display(console, terminal.Text("working"), palette=terminal.DARK_PALETTE):
+        pass
+
+    assert console.export_text() == ""
+
+
 def test_run_once_with_status_passes_interrupt_check(tmp_path):
     observed_interrupt: list[bool] = []
 
@@ -1455,15 +1663,18 @@ def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_pa
         ),
     )
 
-    assert "model deepseek-v4-flash" in toolbar
-    assert "thinking high" in toolbar
+    assert "model deepseek-v4-flash[high]" in toolbar
+    assert "model deepseek-v4-flash " not in toolbar
+    assert "thinking high" not in toolbar
     assert f"cwd {tmp_path}" in toolbar
-    assert "ctx win unknown/1K" in toolbar
+    assert "ctx unknown/1K" in toolbar
+    assert "ctx win" not in toolbar
     assert "compact ~" not in toolbar
     assert "Enter send" not in toolbar
     assert "Shift+Enter" not in toolbar
     assert "session" not in toolbar
     assert "AGENTS.md loaded" not in toolbar
+    assert "Ctrl+D twice exit" not in toolbar
 
 
 def test_format_context_footer_marks_loaded_agents_md(tmp_path):
@@ -1478,7 +1689,8 @@ def test_format_context_footer_marks_loaded_agents_md(tmp_path):
         ),
     )
 
-    assert "AGENTS.md loaded" in toolbar
+    assert "[AGENTS.md]" in toolbar
+    assert "AGENTS.md loaded" not in toolbar
 
 
 def test_format_context_footer_ignores_empty_agents_md(tmp_path):
@@ -1493,6 +1705,7 @@ def test_format_context_footer_ignores_empty_agents_md(tmp_path):
         ),
     )
 
+    assert "[AGENTS.md]" not in toolbar
     assert "AGENTS.md loaded" not in toolbar
 
 
@@ -1512,7 +1725,8 @@ def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(t
         ),
     )
 
-    assert "ctx win unknown/1K" in toolbar
+    assert "ctx unknown/1K" in toolbar
+    assert "ctx win" not in toolbar
     assert "910" not in toolbar
 
 
@@ -1540,7 +1754,8 @@ def test_format_context_footer_shows_latest_request_context_window_only(tmp_path
         ),
     )
 
-    assert "ctx win 4K/10K (35.1%, 6K left)" in toolbar
+    assert "ctx 4K/10K (35.1%, 6K left)" in toolbar
+    assert "ctx win" not in toolbar
     assert "compact ~" not in toolbar
     assert "compact next" not in toolbar
 
@@ -1563,7 +1778,8 @@ def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_p
         ),
     )
 
-    assert "ctx win 9K/10K (85.1%, 1K left)" in toolbar
+    assert "ctx 9K/10K (85.1%, 1K left)" in toolbar
+    assert "ctx win" not in toolbar
     assert "compact next" in toolbar
 
 
@@ -1582,8 +1798,36 @@ async def test_format_context_footer_uses_compacted_context_window_checkpoint(tm
         ),
     )
 
-    assert "ctx win 100/10K (1.0%, 10K left)" in toolbar
+    assert "ctx 100/10K (1.0%, 10K left)" in toolbar
+    assert "ctx win" not in toolbar
     assert "compact next" not in toolbar
+
+
+def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
+    tmp_path.joinpath("AGENTS.md").write_text("Use local rules.", encoding="utf-8")
+    runtime = SimpleNamespace(active_servers=[object()])
+
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+        mcp_runtime=runtime,
+        active_work="thinking 3s",
+    )
+
+    assert footer.plain.startswith("model deepseek-v4-pro[max] · thinking 3s")
+    assert "mcp 1" in footer.plain
+    assert "[AGENTS.md]" in footer.plain
+    assert "MCP" not in footer.plain
+    assert "mcp:" not in footer.plain
+    assert "AGENTS.md loaded" not in footer.plain
+    assert footer.to_prompt_toolkit()[0] == ("class:toolbar.title", "model")
+    assert ("class:toolbar.active", "thinking 3s") in footer.to_prompt_toolkit()
+    assert ("class:toolbar.title", "mcp") in footer.to_prompt_toolkit()
+    assert ("class:toolbar.loaded", "[AGENTS.md]") in footer.to_prompt_toolkit()
 
 
 def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
@@ -1629,14 +1873,16 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "Enter send" not in str(toolbars)
     assert "/ commands" not in str(toolbars)
     assert "Esc interrupt" not in str(toolbars)
-    toolbar_texts = [str(toolbar) for toolbar in toolbars]
-    assert "Ctrl+D twice exit" in str(toolbar_texts)
-    assert "model deepseek-v4-pro" in str(toolbar_texts)
-    assert "thinking max" in str(toolbar_texts)
+    toolbar_texts = [_toolbar_text(toolbar) for toolbar in toolbars]
+    assert "Ctrl+D twice exit" not in str(toolbar_texts)
+    assert "model deepseek-v4-pro[max]" in str(toolbar_texts)
+    assert "model deepseek-v4-pro " not in str(toolbar_texts)
+    assert "thinking max" not in str(toolbar_texts)
     assert f"cwd {tmp_path}" in str(toolbar_texts)
-    assert "ctx win 900/1K (90.0%, 100 left) · compact next" in toolbar_texts[1]
-    assert "ctx win unknown/1K" in toolbar_texts[2]
-    assert "ctx win 50/1K (5.0%, 950 left)" in toolbar_texts[3]
+    assert "ctx 900/1K (90.0%, 100 left) · compact next" in toolbar_texts[1]
+    assert "ctx unknown/1K" in toolbar_texts[2]
+    assert "ctx 50/1K (5.0%, 950 left)" in toolbar_texts[3]
+    assert "ctx win" not in str(toolbar_texts)
     assert "compact ~" not in str(toolbar_texts)
 
 
@@ -1700,8 +1946,9 @@ def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_p
     assert items[1]["name"] == "shell"
     assert items[2]["type"] == "function_call_output"
     assert "ok" in rendered
-    assert "ctx win unknown/2K" in str(toolbars[0])
-    assert "ctx win " in str(toolbars[1])
+    assert "ctx unknown/2K" in _toolbar_text(toolbars[0])
+    assert "ctx " in _toolbar_text(toolbars[1])
+    assert "ctx win" not in "".join(_toolbar_text(toolbar) for toolbar in toolbars)
 
 
 def test_run_interactive_local_command_renders_sanitized_windows_output(tmp_path, monkeypatch):

@@ -43,6 +43,10 @@ class UiPalette:
     toolbar_foreground: str
     toolbar_context: str
     toolbar_separator: str
+    toolbar_identity: str
+    toolbar_active: str
+    toolbar_loaded: str
+    toolbar_metadata: str
     markdown_heading: str
     markdown_subheading: str
     markdown_bullet: str
@@ -78,9 +82,13 @@ DARK_PALETTE = UiPalette(
     prompt="ansicyan bold",
     placeholder="#8a90aa",
     toolbar_background="#161821",
-    toolbar_foreground="#a6adc8",
-    toolbar_context="#a6adc8",
+    toolbar_foreground="#b7bdd4",
+    toolbar_context="#b7bdd4",
     toolbar_separator="#4b5068",
+    toolbar_identity="bold #b7bdd4",
+    toolbar_active="bold #b7bdd4",
+    toolbar_loaded="bold #b7bdd4",
+    toolbar_metadata="#b7bdd4",
     markdown_heading="bold bright_cyan",
     markdown_subheading="bold cyan",
     markdown_bullet="bright_blue",
@@ -115,10 +123,14 @@ LIGHT_PALETTE = UiPalette(
     diff_context="#374151",
     prompt="#0369a1 bold",
     placeholder="#64748b",
-    toolbar_background="#e2e8f0",
-    toolbar_foreground="#0f172a",
-    toolbar_context="#047857 bold",
-    toolbar_separator="#64748b",
+    toolbar_background="#d8d8f2",
+    toolbar_foreground="#334155",
+    toolbar_context="#334155",
+    toolbar_separator="#94a3b8",
+    toolbar_identity="bold #334155",
+    toolbar_active="bold #334155",
+    toolbar_loaded="bold #334155",
+    toolbar_metadata="#334155",
     markdown_heading="bold #0f766e",
     markdown_subheading="bold #0369a1",
     markdown_bullet="#2563eb",

@@ -16,6 +16,7 @@ from deepy.skills import SkillInfo
 from deepy.ui.file_mentions import FileMentionCompleter
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.slash_commands import SlashCommandItem
+from deepy.ui.status_footer import StatusFooter
 from deepy.ui.styles import DARK_PALETTE, UiPalette
 
 
@@ -23,7 +24,7 @@ DEFAULT_PROMPT_HISTORY = Path.home() / ".deepy" / "prompt-history.txt"
 CTRL_D_EXIT_CONFIRM_SIGNAL = "\0deepy:ctrl-d-exit-confirm\0"
 PROMPT_TOOLBAR_BACKGROUND = "#161821"
 PROMPT_TOOLBAR_FOREGROUND = "#a6adc8"
-PROMPT_TOOLBAR_HELP = "Ctrl+J newline · Ctrl+D twice exit"
+PROMPT_TOOLBAR_HELP = "newline: ctrl+j"
 PROMPT_MESSAGE: StyleAndTextTuples = [("class:prompt", "> ")]
 PROMPT_PLACEHOLDER: StyleAndTextTuples = [("class:placeholder", "Type your message...")]
 PROMPT_TOOLBAR: StyleAndTextTuples = [("class:toolbar.help", PROMPT_TOOLBAR_HELP)]
@@ -123,31 +124,34 @@ def prompt_for_input(
 
 
 def build_prompt_toolbar(
-    context_status: str = "",
+    context_status: str | StatusFooter = "",
     *,
     platform_name: str | None = None,
 ) -> AnyFormattedText:
+    if isinstance(context_status, StatusFooter):
+        return context_status.to_prompt_toolkit(help_text=PROMPT_TOOLBAR_HELP)
     if not context_status:
         return prompt_toolbar(platform_name)
-    toolbar: StyleAndTextTuples = [
-        ("class:toolbar.context", context_status),
-        ("class:toolbar.separator", " · "),
-        *prompt_toolbar(platform_name),
-    ]
-    return toolbar
+    return [("class:toolbar.context", context_status)]
 
 
 def prompt_style(palette: UiPalette | None = None) -> Style:
     palette = palette or DARK_PALETTE
+    toolbar_base = f"noreverse bg:{palette.toolbar_background}"
     return Style.from_dict(
         {
             "prompt": palette.prompt,
             "placeholder": palette.placeholder,
-            "toolbar": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
-            "toolbar.context": f"bg:{palette.toolbar_background} {palette.toolbar_context}",
-            "toolbar.separator": f"bg:{palette.toolbar_background} {palette.toolbar_separator}",
-            "toolbar.help": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
-            "bottom-toolbar": f"bg:{palette.toolbar_background} {palette.toolbar_foreground}",
+            "toolbar": f"{toolbar_base} {palette.toolbar_foreground}",
+            "toolbar.context": f"{toolbar_base} {palette.toolbar_context}",
+            "toolbar.separator": f"{toolbar_base} {palette.toolbar_separator}",
+            "toolbar.help": f"{toolbar_base} {palette.toolbar_metadata}",
+            "toolbar.title": f"{toolbar_base} {palette.toolbar_identity}",
+            "toolbar.identity": f"{toolbar_base} {palette.toolbar_identity}",
+            "toolbar.active": f"{toolbar_base} {palette.toolbar_active}",
+            "toolbar.loaded": f"{toolbar_base} {palette.toolbar_loaded}",
+            "toolbar.metadata": f"{toolbar_base} {palette.toolbar_metadata}",
+            "bottom-toolbar": f"{toolbar_base} {palette.toolbar_foreground}",
         }
     )
 
