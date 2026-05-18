@@ -828,8 +828,23 @@ def test_format_tool_call_summary_formats_write_without_content_body():
         project_root="/repo",
     )
 
-    assert summary == "[Write] src/lib.rs (4 lines, 34 chars)"
+    assert summary == "[Write] src/lib.rs (3 lines, 34 chars)"
     assert "println" not in summary
+
+
+def test_format_tool_call_summary_does_not_count_trailing_newline_as_extra_line():
+    summary = format_tool_call_summary(
+        "write",
+        json.dumps(
+            {
+                "file_path": "/repo/index.html",
+                "content": "<!DOCTYPE html>\n<html>\n</html>\n",
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "[Write] index.html (3 lines, 31 chars)"
 
 
 def test_format_tool_call_summary_formats_modify_create_without_content_body():
@@ -844,7 +859,7 @@ def test_format_tool_call_summary_formats_modify_create_without_content_body():
         project_root="/repo",
     )
 
-    assert summary == "[Modify] src/lib.rs (4 lines, 34 chars)"
+    assert summary == "[Modify] src/lib.rs (3 lines, 34 chars)"
     assert "println" not in summary
 
 

@@ -70,6 +70,10 @@ Skill protocol:
 - If the user's task matches an available skill, call `load_skill` with the exact skill name before relying on that skill's detailed instructions, scripts, references, or assets.
 - If the user explicitly invoked a skill, follow the loaded skill instructions and use the user's request inside that context.
 - Skill files are standard Agent Skills. Resolve relative scripts, references, and assets from the skill root returned by `load_skill`.
+- If a loaded skill says to ask the user, ask one question at a time, wait for
+  the user's response, get approval, or have the user review or confirm before
+  continuing, satisfy that wait point with `AskUserQuestion` unless the skill
+  explicitly says to ask in the final answer without tools.
 
 Tool documentation:
 {tool_docs_block}

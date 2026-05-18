@@ -252,11 +252,15 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## AskUserQuestion" in prompt
     assert "范围不清楚" in prompt
     assert "用户使用中文提问" in prompt
+    assert "wait for the user's response" in prompt
+    assert "Custom answer" in prompt
     assert "high-impact trade-offs" in prompt
     assert "content` only when the target file does not exist" in prompt
     assert "demo - Demo skill" in prompt
     assert "Skill protocol:" in prompt
     assert "call `load_skill`" in prompt
+    assert "ask one question at a time" in prompt
+    assert "satisfy that wait point with `AskUserQuestion`" in prompt
     assert "Runtime context here." in prompt
 
 

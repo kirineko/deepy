@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -36,7 +37,6 @@ from deepy.ui.terminal import _format_token_count_short
 from deepy.ui.terminal import _tool_output_text
 from deepy.ui.terminal import _run_once_with_status
 from deepy.ui.terminal import _working_status_text
-from deepy.ui.styles import LIGHT_PALETTE
 from deepy.utils import json as json_utils
 
 
@@ -750,7 +750,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
     )
 
     rendered = console.export_text()
-    assert "[Write] src/lib.rs (4 lines, 34 chars)  ok" in rendered
+    assert "[Write] src/lib.rs (3 lines, 34 chars)  ok" in rendered
     assert "println" not in rendered
     assert "fn main() {}" in rendered
 
@@ -883,6 +883,48 @@ def test_print_user_input_uses_prompt_marker():
     rendered = console.export_text()
     assert "> hello" in rendered
     assert "  world" in rendered
+
+
+def test_submitted_prompt_echo_rows_accounts_for_multiline_and_wrapping():
+    assert terminal._submitted_prompt_echo_rows("hello\nworld", 80) == 2
+    assert terminal._submitted_prompt_echo_rows("你好\nworld", 80) == 2
+    assert terminal._submitted_prompt_echo_rows("123456789", 5) == 4
+
+
+def test_clear_submitted_prompt_echo_clears_each_rendered_row(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    stream = TtyBuffer()
+    console = Console(file=stream, force_terminal=True, width=20)
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((20, 24)))
+
+    terminal._clear_submitted_prompt_echo(console, "hello\nworld")
+
+    assert stream.getvalue() == "\x1b[1A\x1b[2K\x1b[1A\x1b[2K\r"
+
+
+def test_submitted_prompt_needs_status_anchor_only_at_terminal_bottom(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    stream = TtyBuffer()
+    console = Console(file=stream, force_terminal=True, width=80)
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+    monkeypatch.setattr(terminal, "_terminal_cursor_row", lambda console: 24)
+
+    assert terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
+    monkeypatch.setattr(terminal, "_terminal_cursor_row", lambda console: 10)
+    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
+    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello")
+
+
+def test_cursor_row_from_terminal_response_parses_ansi_report():
+    assert terminal._cursor_row_from_terminal_response(b"\x1b[24;1R") == 24
+    assert terminal._cursor_row_from_terminal_response(b"noise\x1b[7;42R") == 7
+    assert terminal._cursor_row_from_terminal_response(b"") is None
 
 
 def test_terminal_stream_renderer_flushes_reasoning_summary():
@@ -1484,32 +1526,6 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
     assert "ctx win" not in rendered
 
 
-def test_runtime_spinner_frame_advances(monkeypatch):
-    monkeypatch.setattr(terminal.time, "monotonic", lambda: 10.0)
-    first = terminal._runtime_spinner_frame(10.0)
-    monkeypatch.setattr(terminal.time, "monotonic", lambda: 10.2)
-    second = terminal._runtime_spinner_frame(10.0)
-
-    assert first in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    assert second in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    assert first != second
-
-
-def test_light_runtime_footer_uses_completed_prompt_background():
-    runtime_style = terminal._terminal_runtime_status_style(LIGHT_PALETTE)
-    footer_style = terminal._terminal_footer_status_style(LIGHT_PALETTE)
-
-    assert "48;2;161;98;7" in runtime_style
-    assert "48;2;216;216;242" in footer_style
-    assert "48;2;226;232;240" not in footer_style
-    assert terminal._runtime_status_text(
-        elapsed="0s",
-        detail="status working",
-        spinner="⠋",
-        palette=LIGHT_PALETTE,
-    ).plain.startswith("⠋ time 0s")
-
-
 def test_local_command_status_text_preserves_compact_footer(tmp_path):
     footer = _build_status_footer(
         None,
@@ -1533,55 +1549,10 @@ def test_local_command_status_text_preserves_compact_footer(tmp_path):
     assert "Running local command (" not in rendered
 
 
-def test_status_display_uses_reserved_bottom_line_for_tty_console():
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    buffer = TtyBuffer()
-    console = Console(file=buffer, force_terminal=True)
-
-    with terminal._status_display(
-        console,
-        terminal.Text("model deepseek-v4-pro[max] · ctx unknown/1K"),
-        palette=terminal.DARK_PALETTE,
-    ):
-        pass
-
-    output = buffer.getvalue()
-    assert "\x1b[1;23r" in output
-    assert "\x1b[24;1H\x1b[2K" in output
-    assert "model deepseek-v4-pro[max] · ctx unknown/1K" in output
-    assert "\x1b[r" in output
-    assert "\n" not in output
-
-
-def test_status_display_keeps_footer_on_bottom_and_runtime_above_it():
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    buffer = TtyBuffer()
-    console = Console(file=buffer, force_terminal=True)
-
-    with terminal._status_display(
-        console,
-        terminal.Text("time 0s · esc to interrupt · thinking"),
-        terminal.Text("model deepseek-v4-pro[max] · cwd ~/test · ctx unknown/1K"),
-        palette=terminal.DARK_PALETTE,
-    ):
-        pass
-
-    output = buffer.getvalue()
-    assert "\x1b[1;22r" in output
-    assert "\x1b[23;1H\x1b[2K" in output
-    assert "\x1b[24;1H\x1b[2K" in output
-    assert "time 0s · esc to interrupt · thinking" in output
-    assert "model deepseek-v4-pro[max] · cwd ~/test · ctx unknown/1K" in output
-    assert "\n" not in output
-
-
-def test_status_display_preserves_footer_identity_bold_in_light_theme(tmp_path):
+def test_status_display_reserves_single_runtime_bottom_row_without_moving_output_cursor(
+    tmp_path,
+    monkeypatch,
+):
     class TtyBuffer(io.StringIO):
         def isatty(self):
             return True
@@ -1596,26 +1567,95 @@ def test_status_display_preserves_footer_identity_bold_in_light_theme(tmp_path):
     )
     buffer = TtyBuffer()
     console = Console(file=buffer, force_terminal=True)
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
 
     with terminal._status_display(
         console,
-        terminal.Text("time 0s · esc to interrupt · thinking"),
-        footer.to_rich_text(LIGHT_PALETTE),
-        palette=LIGHT_PALETTE,
+        _working_status_text(time.monotonic(), "thinking", footer=footer),
+        palette=terminal.DARK_PALETTE,
     ):
         pass
 
     output = buffer.getvalue()
-    assert "\x1b[1;38;2;51;65;85;48;2;216;216;242mmodel" in output
-    assert "\x1b[22;38;2;51;65;85;48;2;216;216;242m deepseek-v4-pro[max]" in output
-    assert "\x1b[1;38;2;51;65;85;48;2;216;216;242mcwd" in output
-    assert "\x1b[22;38;2;51;65;85;48;2;216;216;242m " in output
+    assert output.startswith("\x1b7\x1b[1;23r\x1b[23;1H\x1b8")
+    assert "\x1b[1;23r" in output
+    assert "\x1b[24;1H\x1b[2K" in output
+    assert "\x1b[23;1H\x1b[2K" not in output
+    assert "model deepseek-v4-pro[max]" not in output
+    assert "thinking" in output
+    assert "\x1b[r" in output
+
+
+def test_status_display_can_anchor_output_above_runtime_bottom_row(tmp_path, monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+    )
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+
+    with terminal._status_display(
+        console,
+        _working_status_text(time.monotonic(), "thinking", footer=footer),
+        palette=terminal.DARK_PALETTE,
+        anchor_output=True,
+    ):
+        pass
+
+    output = buffer.getvalue()
+    assert output.startswith("\x1b[1;23r\x1b[23;1H\n\n\x1b[22;1H")
+    assert "\x1b[24;1H\x1b[2K" in output
+    assert "thinking" in output
+
+
+def test_status_display_can_scroll_one_line_for_multiline_prompt(tmp_path, monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+        ),
+    )
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+
+    with terminal._status_display(
+        console,
+        _working_status_text(time.monotonic(), "thinking", footer=footer),
+        palette=terminal.DARK_PALETTE,
+        anchor_output_lines=1,
+    ):
+        pass
+
+    output = buffer.getvalue()
+    assert output.startswith("\x1b[1;23r\x1b[23;1H\n\x1b[23;1H")
+    assert "\x1b[24;1H\x1b[2K" in output
+    assert "thinking" in output
 
 
 def test_status_display_is_silent_for_recorded_console():
     console = Console(record=True)
 
-    with terminal._status_display(console, terminal.Text("working"), palette=terminal.DARK_PALETTE):
+    with terminal._status_display(
+        console,
+        terminal.Text("working"),
+        palette=terminal.DARK_PALETTE,
+    ):
         pass
 
     assert console.export_text() == ""

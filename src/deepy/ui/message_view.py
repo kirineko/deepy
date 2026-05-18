@@ -759,7 +759,7 @@ def _format_write_params_snippet(args: dict[str, Any], *, project_root: str | No
 
 
 def _text_size_summary(text: str) -> str:
-    line_count = 0 if not text else text.count("\n") + 1
+    line_count = len(text.splitlines())
     line_label = "line" if line_count == 1 else "lines"
     return f"{line_count:,} {line_label}, {len(text):,} chars"
 

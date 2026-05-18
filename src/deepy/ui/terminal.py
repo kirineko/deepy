@@ -77,7 +77,7 @@ from deepy.ui.message_view import (
 )
 from deepy.ui.markdown import render_markdown
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
-from deepy.ui.prompt_input import build_prompt_toolbar, create_prompt_session, prompt_for_input
+from deepy.ui.prompt_input import build_prompt_toolbar, create_prompt_session, measure_text_rows, prompt_for_input
 from deepy.ui.session_list import resolve_session_selection
 from deepy.ui.session_picker import ResumeSessionPreview
 from deepy.ui.session_picker import format_resume_session_choices
@@ -256,7 +256,7 @@ def run_interactive(
                         output.print(f"[{palette.error}]Skill not found:[/] {skill_name}")
                         continue
                     request = slash.argument or f"Use the {skill.name} skill."
-                    _print_user_input(output, text, palette=palette)
+                    anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
                     summary = _run_once_with_status(
                         output,
                         run_once,
@@ -268,6 +268,7 @@ def run_interactive(
                         palette=palette,
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
+                        anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
                     clarification_rounds = 0
@@ -293,6 +294,7 @@ def run_interactive(
                             palette=palette,
                             async_runner=async_runner,
                             mcp_runtime=mcp_runtime,
+                            anchor_status_output=True,
                         )
                         session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
@@ -305,7 +307,7 @@ def run_interactive(
                     )
                     continue
                 if slash.name == "init":
-                    _print_user_input(output, text, palette=palette)
+                    anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
                     summary = _run_once_with_status(
                         output,
                         run_once,
@@ -317,6 +319,7 @@ def run_interactive(
                         palette=palette,
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
+                        anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
@@ -355,7 +358,7 @@ def run_interactive(
                     )
                 continue
 
-            _print_user_input(output, text, palette=palette)
+            anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
             summary = _run_once_with_status(
                 output,
                 run_once,
@@ -367,6 +370,7 @@ def run_interactive(
                 palette=palette,
                 async_runner=async_runner,
                 mcp_runtime=mcp_runtime,
+                anchor_status_output_lines=1 if anchor_status_output else 0,
             )
             session_id = summary.session_id
             clarification_rounds = 0
@@ -392,6 +396,7 @@ def run_interactive(
                     palette=palette,
                     async_runner=async_runner,
                     mcp_runtime=mcp_runtime,
+                    anchor_status_output=True,
                 )
                 session_id = summary.session_id
             _print_assistant_output(output, summary.output, palette=palette)
@@ -465,6 +470,8 @@ def _run_once_with_status(
     palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
+    anchor_status_output = bool(kwargs.pop("anchor_status_output", False))
+    anchor_status_output_lines = int(kwargs.pop("anchor_status_output_lines", 0))
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
     settings = kwargs.get("settings")
@@ -491,8 +498,9 @@ def _run_once_with_status(
     with _status_display(
         console,
         _working_status_text(started_at, palette=active_palette, footer=footer),
-        footer.to_rich_text(active_palette) if footer.segments else None,
         palette=active_palette,
+        anchor_output=anchor_status_output,
+        anchor_output_lines=anchor_status_output_lines,
     ) as status:
         renderer = TerminalStreamRenderer(
             console,
@@ -545,7 +553,7 @@ def _handle_local_command(
         console.print(f"[{palette.error}]Usage:[/] !<command>")
         return current_session_id
 
-    _print_user_input(console, command_input.raw_text, palette=palette)
+    anchor_status_output = _print_submitted_user_input(console, command_input.raw_text, palette=palette)
     started_at = time.monotonic()
     interrupt_requested = threading.Event()
     with _status_display(
@@ -562,13 +570,8 @@ def _handle_local_command(
                 active_work="running local command",
             ),
         ),
-        _build_status_footer(
-            current_session_id,
-            project_root=project_root,
-            settings=settings,
-            mcp_runtime=mcp_runtime,
-        ).to_rich_text(palette),
         palette=palette,
+        anchor_output_lines=1 if anchor_status_output else 0,
     ):
         with _esc_interrupt_watcher(interrupt_requested):
             result = run_local_command(
@@ -2006,13 +2009,14 @@ def _refresh_working_status(
 def _status_display(
     console: Console,
     initial_status: Text,
-    footer_status: Text | None = None,
     *,
     palette: UiPalette,
+    anchor_output: bool = False,
+    anchor_output_lines: int = 0,
 ):
     if _should_use_bottom_status_overlay(console):
-        status = _TerminalBottomStatus(console, footer_status=footer_status, palette=palette)
-        status.start()
+        status = _TerminalBottomStatus(console, palette=palette)
+        status.start(anchor_output=anchor_output, anchor_output_lines=anchor_output_lines)
         status.update(initial_status)
         try:
             yield status
@@ -2033,55 +2037,50 @@ class _TerminalBottomStatus:
         self,
         console: Console,
         *,
-        footer_status: Text | None,
         palette: UiPalette,
     ) -> None:
         self.console = console
-        self.footer_status = footer_status
         self.palette = palette
         self.rows = 0
         self.columns = 0
 
-    @property
-    def _reserved_lines(self) -> int:
-        return 2 if self.footer_status is not None else 1
-
-    def start(self) -> None:
+    def start(self, *, anchor_output: bool = False, anchor_output_lines: int = 0) -> None:
         self.columns, self.rows = shutil.get_terminal_size((80, 24))
-        if self.rows <= self._reserved_lines:
+        if self.rows <= 1:
             return
-        scroll_bottom = self.rows - self._reserved_lines
-        self.console.file.write(f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8")
-        self._write_footer()
+        scroll_bottom = self.rows - 1
+        scroll_lines = max(anchor_output_lines, 2 if anchor_output else 0)
+        if scroll_lines:
+            output_row = max(scroll_bottom - scroll_lines + 1, 1)
+            scroll_text = "\n" * scroll_lines
+            self.console.file.write(
+                f"\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H"
+                f"{scroll_text}"
+                f"\x1b[{output_row};1H"
+            )
+        else:
+            self.console.file.write(f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8")
         self.console.file.flush()
 
     def update(self, status: Text) -> None:
         columns, rows = shutil.get_terminal_size((80, 24))
         self.columns = columns
         self.rows = rows
-        if rows <= self._reserved_lines:
+        if rows <= 1:
             return
-        runtime_row = rows - self._reserved_lines + 1
-        self._write_line(runtime_row, status.plain, _terminal_runtime_status_style(self.palette))
-        self._write_footer()
+        self._write_line(rows, status.plain, _terminal_runtime_status_style(self.palette))
         self.console.file.flush()
 
     def clear(self) -> None:
         columns, rows = shutil.get_terminal_size((80, 24))
         self.columns = columns
         self.rows = rows
-        if rows <= self._reserved_lines:
+        if rows <= 1:
             return
         self.console.file.write("\x1b7\x1b[r")
-        for row in range(rows - self._reserved_lines + 1, rows + 1):
-            self.console.file.write(f"\x1b[{row};1H\x1b[2K")
+        self.console.file.write(f"\x1b[{rows};1H\x1b[2K")
         self.console.file.write("\x1b8")
         self.console.file.flush()
-
-    def _write_footer(self) -> None:
-        if self.footer_status is None or self.rows <= self._reserved_lines:
-            return
-        self._write_text_line(self.rows, self.footer_status)
 
     def _write_line(self, row: int, text: str, style: str) -> None:
         width = max(self.columns - 1, 1)
@@ -2089,66 +2088,16 @@ class _TerminalBottomStatus:
         padded = line.ljust(width)
         self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K{style}{padded}\x1b[0m\x1b8")
 
-    def _write_text_line(self, row: int, text: Text) -> None:
-        width = max(self.columns - 1, 1)
-        plain = text.plain
-        truncated = len(plain) > width
-        body_width = max(width - 1, 0) if truncated else min(len(plain), width)
-        background = _hex_color(self.palette.toolbar_background)
-        default_style = _terminal_text_style(self.palette.toolbar_metadata, background=background)
-
-        self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K")
-        cursor = 0
-        for span in sorted(text.spans, key=lambda item: item.start):
-            start = max(span.start, 0)
-            end = min(span.end, body_width)
-            if end <= cursor or start >= body_width:
-                continue
-            if start > cursor:
-                self.console.file.write(f"{default_style}{plain[cursor:start]}")
-            self.console.file.write(
-                f"{_terminal_text_style(str(span.style), background=background)}{plain[start:end]}"
-            )
-            cursor = end
-        if cursor < body_width:
-            self.console.file.write(f"{default_style}{plain[cursor:body_width]}")
-        if truncated and width > 0:
-            self.console.file.write(f"{default_style}…")
-        padding = width - len(_truncate_status_line(plain, max_width=width))
-        if padding > 0:
-            self.console.file.write(f"{default_style}{' ' * padding}")
-        self.console.file.write("\x1b[0m\x1b8")
-
 
 class _SilentStatus:
     def update(self, status: Text) -> None:
         return None
 
 
-def _terminal_status_style(palette: UiPalette) -> str:
-    return _terminal_footer_status_style(palette)
-
-
-def _terminal_footer_status_style(palette: UiPalette) -> str:
-    foreground = _hex_color(palette.toolbar_metadata)
-    background = _hex_color(palette.toolbar_background)
-    return _terminal_ansi_style(foreground=foreground, background=background)
-
-
 def _terminal_runtime_status_style(palette: UiPalette) -> str:
     foreground = _hex_color(palette.toolbar_background) or "#161821"
     background = _hex_color(palette.warning) or "#facc15"
     return _terminal_ansi_style(foreground=foreground, background=background, bold=True)
-
-
-def _terminal_text_style(style: str, *, background: str = "") -> str:
-    parts = style.split()
-    foreground = _hex_color(style)
-    return _terminal_ansi_style(
-        foreground=foreground,
-        background=background,
-        bold="bold" in parts,
-    )
 
 
 def _terminal_ansi_style(
@@ -2285,6 +2234,103 @@ def _format_duration_ms(duration_ms: int) -> str:
     if minutes:
         return f"{minutes}m {remaining_seconds}s"
     return f"{remaining_seconds}s"
+
+
+def _print_submitted_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> bool:
+    _clear_submitted_prompt_echo(console, text)
+    _print_user_input(console, text, palette=palette)
+    return _submitted_prompt_needs_status_anchor(console, text)
+
+
+def _submitted_prompt_needs_status_anchor(console: Console, text: str) -> bool:
+    if not text.strip() or not _should_use_bottom_status_overlay(console):
+        return False
+    rows = shutil.get_terminal_size((80, 24)).lines
+    cursor_row = _terminal_cursor_row(console)
+    return cursor_row is not None and cursor_row >= rows
+
+
+def _clear_submitted_prompt_echo(console: Console, text: str) -> None:
+    if not text.strip():
+        return
+    file = getattr(console, "file", None)
+    if file is None:
+        return
+    isatty = getattr(file, "isatty", None)
+    if not callable(isatty) or not isatty():
+        return
+
+    rows = _submitted_prompt_echo_rows(text, _terminal_columns(console))
+    for _ in range(rows):
+        file.write("\x1b[1A\x1b[2K")
+    file.write("\r")
+    file.flush()
+
+
+def _terminal_columns(console: Console) -> int:
+    fallback = (max(1, console.width), 24)
+    return max(1, shutil.get_terminal_size(fallback).columns)
+
+
+def _terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | None:
+    if termios is None or tty is None or not Path("/dev/tty").exists():
+        return None
+    file = getattr(console, "file", None)
+    if file is None:
+        return None
+    isatty = getattr(file, "isatty", None)
+    if not callable(isatty) or not isatty():
+        return None
+
+    fd: int | None = None
+    old_attrs: list[Any] | None = None
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
+        old_attrs = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        file.write("\x1b[6n")
+        file.flush()
+        deadline = time.monotonic() + timeout
+        data = b""
+        while time.monotonic() < deadline:
+            readable, _, _ = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))
+            if not readable:
+                continue
+            try:
+                chunk = os.read(fd, 32)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                continue
+            data += chunk
+            row = _cursor_row_from_terminal_response(data)
+            if row is not None:
+                return row
+    except Exception:
+        return None
+    finally:
+        if fd is not None:
+            if old_attrs is not None:
+                with contextlib.suppress(Exception):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            with contextlib.suppress(Exception):
+                os.close(fd)
+    return None
+
+
+def _cursor_row_from_terminal_response(data: bytes) -> int | None:
+    match = re.search(rb"\x1b\[(\d+);\d+R", data)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _submitted_prompt_echo_rows(text: str, columns: int) -> int:
+    lines = text.rstrip("\n").split("\n") or [""]
+    return sum(
+        measure_text_rows(line, width=columns, initial_column=2 if index == 0 else 0)
+        for index, line in enumerate(lines)
+    )
 
 
 def _print_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> None:

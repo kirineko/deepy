@@ -10,6 +10,12 @@
 标注 `(Recommended)` 或中文等价表达。不要为了低影响细节提问；可以合理假设时
 继续推进并简短说明假设。
 
+Agent Skills 可能使用通用说法，例如 ask the user、ask one question at a time、
+wait for the user's response、get approval、review 或 confirm before continuing。
+在 Deepy 中，除非 skill 明确要求不要使用工具，否则这些等待用户输入的步骤都应通过
+`AskUserQuestion` 完成。开放问题也必须提供选项；可加入“自定义回答”/`Custom answer`
+作为选项，让用户输入自由文本。
+
 Args: `questions` (non-empty array). Each question needs `question` and non-empty `options`;
 each option needs `label` and may include `description`. Use `multiSelect=true` only when
 multiple choices are allowed.
