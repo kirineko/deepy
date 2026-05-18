@@ -17,6 +17,7 @@ from deepy.config.settings import LoggingConfig, NotifyConfig
 from deepy.llm.compaction import ContextCompactionError, ContextReadiness
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import DEFAULT_MAX_TURNS, format_deepseek_api_error, run_prompt_once
+from deepy.sessions import DeepyJsonlSession
 
 
 class FakeStream:
@@ -203,6 +204,28 @@ class IdleCancellableStream:
         self.cancelled = asyncio.Event()
 
     async def stream_events(self):
+        await self.cancelled.wait()
+        self.is_complete = True
+        if False:
+            yield None
+
+    def cancel(self, mode="immediate"):
+        self.cancel_calls.append(mode)
+        self.cancelled.set()
+
+
+class PersistingIdleCancellableStream:
+    final_output = None
+    is_complete = False
+
+    def __init__(self, session, items: list[dict[str, object]]):
+        self.session = session
+        self.items = items
+        self.cancel_calls: list[str] = []
+        self.cancelled = asyncio.Event()
+
+    async def stream_events(self):
+        await self.session.add_items(self.items)
         await self.cancelled.wait()
         self.is_complete = True
         if False:
@@ -790,6 +813,96 @@ async def test_run_prompt_once_interrupt_watcher_cancels_idle_stream(monkeypatch
     assert summary.interrupted is True
     assert summary.status == "interrupted"
     assert stream.cancel_calls == ["immediate"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_interrupt_rolls_back_only_persisted_user_input(
+    monkeypatch,
+    tmp_path,
+):
+    streams: list[PersistingIdleCancellableStream] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            stream = PersistingIdleCancellableStream(
+                session,
+                [{"role": "user", "content": input}],
+            )
+            streams.append(stream)
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "stop now",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        should_interrupt=lambda: True,
+    )
+
+    items = await DeepyJsonlSession.open(tmp_path, summary.session_id).get_items()
+    assert summary.status == "interrupted"
+    assert items == []
+    assert streams[0].cancel_calls == ["immediate"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_interrupt_preserves_tool_suffix_and_marks_turn(
+    monkeypatch,
+    tmp_path,
+):
+    streams: list[PersistingIdleCancellableStream] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            stream = PersistingIdleCancellableStream(
+                session,
+                [
+                    {"role": "user", "content": input},
+                    {
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "read_file",
+                        "arguments": "{}",
+                    },
+                ],
+            )
+            streams.append(stream)
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    summary = await run_prompt_once(
+        "read then stop",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        should_interrupt=lambda: True,
+    )
+
+    items = await DeepyJsonlSession.open(tmp_path, summary.session_id).get_items()
+    assert summary.status == "interrupted"
+    assert items[:2] == [
+        {"role": "user", "content": "read then stop"},
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "read_file",
+            "arguments": "{}",
+        },
+    ]
+    assert items[2] == {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "Tool execution interrupted by user with Esc.",
+    }
+    assert items[3]["role"] == "assistant"
+    assert "Interrupted by user with Esc" in items[3]["content"]
+    assert "Do not continue" in items[3]["content"]
+    assert streams[0].cancel_calls == ["immediate"]
 
 
 @pytest.mark.asyncio
