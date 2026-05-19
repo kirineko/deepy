@@ -9,6 +9,7 @@ from deepy.config import (
     load_settings,
     settings_to_toml_dict,
     update_config_model_settings,
+    update_config_input_suggestions_enabled,
     update_config_theme,
     ui_theme_from_selection,
 )
@@ -228,6 +229,26 @@ def test_loads_ui_theme_values(tmp_path):
     assert settings.ui.theme_configured is True
 
 
+def test_input_suggestions_default_enabled_and_can_be_disabled(tmp_path):
+    missing = tmp_path / "missing.toml"
+    missing.write_text("", encoding="utf-8")
+    disabled = tmp_path / "disabled.toml"
+    disabled.write_text("[ui]\ninput_suggestions_enabled = false\n", encoding="utf-8")
+
+    assert load_settings(missing, env={}).ui.input_suggestions_enabled is True
+    assert load_settings(disabled, env={}).ui.input_suggestions_enabled is False
+
+
+def test_settings_to_toml_includes_input_suggestions_without_model_customization(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\ninput_suggestions_enabled = false\n", encoding="utf-8")
+
+    data = settings_to_toml_dict(load_settings(config, env={}))
+
+    assert data["ui"]["input_suggestions_enabled"] is False
+    assert "input_suggestion_model" not in data["ui"]
+
+
 def test_defaults_ui_theme_to_auto_when_missing_or_invalid(tmp_path):
     missing = tmp_path / "missing-theme.toml"
     missing.write_text("", encoding="utf-8")
@@ -267,6 +288,22 @@ def test_update_config_theme_preserves_existing_values_and_permissions(tmp_path)
     assert 'searxng_url = "https://search.example"' in text
     assert '[ui]' in text
     assert 'theme = "light"' in text
+
+
+def test_update_config_input_suggestions_preserves_existing_values_and_permissions(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n',
+        encoding="utf-8",
+    )
+
+    update_config_input_suggestions_enabled(config, False)
+
+    text = config.read_text(encoding="utf-8")
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'api_key = "sk-test"' in text
+    assert 'theme = "dark"' in text
+    assert "input_suggestions_enabled = false" in text
 
 
 def test_update_config_model_settings_preserves_existing_values_and_permissions(tmp_path):

@@ -140,6 +140,112 @@ async def test_tui_prompt_newline_slash_and_file_suggestions(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_input_suggestion_ghost_text_accepts_tab_and_right_without_overlap(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        ghost = app.query_one("#prompt-ghost", Label)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        panel.set_input_suggestion("run tests")
+        await pilot.pause()
+
+        assert ghost.display is True
+        assert str(ghost.content) == "run tests"
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert prompt.text == "run tests"
+        assert ghost.display is False
+
+        prompt.clear()
+        await pilot.pause()
+
+        assert ghost.display is True
+        assert str(ghost.content) == "run tests"
+
+        prompt.clear()
+        panel.set_input_suggestion("commit changes")
+        prompt.text = "/"
+        await pilot.pause()
+
+        assert options.display is True
+        assert ghost.display is False
+
+        prompt.clear()
+        panel.set_input_suggestion("commit changes")
+        await pilot.pause()
+        prompt.action_cursor_right()
+        await pilot.pause()
+
+        assert prompt.text == "commit changes"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_suggestion_returns_after_type_delete_cycle(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        ghost = app.query_one("#prompt-ghost", Label)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        panel.set_input_suggestion("run tests")
+        prompt.text = "typed"
+        await pilot.pause()
+
+        assert ghost.display is False
+        assert panel.input_suggestion == "run tests"
+
+        prompt.clear()
+        await pilot.pause()
+
+        assert ghost.display is True
+        assert str(ghost.content) == "run tests"
+        assert options.display is False
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert prompt.text == "run tests"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_enter_does_not_accept_input_suggestion(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        ghost = app.query_one("#prompt-ghost", Label)
+
+        panel.set_input_suggestion("run tests")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.text == ""
+        assert ghost.display is True
+        assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
 async def test_tui_file_suggestions_support_keyboard_selection(tmp_path) -> None:
     tmp_path.joinpath("aaa.py").write_text("", encoding="utf-8")
     tmp_path.joinpath("bbb.py").write_text("", encoding="utf-8")
@@ -321,6 +427,33 @@ async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
 
         assert config_path.read_text(encoding="utf-8") == "[model]\nname = \"deepseek-v4-pro\"\n"
         assert app.settings.model.name == "deepseek-v4-pro"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_suggestion_command_toggles_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[ui]\ninput_suggestions_enabled = true\n", encoding="utf-8")
+    app = DeepyTuiApp(settings=load_settings(config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+
+        prompt.text = "/input-suggestion"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert load_settings(config_path).ui.input_suggestions_enabled is False
+        assert app.input_suggestions.enabled is False
+        assert any("Input suggestions disabled." in block.body for block in app.query(InfoBlock))
+
+        prompt.text = "/input-suggestion extra"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert load_settings(config_path).ui.input_suggestions_enabled is False
+        assert any("Usage: /input-suggestion" in block.body for block in app.query(ErrorBlock))
         app.exit()
 
 

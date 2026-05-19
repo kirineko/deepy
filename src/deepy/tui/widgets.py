@@ -77,7 +77,15 @@ class PromptTextArea(TextArea):
         panel = self.parent
         if isinstance(panel, PromptPanel) and panel.move_suggestion(1):
             return
+        if isinstance(panel, PromptPanel) and panel.accept_input_suggestion():
+            return
         self.post_message(self.SuggestionAccepted())
+
+    def action_cursor_right(self, select: bool = False) -> None:
+        panel = self.parent
+        if not select and isinstance(panel, PromptPanel) and panel.accept_input_suggestion():
+            return
+        super().action_cursor_right(select)
 
     def action_history_previous(self) -> None:
         self.post_message(self.HistoryPrevious())
@@ -147,10 +155,12 @@ class PromptPanel(Vertical):
         self.slash_commands = slash_commands
         self.discovery = FileMentionDiscovery(project_root)
         self.suggestions: list[str] = []
+        self.input_suggestion: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Label("Prompt", id="prompt-title")
         yield PromptTextArea(id="prompt-input")
+        yield Label("", id="prompt-ghost")
         yield OptionList(id="prompt-suggestions")
 
     @on(TextArea.Changed, "#prompt-input")
@@ -165,10 +175,12 @@ class PromptPanel(Vertical):
         if not suggestions:
             option_list.display = False
             option_list.highlighted = None
+            self._refresh_input_suggestion_display()
             return
         option_list.display = True
         option_list.add_options([Option(suggestion, id=suggestion) for suggestion in suggestions[:8]])
         option_list.highlighted = 0
+        self._refresh_input_suggestion_display()
 
     def accept_first_suggestion(self) -> bool:
         return self.accept_selected_suggestion()
@@ -191,6 +203,27 @@ class PromptPanel(Vertical):
             return None
         index = option_list.highlighted if option_list.highlighted is not None else 0
         return str(option_list.get_option_at_index(index).id or self.suggestions[index])
+
+    def set_input_suggestion(self, suggestion: str | None) -> None:
+        self.input_suggestion = suggestion
+        self._refresh_input_suggestion_display()
+
+    def clear_input_suggestion(self) -> None:
+        self.set_input_suggestion(None)
+
+    def accept_input_suggestion(self) -> bool:
+        if not self.input_suggestion:
+            return False
+        option_list = self.query_one("#prompt-suggestions", OptionList)
+        if option_list.display and option_list.option_count > 0:
+            return False
+        prompt = self.query_one("#prompt-input", PromptTextArea)
+        if prompt.text:
+            return False
+        prompt.text = self.input_suggestion
+        prompt.move_cursor((0, len(prompt.text)))
+        self._refresh_input_suggestion_display()
+        return True
 
     def move_suggestion(self, delta: int) -> bool:
         option_list = self.query_one("#prompt-suggestions", OptionList)
@@ -234,6 +267,18 @@ class PromptPanel(Vertical):
             return text
         suffix = "" if value.endswith("/") else " "
         return text[: mention.start - 1] + value + suffix
+
+    def _refresh_input_suggestion_display(self) -> None:
+        ghost = self.query_one("#prompt-ghost", Label)
+        prompt = self.query_one("#prompt-input", PromptTextArea)
+        option_list = self.query_one("#prompt-suggestions", OptionList)
+        visible = bool(
+            self.input_suggestion
+            and not prompt.text
+            and not (option_list.display and option_list.option_count > 0)
+        )
+        ghost.display = visible
+        ghost.update(self.input_suggestion or "")
 
 
 class StatusBar(Horizontal):

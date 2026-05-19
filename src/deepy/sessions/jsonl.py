@@ -34,6 +34,7 @@ class SessionEntry:
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
     usage: dict[str, Any] | None = None
+    input_suggestion_usage: dict[str, Any] | None = None
     latest_context_window_tokens: int | None = None
     last_usage_tokens: int | None = None
     pending_tokens: int = 0
@@ -178,6 +179,30 @@ class DeepyJsonlSession:
             pending_tokens=0,
             last_usage_record_count=record_count,
         )
+
+    def record_input_suggestion_usage(
+        self,
+        usage: TokenUsage | dict[str, Any] | None,
+        *,
+        model: str,
+        elapsed_ms: int | None = None,
+    ) -> None:
+        normalized = usage if isinstance(usage, TokenUsage) else normalize_usage(usage)
+        if not normalized.known:
+            return
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        previous_usage = previous.get("inputSuggestionUsage") if previous else None
+        accumulated = merge_usage(
+            previous_usage if isinstance(previous_usage, dict) else None,
+            normalized,
+        ).to_dict()
+        accumulated["model"] = model
+        if elapsed_ms is not None:
+            accumulated["elapsed_ms"] = _coerce_int(
+                (previous_usage or {}).get("elapsed_ms") if isinstance(previous_usage, dict) else None,
+                0,
+            ) + max(elapsed_ms, 0)
+        self._touch_index(input_suggestion_usage=accumulated)
 
     def context_token_state(
         self,
@@ -332,6 +357,7 @@ class DeepyJsonlSession:
         pending_tokens: int | None = None,
         last_usage_record_count: int | None = None,
         todo_state: object = _UNSET,
+        input_suggestion_usage: dict[str, Any] | None = None,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         index_path = self.path.parent / "sessions-index.json"
@@ -388,6 +414,17 @@ class DeepyJsonlSession:
             **(
                 {"usage": previous["usage"]}
                 if usage is None and isinstance(previous.get("usage"), dict)
+                else {}
+            ),
+            **(
+                {"inputSuggestionUsage": input_suggestion_usage}
+                if input_suggestion_usage is not None
+                else {}
+            ),
+            **(
+                {"inputSuggestionUsage": previous["inputSuggestionUsage"]}
+                if input_suggestion_usage is None
+                and isinstance(previous.get("inputSuggestionUsage"), dict)
                 else {}
             ),
             **({"processes": previous["processes"]} if "processes" in previous else {}),
@@ -457,6 +494,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
         if not isinstance(path, str) or not path:
             path = f"{session_id}.jsonl"
         usage = item.get("usage")
+        input_suggestion_usage = item.get("inputSuggestionUsage")
         entries.append(
             SessionEntry(
                 id=session_id,
@@ -466,6 +504,9 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 updated_at=_coerce_int(item.get("updatedAt"), 0),
                 processes=_normalize_processes(item.get("processes")),
                 usage=usage if isinstance(usage, dict) else None,
+                input_suggestion_usage=input_suggestion_usage
+                if isinstance(input_suggestion_usage, dict)
+                else None,
                 latest_context_window_tokens=_optional_int(item.get("latestContextWindowTokens")),
                 last_usage_tokens=_optional_int(item.get("lastUsageTokens")),
                 pending_tokens=_coerce_int(item.get("pendingTokens"), 0),

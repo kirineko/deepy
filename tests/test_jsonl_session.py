@@ -212,6 +212,31 @@ async def test_session_record_usage_accumulates_token_usage(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_records_input_suggestion_usage_separately(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    before_context_usage = session.latest_context_window_usage()
+    session.record_input_suggestion_usage(
+        {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        model="deepseek-v4-flash",
+        elapsed_ms=25,
+    )
+
+    entry = list_session_entries(project, deepy_home=home)[0]
+    assert entry.usage is not None
+    assert entry.usage["total_tokens"] == 12
+    assert entry.input_suggestion_usage is not None
+    assert entry.input_suggestion_usage["total_tokens"] == 4
+    assert entry.input_suggestion_usage["model"] == "deepseek-v4-flash"
+    assert entry.input_suggestion_usage["elapsed_ms"] == 25
+    assert session.latest_context_window_usage() == before_context_usage
+
+
+@pytest.mark.asyncio
 async def test_session_token_state_tracks_usage_checkpoint_and_pending(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"

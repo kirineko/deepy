@@ -21,6 +21,7 @@ DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 30.0
 DEFAULT_MCP_CACHE_TOOLS_LIST = True
+DEFAULT_INPUT_SUGGESTIONS_ENABLED = True
 REASONING_EFFORTS = {"high", "max"}
 REASONING_MODES = {"none", "high", "max"}
 UI_THEMES = {"auto", "dark", "light"}
@@ -284,13 +285,22 @@ class McpConfig:
 class UiConfig:
     theme: str = DEFAULT_UI_THEME
     theme_configured: bool = False
+    input_suggestions_enabled: bool = DEFAULT_INPUT_SUGGESTIONS_ENABLED
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
         theme = raw.get("theme")
+        input_suggestions_enabled = _as_bool(
+            raw.get("input_suggestions_enabled"),
+            DEFAULT_INPUT_SUGGESTIONS_ENABLED,
+        )
         if isinstance(theme, str) and theme.strip() in UI_THEMES:
-            return cls(theme=theme.strip(), theme_configured=True)
-        return cls()
+            return cls(
+                theme=theme.strip(),
+                theme_configured=True,
+                input_suggestions_enabled=input_suggestions_enabled,
+            )
+        return cls(input_suggestions_enabled=input_suggestions_enabled)
 
 
 @dataclass(frozen=True)
@@ -441,6 +451,7 @@ def write_config(
         },
         "ui": {
             "theme": theme,
+            "input_suggestions_enabled": DEFAULT_INPUT_SUGGESTIONS_ENABLED,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -488,6 +499,18 @@ def update_config_theme(config_path: Path, theme: str) -> None:
     ui = raw.get("ui")
     ui_map = dict(ui) if isinstance(ui, Mapping) else {}
     ui_map["theme"] = theme
+    raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_input_suggestions_enabled(config_path: Path, enabled: bool) -> None:
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["input_suggestions_enabled"] = bool(enabled)
     raw["ui"] = ui_map
     _write_private_toml(path, raw)
 

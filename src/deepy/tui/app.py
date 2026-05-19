@@ -23,9 +23,15 @@ from deepy.config import (
     is_valid_reasoning_mode,
     is_valid_ui_theme,
     load_settings,
+    update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
     write_config,
+)
+from deepy.input_suggestions import (
+    InputSuggestionController,
+    generate_input_suggestion,
+    is_eligible_for_input_suggestion,
 )
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
@@ -203,6 +209,13 @@ class DeepyTuiApp(App[None]):
         border: tall $accent;
     }
 
+    #prompt-ghost {
+        height: 1;
+        margin: 0 1 0 1;
+        color: $text-muted;
+        text-style: italic;
+    }
+
     #prompt-suggestions {
         height: auto;
         max-height: 8;
@@ -355,6 +368,9 @@ class DeepyTuiApp(App[None]):
         self.run_once = run_once
         self.guide_missing_config = guide_missing_config
         self.controller = TuiController(settings=settings)
+        self.input_suggestions = InputSuggestionController(
+            enabled=settings.ui.input_suggestions_enabled
+        )
         self._assistant_block: AssistantBlock | None = None
         self._thinking_block: ThinkingBlock | None = None
         self._tool_blocks: dict[str, ToolBlock] = {}
@@ -406,6 +422,7 @@ class DeepyTuiApp(App[None]):
     @on(PromptTextArea.Submitted)
     async def on_prompt_submitted(self, event: PromptTextArea.Submitted) -> None:
         event.stop()
+        self._clear_input_suggestion()
         if self.state.busy:
             self.notify("Deepy is still working.", severity="warning")
             return
@@ -445,6 +462,7 @@ class DeepyTuiApp(App[None]):
             "compact",
             "theme",
             "model",
+            "input-suggestion",
             "reset",
         }:
             self.invoke_tui_command(slash.name, slash.argument)
@@ -466,6 +484,7 @@ class DeepyTuiApp(App[None]):
         return True
 
     def _start_model_turn(self, prompt: str, skill_names: list[str], *, status: str) -> None:
+        self._clear_input_suggestion()
         self.state = set_busy(reset_turn_buffers(self.state), True, status)
         self._assistant_block = None
         self._thinking_block = None
@@ -504,6 +523,9 @@ class DeepyTuiApp(App[None]):
         if name == "model":
             await self._model_command(argument.strip())
             return
+        if name == "input-suggestion":
+            await self._input_suggestion_command(argument.strip())
+            return
         if name == "reset":
             await self._reset_command()
             return
@@ -537,6 +559,7 @@ class DeepyTuiApp(App[None]):
             f"- Reasoning: `{report.reasoning_mode}`",
             f"- Session: `{self.state.session_id or 'new'}`",
             f"- Theme: `{self.settings.ui.theme}`",
+            f"- Input suggestions: `{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}`",
             f"- Loaded skills: `{', '.join(self.controller.loaded_skill_names) or 'none'}`",
             f"- Sessions: `{report.session_count}`",
             f"- Skills: `{report.skill_count}`",
@@ -653,6 +676,8 @@ class DeepyTuiApp(App[None]):
         update_config_theme(self.settings.path, theme)
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
+        self.input_suggestions.set_enabled(self.settings.ui.input_suggestions_enabled)
+        self._clear_input_suggestion()
         self._apply_theme()
         await self._append_block(InfoBlock(f"Saved UI theme: {theme}"))
         self._update_status(f"Theme {theme}")
@@ -712,6 +737,29 @@ class DeepyTuiApp(App[None]):
             )
         )
         self._update_status("Model saved")
+
+    async def _input_suggestion_command(self, argument: str) -> None:
+        if argument:
+            await self._append_block(ErrorBlock("Usage: /input-suggestion"))
+            return
+        if self.settings.path is None:
+            await self._append_block(
+                ErrorBlock("Cannot persist input suggestion setting: config path is unknown.")
+            )
+            return
+        enabled = not self.settings.ui.input_suggestions_enabled
+        update_config_input_suggestions_enabled(self.settings.path, enabled)
+        self.settings = load_settings(self.settings.path)
+        self.controller.settings = self.settings
+        self.input_suggestions.set_enabled(self.settings.ui.input_suggestions_enabled)
+        self._clear_input_suggestion()
+        await self._append_block(
+            InfoBlock(
+                "Input suggestions "
+                f"{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}."
+            )
+        )
+        self._update_status("Input suggestions toggled")
 
     async def _reset_command(self) -> None:
         if self.settings.path is None:
@@ -1093,6 +1141,7 @@ class DeepyTuiApp(App[None]):
             await self._show_pending_question(summary.pending_questions)
         await self._append_block(UsageLine(format_usage_line(summary.usage)))
         self._update_status("Idle")
+        self.run_worker(self._prepare_input_suggestion(summary), exclusive=False)
 
     @on(TurnFailedMessage)
     async def on_turn_failed(self, message: TurnFailedMessage) -> None:
@@ -1135,6 +1184,38 @@ class DeepyTuiApp(App[None]):
             return
         self._pending_question_answers.clear()
         await self._append_block(QuestionBlock(questions[0]))
+
+    async def _prepare_input_suggestion(self, summary: RunSummary) -> None:
+        self._clear_input_suggestion()
+        if not summary.session_id or summary.pending_questions:
+            return
+        session = DeepyJsonlSession.open(self.project_root, summary.session_id)
+        items = await session.get_items()
+        if not is_eligible_for_input_suggestion(
+            items,
+            enabled=self.settings.ui.input_suggestions_enabled,
+            has_pending_questions=bool(summary.pending_questions),
+            turn_status=summary.status,
+        ):
+            return
+        suggestion = await generate_input_suggestion(self.settings, items)
+        if suggestion is None or self.state.busy or self.state.pending_questions:
+            return
+        session.record_input_suggestion_usage(
+            suggestion.usage,
+            model=suggestion.model,
+            elapsed_ms=suggestion.elapsed_ms,
+        )
+        self.input_suggestions.set_suggestion(suggestion.text)
+        panel = self.query_one(PromptPanel)
+        panel.set_input_suggestion(suggestion.text)
+
+    def _clear_input_suggestion(self) -> None:
+        self.input_suggestions.dismiss()
+        try:
+            self.query_one(PromptPanel).clear_input_suggestion()
+        except NoMatches:
+            return
 
     async def _handle_stream_event(self, event: DeepyStreamEvent) -> None:
         if event.kind == "text_delta" and event.text:

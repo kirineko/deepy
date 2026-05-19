@@ -19,7 +19,9 @@ from deepy.ui.prompt_input import PROMPT_PLACEHOLDER
 from deepy.ui.prompt_input import PROMPT_TOOLBAR
 from deepy.ui.prompt_input import PROMPT_TOOLBAR_BACKGROUND
 from deepy.ui.prompt_input import PROMPT_TOOLBAR_FOREGROUND
+from deepy.input_suggestions import InputSuggestionController
 from deepy.ui.prompt_input import PromptCursorPlacement
+from deepy.ui.prompt_input import InputSuggestionAutoSuggest
 from deepy.ui.prompt_input import add_unique_skill
 from deepy.ui.prompt_input import build_prompt_key_bindings
 from deepy.ui.prompt_input import build_prompt_toolbar
@@ -27,6 +29,7 @@ from deepy.ui.prompt_input import character_width
 from deepy.ui.prompt_input import create_prompt_session
 from deepy.ui.prompt_input import format_selected_skills_status
 from deepy.ui.prompt_input import get_prompt_cursor_placement
+from deepy.ui.prompt_input import input_suggestion_placeholder
 from deepy.ui.prompt_input import is_skill_selected
 from deepy.ui.prompt_input import measure_text_position
 from deepy.ui.prompt_input import prompt_toolbar
@@ -176,6 +179,24 @@ def test_create_prompt_session_combines_slash_and_file_mention_completion(tmp_pa
     assert "src/" in _completion_texts(session.completer, "see @")
 
 
+def test_create_prompt_session_suppresses_completion_menu_when_input_suggestion_visible(tmp_path):
+    controller = InputSuggestionController()
+    controller.set_suggestion("run tests")
+    session = create_prompt_session(
+        slash_commands=[
+            SlashCommandItem("new", "new", "/new", "Start fresh"),
+            SlashCommandItem("resume", "resume", "/resume", "Resume"),
+        ],
+        history_path=tmp_path / "history.txt",
+        input_suggestions=controller,
+        project_root=tmp_path,
+    )
+
+    assert session.completer is not None
+    assert _completion_texts(session.completer, "") == []
+    assert "/new" in _completion_texts(session.completer, "/")
+
+
 def test_selected_skill_helpers_format_dedupe_toggle_and_clear_slash_tokens():
     skill = _skill("skill-writer", "Write skills")
     other = _skill("code-review", "Review code")
@@ -260,6 +281,160 @@ def test_create_prompt_session_configures_history_multiline_and_slash_completion
     assert (tmp_path / "history.txt").exists()
 
 
+def test_input_suggestion_auto_suggest_only_renders_for_empty_buffer():
+    controller = InputSuggestionController()
+    controller.set_suggestion("run tests")
+    auto_suggest = InputSuggestionAutoSuggest(controller)
+
+    assert auto_suggest.get_suggestion(None, Document("")).text == "run tests"
+    assert auto_suggest.get_suggestion(None, Document("typed")) is None
+    assert controller.state.visible is False
+    assert controller.state.text == "run tests"
+    assert auto_suggest.get_suggestion(None, Document("")).text == "run tests"
+
+    controller.set_suggestion("run tests")
+    controller.dismiss()
+
+    assert auto_suggest.get_suggestion(None, Document("")) is None
+
+
+def test_input_suggestion_completer_stays_suppressed_after_type_delete_cycle(tmp_path):
+    controller = InputSuggestionController()
+    controller.set_suggestion("run tests")
+    session = create_prompt_session(
+        slash_commands=[
+            SlashCommandItem("new", "new", "/new", "Start fresh"),
+            SlashCommandItem("resume", "resume", "/resume", "Resume"),
+        ],
+        history_path=tmp_path / "history.txt",
+        input_suggestions=controller,
+        project_root=tmp_path,
+    )
+    auto_suggest = InputSuggestionAutoSuggest(controller)
+
+    assert session.completer is not None
+    assert auto_suggest.get_suggestion(None, Document("typed")) is None
+    assert controller.state.text == "run tests"
+    assert _completion_texts(session.completer, "") == []
+    assert auto_suggest.get_suggestion(None, Document("")).text == "run tests"
+
+
+def test_prompt_key_bindings_tab_and_right_accept_input_suggestion():
+    controller = InputSuggestionController()
+    bindings = build_prompt_key_bindings(input_suggestions=controller)
+    calls: list[str] = []
+
+    class Buffer:
+        complete_state = None
+        text = ""
+
+        def insert_text(self, text: str):
+            calls.append(text)
+            self.text += text
+
+        def start_completion(self, select_first=False):
+            calls.append(f"complete:{select_first}")
+
+        def cursor_right(self):
+            calls.append("right")
+
+    class Event:
+        def __init__(self):
+            self.current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    tab = next(
+        binding for binding in bindings.bindings if key_values(binding) in {("tab",), ("c-i",)}
+    )
+    right = next(binding for binding in bindings.bindings if key_values(binding) == ("right",))
+
+    controller.set_suggestion("run tests")
+    event = Event()
+    tab.handler(event)
+
+    assert calls == ["run tests"]
+    assert event.current_buffer.text == "run tests"
+    assert controller.state.text == "run tests"
+    assert controller.state.visible is False
+
+    event = Event()
+    controller.set_suggestion("commit changes")
+    right.handler(event)
+
+    assert calls == ["run tests", "commit changes"]
+    assert event.current_buffer.text == "commit changes"
+
+
+def test_prompt_key_bindings_tab_accepts_input_suggestion_before_completion():
+    controller = InputSuggestionController()
+    bindings = build_prompt_key_bindings(input_suggestions=controller)
+    calls: list[str] = []
+
+    class CompletionState:
+        current_completion = "/new"
+        completions = ["/new"]
+
+    class Buffer:
+        complete_state = CompletionState()
+        text = ""
+
+        def insert_text(self, text: str):
+            calls.append(f"insert:{text}")
+            self.text += text
+
+        def apply_completion(self, completion):
+            calls.append(f"apply:{completion}")
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    tab = next(
+        binding for binding in bindings.bindings if key_values(binding) in {("tab",), ("c-i",)}
+    )
+
+    controller.set_suggestion("run tests")
+    tab.handler(Event())
+
+    assert calls == ["insert:run tests"]
+    assert controller.state.text == "run tests"
+    assert controller.state.visible is False
+
+
+def test_prompt_key_bindings_enter_dismisses_input_suggestion_without_accepting():
+    controller = InputSuggestionController()
+    bindings = build_prompt_key_bindings(input_suggestions=controller)
+    calls: list[str] = []
+
+    class Buffer:
+        complete_state = None
+        text = ""
+
+        def insert_text(self, text: str):
+            calls.append(text)
+
+        def validate_and_handle(self):
+            calls.append("submit")
+
+    class Event:
+        current_buffer = Buffer()
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    enter = next(binding for binding in bindings.bindings if key_values(binding) == ("c-m",))
+
+    controller.set_suggestion("run tests")
+    enter.handler(Event())
+
+    assert calls == ["submit"]
+    assert controller.state.text is None
+
+
 def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
     class FakePromptSession:
         kwargs = {}
@@ -277,6 +452,23 @@ def test_prompt_for_input_uses_styled_prompt_placeholder_and_toolbar():
     assert session.kwargs["bottom_toolbar"] == PROMPT_TOOLBAR
     assert PROMPT_TOOLBAR_BACKGROUND == "#161821"
     assert PROMPT_TOOLBAR_FOREGROUND == "#a6adc8"
+
+
+def test_prompt_for_input_uses_input_suggestion_as_empty_prompt_placeholder():
+    class FakePromptSession:
+        kwargs = {}
+
+        def prompt(self, message, **kwargs):
+            self.kwargs = kwargs
+            return ""
+
+    controller = InputSuggestionController()
+    controller.set_suggestion("run tests")
+    session = FakePromptSession()
+
+    assert prompt_for_input(session, input_suggestions=controller) == ""
+    assert session.kwargs["placeholder"] == [("class:auto-suggestion", "run tests")]
+    assert input_suggestion_placeholder(None) == PROMPT_PLACEHOLDER
 
 
 def test_prompt_toolbar_uses_cross_platform_newline_help():
@@ -322,6 +514,7 @@ def test_build_prompt_toolbar_renders_structured_status_without_exit_help():
 def test_prompt_toolbar_style_disables_reverse_background():
     rules = dict(prompt_style().style_rules)
 
+    assert rules["auto-suggestion"] == "dim"
     assert rules["bottom-toolbar"].startswith("noreverse bg:#161821")
     assert rules["toolbar.title"].startswith("noreverse bg:#161821")
     assert rules["toolbar.separator"].startswith("noreverse bg:#161821")

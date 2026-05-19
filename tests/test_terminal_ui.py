@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig
+from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig, load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.mcp import McpServerStatus
@@ -1287,7 +1287,44 @@ def test_help_slash_command_includes_model(tmp_path):
     assert "/model" in rendered
     assert "/init" in rendered
     assert "/mcp" in rendered
+    assert "/input-suggestion" in rendered
     assert "/compact [focus]" in rendered
+
+
+def test_input_suggestion_slash_command_toggles_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\ninput_suggestions_enabled = true\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("input-suggestion"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(input_suggestions_enabled=True)),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.input_suggestions_enabled is False
+    assert "Input suggestions disabled." in console.export_text()
+
+
+def test_input_suggestion_slash_command_rejects_arguments_without_changing_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\ninput_suggestions_enabled = false\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("input-suggestion", "on"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(input_suggestions_enabled=False)),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.input_suggestions_enabled is False
+    assert "Usage: /input-suggestion" in console.export_text()
 
 
 def test_mcp_slash_command_shows_no_servers(tmp_path):

@@ -18,6 +18,7 @@ class SlashCommandItem:
 BUILTIN_SLASH_COMMANDS = (
     SlashCommandItem("skills", "skills", "/skills", "Manage skills"),
     SlashCommandItem("model", "model", "/model", "Select model and thinking strength"),
+    SlashCommandItem("input-suggestion", "input-suggestion", "/input-suggestion", "Toggle input suggestions"),
     SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
     SlashCommandItem("init", "init", "/init", "Create or update project AGENTS.md"),
     SlashCommandItem("mcp", "mcp", "/mcp", "Show MCP server status and tools"),

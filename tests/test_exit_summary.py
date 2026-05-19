@@ -71,3 +71,32 @@ def test_build_exit_summary_text_omits_usage_table_without_usage():
 
     assert "Goodbye!" in summary
     assert "Cumulative Model Usage" not in summary
+
+
+def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
+    summary = build_exit_summary_text(
+        session={
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+            "inputSuggestionUsage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 3,
+                "total_tokens": 15,
+                "requests": 2,
+            },
+        },
+        messages=[
+            {"role": "assistant", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ],
+        model="deepseek-v4-pro",
+    )
+
+    assert "Cumulative Model Usage" in summary
+    assert "Input Suggestion Usage" in summary
+    assert "deepseek-v4-flash" in summary
+    assert "12" in summary
+    assert "3" in summary

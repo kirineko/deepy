@@ -6,12 +6,15 @@ from typing import Callable
 from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter, merge_completers
+from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
+from prompt_toolkit.completion import Completer, CompleteEvent, WordCompleter, merge_completers
+from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
+from deepy.input_suggestions import InputSuggestionController
 from deepy.skills import SkillInfo
 from deepy.ui.file_mentions import FileMentionCompleter
 from deepy.ui.prompt_buffer import PromptBufferState
@@ -42,6 +45,7 @@ def create_prompt_session(
     slash_commands: list[SlashCommandItem] | None = None,
     history_path: Path | None = None,
     on_interrupt: Callable[[], None] | None = None,
+    input_suggestions: InputSuggestionController | None = None,
     palette: UiPalette | None = None,
     project_root: Path | None = None,
 ) -> PromptSession[str]:
@@ -57,21 +61,85 @@ def create_prompt_session(
         ],
         deduplicate=True,
     )
+    if input_suggestions is not None:
+        completer = InputSuggestionAwareCompleter(completer, input_suggestions)
     return PromptSession(
         history=FileHistory(str(path)),
         completer=completer,
         complete_while_typing=True,
         multiline=True,
-        key_bindings=build_prompt_key_bindings(on_interrupt=on_interrupt),
+        key_bindings=build_prompt_key_bindings(
+            on_interrupt=on_interrupt,
+            input_suggestions=input_suggestions,
+        ),
+        auto_suggest=InputSuggestionAutoSuggest(input_suggestions)
+        if input_suggestions is not None
+        else None,
         style=prompt_style(palette),
     )
+
+
+class InputSuggestionAutoSuggest(AutoSuggest):
+    def __init__(self, controller: InputSuggestionController | None) -> None:
+        self.controller = controller
+
+    def get_suggestion(self, buffer, document: Document) -> Suggestion | None:  # type: ignore[override]
+        if self.controller is None:
+            return None
+        state = self.controller.state
+        if document.text:
+            self.controller.hide()
+            return None
+        self.controller.reveal()
+        state = self.controller.state
+        if not state.visible or not state.text:
+            return None
+        return Suggestion(state.text)
+
+
+class InputSuggestionAwareCompleter(Completer):
+    def __init__(self, completer: Completer, controller: InputSuggestionController) -> None:
+        self.completer = completer
+        self.controller = controller
+
+    def get_completions(self, document: Document, complete_event: CompleteEvent):
+        state = self.controller.state
+        if state.text and not document.text:
+            return
+        yield from self.completer.get_completions(document, complete_event)
 
 
 def build_prompt_key_bindings(
     *,
     on_interrupt: Callable[[], None] | None = None,
+    input_suggestions: InputSuggestionController | None = None,
 ) -> KeyBindings:
     bindings = KeyBindings()
+
+    def accept_input_suggestion(event, method: str) -> bool:
+        if input_suggestions is None:
+            return False
+        current_buffer = event.current_buffer
+        if current_buffer.text:
+            return False
+        text = input_suggestions.accept("right" if method == "right" else "tab")
+        if text is None:
+            return False
+        current_buffer.insert_text(text)
+        return True
+
+    def apply_current_completion(event) -> bool:
+        complete_state = event.current_buffer.complete_state
+        if complete_state is None:
+            return False
+        completion = complete_state.current_completion
+        if completion is None and complete_state.completions:
+            completion = complete_state.completions[0]
+        if completion is not None:
+            event.current_buffer.apply_completion(completion)
+        else:
+            event.current_buffer.cancel_completion()
+        return True
 
     @bindings.add("escape")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
@@ -80,21 +148,31 @@ def build_prompt_key_bindings(
 
     @bindings.add("enter")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
-        complete_state = event.current_buffer.complete_state
-        if complete_state is not None:
-            completion = complete_state.current_completion
-            if completion is None and complete_state.completions:
-                completion = complete_state.completions[0]
-            if completion is not None:
-                event.current_buffer.apply_completion(completion)
-            else:
-                event.current_buffer.cancel_completion()
+        if apply_current_completion(event):
             return
+        if input_suggestions is not None:
+            input_suggestions.dismiss()
         event.current_buffer.validate_and_handle()
+
+    @bindings.add("tab")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if accept_input_suggestion(event, "tab"):
+            return
+        if apply_current_completion(event):
+            return
+        event.current_buffer.start_completion(select_first=False)
+
+    @bindings.add("right")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if accept_input_suggestion(event, "right"):
+            return
+        event.current_buffer.cursor_right()
 
     @bindings.add("c-d")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         if event.current_buffer.text:
+            if input_suggestions is not None:
+                input_suggestions.dismiss()
             event.current_buffer.delete()
             return
         event.app.exit(result=CTRL_D_EXIT_CONFIRM_SIGNAL)
@@ -114,13 +192,25 @@ def prompt_for_input(
     session: PromptSession[str],
     message: AnyFormattedText | None = None,
     bottom_toolbar: AnyFormattedText | None = None,
+    input_suggestions: InputSuggestionController | None = None,
 ) -> str:
     prompt_message = PROMPT_MESSAGE if message is None else message
     return session.prompt(
         prompt_message,
-        placeholder=PROMPT_PLACEHOLDER,
+        placeholder=input_suggestion_placeholder(input_suggestions),
         bottom_toolbar=prompt_toolbar() if bottom_toolbar is None else bottom_toolbar,
     ).strip()
+
+
+def input_suggestion_placeholder(
+    input_suggestions: InputSuggestionController | None = None,
+) -> StyleAndTextTuples:
+    if input_suggestions is None:
+        return PROMPT_PLACEHOLDER
+    state = input_suggestions.state
+    if state.visible and state.text:
+        return [("class:auto-suggestion", state.text)]
+    return PROMPT_PLACEHOLDER
 
 
 def build_prompt_toolbar(
@@ -142,6 +232,7 @@ def prompt_style(palette: UiPalette | None = None) -> Style:
         {
             "prompt": palette.prompt,
             "placeholder": palette.placeholder,
+            "auto-suggestion": palette.muted,
             "toolbar": f"{toolbar_base} {palette.toolbar_foreground}",
             "toolbar.context": f"{toolbar_base} {palette.toolbar_context}",
             "toolbar.separator": f"{toolbar_base} {palette.toolbar_separator}",

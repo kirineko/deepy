@@ -20,6 +20,7 @@ class StatusReport:
     context_window_tokens: int
     compact_threshold_tokens: int
     reserved_context_tokens: int
+    input_suggestions_enabled: bool
     session_count: int
     skill_count: int
     mcp: dict[str, Any]
@@ -36,6 +37,7 @@ def build_status_report(project_root: Path, settings: Settings) -> StatusReport:
         context_window_tokens=settings.context.window_tokens,
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
         reserved_context_tokens=settings.context.reserved_context_tokens,
+        input_suggestions_enabled=settings.ui.input_suggestions_enabled,
         session_count=len(list_session_entries(root)),
         skill_count=len(discover_skills(root)),
         mcp=mcp_policy_to_dict(settings),
@@ -53,6 +55,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Context: {report.context_window_tokens} tokens",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
             f"Reserved context: {report.reserved_context_tokens} tokens",
+            f"Input suggestions: {'enabled' if report.input_suggestions_enabled else 'disabled'}",
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
             (
@@ -75,6 +78,7 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "context_window_tokens": report.context_window_tokens,
         "compact_threshold_tokens": report.compact_threshold_tokens,
         "reserved_context_tokens": report.reserved_context_tokens,
+        "input_suggestions_enabled": report.input_suggestions_enabled,
         "session_count": report.session_count,
         "skill_count": report.skill_count,
         "mcp": report.mcp,

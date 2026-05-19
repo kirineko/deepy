@@ -27,9 +27,16 @@ from deepy.config import (
     load_settings,
     ui_theme_from_selection,
     ui_theme_number,
+    update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
     write_config,
+)
+from deepy.input_suggestions import (
+    InputSuggestion,
+    InputSuggestionController,
+    generate_input_suggestion,
+    is_eligible_for_input_suggestion,
 )
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
@@ -173,7 +180,15 @@ def run_interactive(
         project_root=root,
         settings=settings,
     )
-    prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
+    input_suggestions = InputSuggestionController(
+        enabled=settings.ui.input_suggestions_enabled
+    )
+    prompt_session = _create_interactive_prompt_session(
+        root,
+        palette,
+        loaded_skill_names,
+        input_suggestions=input_suggestions,
+    )
     async_runner = asyncio.Runner()
     mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
     async_runner.run(mcp_runtime.connect())
@@ -204,7 +219,9 @@ def run_interactive(
                 text = prompt_for_input(
                     prompt_session,
                     bottom_toolbar=build_prompt_toolbar(context_footer),
+                    input_suggestions=input_suggestions,
                 )
+                input_suggestions.dismiss()
             except EOFError:
                 if ctrl_d_exit_pending:
                     output.print()
@@ -299,6 +316,13 @@ def run_interactive(
                         session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                    _prepare_input_suggestion(
+                        async_runner,
+                        input_suggestions,
+                        root,
+                        settings,
+                        summary,
+                    )
                     context_footer = _build_status_footer(
                         summary.session_id,
                         project_root=root,
@@ -324,6 +348,13 @@ def run_interactive(
                     session_id = summary.session_id
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                    _prepare_input_suggestion(
+                        async_runner,
+                        input_suggestions,
+                        root,
+                        settings,
+                        summary,
+                    )
                     context_footer = _build_status_footer(
                         summary.session_id,
                         project_root=root,
@@ -345,9 +376,18 @@ def run_interactive(
                     return 0
                 if slash.name in {"theme", "reset", "model"}:
                     settings = load_theme_settings(settings)
+                    input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
                     palette = resolve_ui_palette(settings.ui.theme)
-                if slash.name in {"skills", "theme", "reset", "model"}:
-                    prompt_session = _create_interactive_prompt_session(root, palette, loaded_skill_names)
+                if slash.name == "input-suggestion":
+                    settings = load_settings(settings.path) if settings.path is not None else settings
+                    input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
+                if slash.name in {"skills", "theme", "reset", "model", "input-suggestion"}:
+                    prompt_session = _create_interactive_prompt_session(
+                        root,
+                        palette,
+                        loaded_skill_names,
+                        input_suggestions=input_suggestions,
+                    )
                 session_id = next_session
                 if slash.name in {"new", "resume", "reset", "model", "compact", "skills", "theme", "mcp"}:
                     context_footer = _build_status_footer(
@@ -401,6 +441,13 @@ def run_interactive(
                 session_id = summary.session_id
             _print_assistant_output(output, summary.output, palette=palette)
             _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+            _prepare_input_suggestion(
+                async_runner,
+                input_suggestions,
+                root,
+                settings,
+                summary,
+            )
             context_footer = _build_status_footer(
                 summary.session_id,
                 project_root=root,
@@ -415,6 +462,7 @@ def _create_interactive_prompt_session(
     root: Path,
     palette: UiPalette,
     loaded_skill_names: list[str],
+    input_suggestions: InputSuggestionController | None = None,
 ):
     return create_prompt_session(
         slash_commands=build_slash_commands(
@@ -423,7 +471,52 @@ def _create_interactive_prompt_session(
         ),
         palette=palette,
         project_root=root,
+        input_suggestions=input_suggestions,
     )
+
+
+def _prepare_input_suggestion(
+    async_runner: asyncio.Runner,
+    controller: InputSuggestionController,
+    project_root: Path,
+    settings: Settings,
+    summary: RunSummary,
+) -> None:
+    controller.dismiss()
+    if not summary.session_id or summary.pending_questions:
+        return
+    try:
+        suggestion = async_runner.run(
+            _generate_input_suggestion_for_summary(project_root, settings, summary)
+        )
+    except Exception:
+        return
+    if suggestion is None:
+        return
+    controller.set_suggestion(suggestion.text)
+    session = DeepyJsonlSession.open(project_root, summary.session_id)
+    session.record_input_suggestion_usage(
+        suggestion.usage,
+        model=suggestion.model,
+        elapsed_ms=suggestion.elapsed_ms,
+    )
+
+
+async def _generate_input_suggestion_for_summary(
+    project_root: Path,
+    settings: Settings,
+    summary: RunSummary,
+) -> InputSuggestion | None:
+    session = DeepyJsonlSession.open(project_root, summary.session_id)
+    items = await session.get_items()
+    if not is_eligible_for_input_suggestion(
+        items,
+        enabled=settings.ui.input_suggestions_enabled,
+        has_pending_questions=bool(summary.pending_questions),
+        turn_status=summary.status,
+    ):
+        return None
+    return await generate_input_suggestion(settings, items)
 
 
 def _check_startup_version_update(
@@ -793,6 +886,7 @@ def _handle_slash_command(
         console.print("/init      Create or update project AGENTS.md")
         console.print("/mcp       Show MCP server status and tools")
         console.print("/model      Select model and thinking strength")
+        console.print("/input-suggestion Toggle input suggestions")
         console.print("/status     Show project status")
         console.print("/theme      Show or change UI theme")
         console.print("/reset      Delete config and run setup again")
@@ -871,6 +965,8 @@ def _handle_slash_command(
             palette,
             input_func=input_func,
         )
+    if command.name == "input-suggestion":
+        return _handle_input_suggestion_command(command, console, current_session_id, settings, palette)
     if command.name == "theme":
         return _handle_theme_command(
             command,
@@ -1329,6 +1425,25 @@ def _handle_model_command(
             reasoning_mode=reasoning_mode,
         )
     _print_model_usage(console, palette)
+    return current_session_id
+
+
+def _handle_input_suggestion_command(
+    command: SlashCommand,
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+) -> str | None:
+    if command.argument.strip():
+        console.print(f"[{palette.error}]Usage:[/] /input-suggestion")
+        return current_session_id
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot persist input suggestion setting: config path is unknown.[/]")
+        return current_session_id
+    enabled = not settings.ui.input_suggestions_enabled
+    update_config_input_suggestions_enabled(settings.path, enabled)
+    console.print(f"Input suggestions {'enabled' if enabled else 'disabled'}.")
     return current_session_id
 
 

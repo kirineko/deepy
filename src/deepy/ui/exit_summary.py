@@ -60,6 +60,7 @@ def build_exit_summary_text(
     model: str | None = None,
 ) -> str:
     usage = extract_usage_fields(_get_usage(session))
+    input_suggestion_usage = extract_usage_fields(_get_input_suggestion_usage(session))
     assistant_count = sum(1 for message in messages or [] if message.get("role") == "assistant")
 
     rows = [
@@ -69,7 +70,23 @@ def build_exit_summary_text(
     ]
 
     if usage.has_usage:
-        rows.extend(_usage_rows(usage, assistant_count=assistant_count, model=model or "unknown"))
+        rows.extend(
+            _usage_rows(
+                usage,
+                assistant_count=assistant_count,
+                model=model or "unknown",
+                title="Cumulative Model Usage",
+            )
+        )
+    if input_suggestion_usage.has_usage:
+        rows.extend(
+            _usage_rows(
+                input_suggestion_usage,
+                assistant_count=_get_requests(_get_input_suggestion_usage(session)),
+                model="deepseek-v4-flash",
+                title="Input Suggestion Usage",
+            )
+        )
 
     rows.append("")
     body = "\n".join(_box_line(row) for row in rows)
@@ -77,7 +94,13 @@ def build_exit_summary_text(
     return f"╭{border}╮\n{body}\n╰{border}╯"
 
 
-def _usage_rows(usage: UsageFields, *, assistant_count: int, model: str) -> list[str]:
+def _usage_rows(
+    usage: UsageFields,
+    *,
+    assistant_count: int,
+    model: str,
+    title: str,
+) -> list[str]:
     col_model = 26
     col_reqs = 6
     col_input = 14
@@ -86,7 +109,7 @@ def _usage_rows(usage: UsageFields, *, assistant_count: int, model: str) -> list
     col_reasoning = 14
     table_width = col_model + col_reqs + col_input + col_output + col_cached + col_reasoning
     header = (
-        _pad_right("Cumulative Model Usage", col_model)
+        _pad_right(title, col_model)
         + _pad_left("Reqs", col_reqs)
         + _pad_left("Input Tokens", col_input)
         + _pad_left("Output Tokens", col_output)
@@ -115,6 +138,20 @@ def _get_usage(session: Any | None) -> Any:
     if isinstance(session, Mapping):
         return session.get("usage")
     return getattr(session, "usage", None)
+
+
+def _get_input_suggestion_usage(session: Any | None) -> Any:
+    if session is None:
+        return None
+    if isinstance(session, Mapping):
+        return session.get("input_suggestion_usage") or session.get("inputSuggestionUsage")
+    return getattr(session, "input_suggestion_usage", None)
+
+
+def _get_requests(usage: Any) -> int:
+    if not isinstance(usage, Mapping):
+        return 0
+    return _number_field(usage.get("requests"))
 
 
 def _number_field(value: Any) -> int:
