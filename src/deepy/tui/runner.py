@@ -31,4 +31,6 @@ def run_tui(
         guide_missing_config=True,
     )
     app.run()
+    if app.exit_summary_text:
+        print(app.exit_summary_text)
     return 0

@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.4 是为 DeepSeek 设计的终端编程 Agent，支持 Agent Skills 市场、AGENTS.md 项目规则、MCP、TodoList、网页检索、代码修改、命令执行和长上下文会话。"
+      content="Deepy 0.2.7 是为 DeepSeek 设计的终端编程 Agent，支持 Textual TUI、/status 用量和余额统计、Agent Skills、AGENTS.md 项目规则、MCP、代码修改和长上下文会话。"
     >
-    <title>Deepy 0.2.4 - DeepSeek 终端编程 Agent</title>
+    <title>Deepy 0.2.7 - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -18,6 +18,7 @@
         <span>Deepy</span>
       </a>
       <nav>
+        <a href="#tui">TUI</a>
         <a href="#capabilities">功能</a>
         <a href="#skills">Skills</a>
         <a href="#mcp">MCP</a>
@@ -30,93 +31,122 @@
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-backdrop" aria-hidden="true">
-          <img src="asset/skill-market.webp" alt="">
+          <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.4</p>
+          <p class="release-kicker">Deepy 0.2.7</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            为 DeepSeek 设计的终端编程 Agent。0.2.4 在 Agent Skills、`AGENTS.md`
-            项目规则和 MCP 的基础上，补强 TodoList 进度展示、运行时 statusline 和多行输入体验，
-            让终端里的模型能按项目约束工作、按需加载技能，并保持更稳定的对话界面。
+            为 DeepSeek 设计的终端编程 Agent。0.2.7 补强实验性 Textual TUI，
+            新增紧凑 `/status` 用量统计和 DeepSeek 余额查询，并统一稳定 UI 与 TUI 的退出总结面板，
+            让长会话的状态、成本和收尾信息更清楚。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
-            <a class="button secondary" href="#skills">查看 Skill 市场</a>
-            <a class="button secondary" href="#mcp">配置 MCP</a>
+            <a class="button secondary" href="#tui">查看 TUI</a>
+            <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.4 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.7 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.4</dd>
+            <dd>0.2.7</dd>
           </div>
           <div>
-            <dt>TodoList</dt>
-            <dd>Tool progress, task board, active item</dd>
+            <dt>TUI</dt>
+            <dd>Scrollable Textual transcript and prompt surface</dd>
           </div>
           <div>
-            <dt>Rules</dt>
-            <dd>`AGENTS.md` global and project instructions</dd>
+            <dt>Status</dt>
+            <dd>Usage, context window, and DeepSeek balance</dd>
           </div>
           <div>
-            <dt>MCP</dt>
-            <dd>OpenAI Agents SDK MCP servers and web-search preference</dd>
+            <dt>Exit</dt>
+            <dd>Unified session summary for /exit and Ctrl+D</dd>
           </div>
         </dl>
       </section>
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.4 的重点</h2>
+          <h2 id="capabilities-title">0.2.7 的重点</h2>
           <p>
-            Deepy 现在不只是会读写项目文件的 CLI。它有标准化的 Agent Skill 加载模型、
-            可视化 Skill 市场、项目规则状态提示、TodoList 进度视图，以及通过 MCP 接入
-            Tavily 等外部工具的能力。
+            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时把会话状态做得更直接：
+            `/status` 在需要时才查询余额，TUI 和稳定 UI 都能在退出时给出同一套紧凑总结。
           </p>
         </div>
         <div class="capability-grid">
           <article>
-            <h3>Agent Skills 标准目录</h3>
+            <h3>`/status` 用量统计</h3>
             <p>
-              Skills 完全采用 Agent Skills 结构，支持用户级 `~/.agents/skills` 和项目级
-              `.agents/skills`，旧的 `.deepy/skills` 目录不再作为新能力基础。
+              在交互式会话里直接查看当前 session、项目累计 token、cache hit、上下文窗口和模型配置。
             </p>
           </article>
           <article>
-            <h3>可视化 Skill 市场</h3>
+            <h3>DeepSeek 余额</h3>
             <p>
-              `/skills` 进入可选菜单，浏览市场、安装、查看已安装、卸载和更新都通过键盘选择完成，
-              不要求用户记住复杂子命令。
+              余额接口只在用户显式运行 `/status` 时调用；启动、模型请求、输入建议和退出总结都不会触发查询。
             </p>
           </article>
           <article>
-            <h3>主动调用 Skill</h3>
+            <h3>统一退出总结</h3>
             <p>
-              `/skill:&lt;name&gt;` 支持补全提示，用户可以明确指定要加载的 skill；系统提示词也会按
-              Agent Skills 的 progressive disclosure 模型自动选择合适 skill。
+              稳定 UI 和 TUI 的 `/exit`、`/quit`、Ctrl+D 都输出同样的 session summary，包含消息数和模型用量。
             </p>
           </article>
           <article>
-            <h3>`AGENTS.md` 项目规则</h3>
+            <h3>实验性 Textual TUI</h3>
             <p>
-              Deepy 读取全局和项目级 `AGENTS.md`，并在状态栏显示 `[AGENTS.md]`，
-              让用户知道当前会话正受项目规则约束。
+              `deepy tui` 提供可滚动 transcript、独立 prompt 区、状态条、slash command 和文件引用提示。
             </p>
           </article>
           <article>
-            <h3>`/init` 初始化规则</h3>
+            <h3>Agent Skills 和 MCP</h3>
             <p>
-              `/init` 会为当前项目创建或更新 `AGENTS.md`，适合把构建、测试、代码风格和协作约束写入仓库。
+              `/skills` 管理 Agent Skills 市场，`/mcp` 检查外部工具接入；Tavily 等 MCP 搜索工具可被优先使用。
             </p>
           </article>
           <article>
-            <h3>MCP 优先 Web Search</h3>
+            <h3>项目会话连续性</h3>
             <p>
-              配置 Tavily 等 MCP server 后，Deepy 会把 MCP 搜索工具暴露给模型并提高优先级，
-              内置 WebSearch 仍作为 fallback 保留。
+              JSONL session、`/resume`、自动 compact 和 durable summary 让长项目会话可以恢复和审查。
             </p>
           </article>
+        </div>
+      </section>
+
+      <section class="section product-strip" id="tui" aria-labelledby="tui-title">
+        <div class="section-header compact">
+          <h2 id="tui-title">Textual TUI 和 `/status`</h2>
+          <p>
+            TUI 仍是 opt-in 实验入口，但 0.2.7 已覆盖主要日常路径：对话、状态检查和退出总结。
+            `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
+          </p>
+        </div>
+        <div class="terminal-showcase" aria-label="Deepy TUI 和 status 截图">
+          <figure class="shot hero-shot">
+            <img src="asset/deepy-tui.webp" alt="Deepy Textual TUI 对话界面" width="2866" height="1748">
+            <figcaption>
+              <strong>Textual transcript and prompt</strong>
+              <span>对话记录、滚动状态、statusline、prompt 和快捷键提示都在 TUI 中保持可见。</span>
+            </figcaption>
+          </figure>
+          <div class="terminal-support">
+            <figure class="shot compact-shot">
+              <img src="asset/tui-status.webp" alt="Deepy TUI /status 用量和余额面板" width="1256" height="848">
+              <figcaption>
+                <strong>Compact status with balance</strong>
+                <span>`/status` 汇总 session/project usage、context window 和 DeepSeek 余额。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot compact-shot">
+              <img src="asset/tui-summary.webp" alt="Deepy TUI 退出时的 session summary" width="1704" height="360">
+              <figcaption>
+                <strong>Unified exit summary</strong>
+                <span>TUI 退出后输出和稳定 UI 一致的 session summary，消息数与 token 用量可直接核对。</span>
+              </figcaption>
+            </figure>
+          </div>
         </div>
       </section>
 
@@ -163,7 +193,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.4 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.7 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -278,6 +308,7 @@ deepy</code></pre>
             <pre><code>/skills          管理和安装 Agent Skills
 /skill:docx      主动调用某个 skill
 /mcp             查看 MCP server 状态
+/status          查看用量、上下文和 DeepSeek 余额
 /init            创建或更新 AGENTS.md
 /model           选择模型和 thinking 强度
 /resume          恢复历史会话
@@ -347,7 +378,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.4</span>
+      <span>Deepy 0.2.7</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

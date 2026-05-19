@@ -18,6 +18,7 @@ from deepy.llm.runner import RunSummary
 from deepy.mcp import McpServerStatus
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.skill_market import MarketSkill
+from deepy.status import BalanceStatus
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
@@ -1118,13 +1119,25 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
     assert "第二段仍然是正文" not in status.updates[0]
 
 
-def test_status_slash_command_prints_status(tmp_path):
+def test_status_slash_command_prints_status(tmp_path, monkeypatch):
     console = Console(record=True, width=200)
+    calls = 0
+
+    def fake_fetch(settings):
+        nonlocal calls
+        calls += 1
+        return BalanceStatus(is_available=True)
+
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", fake_fetch)
 
     next_session = _handle_slash_command(SlashCommand("status"), console, tmp_path, "s1")
 
     assert next_session == "s1"
-    assert f"Project: {tmp_path}" in console.export_text()
+    rendered = console.export_text()
+    assert calls == 1
+    assert "Deepy Status" in rendered
+    assert f"project        {tmp_path}" in rendered
+    assert "balance" in rendered
 
 
 def test_model_slash_command_lists_models(tmp_path):
@@ -1580,7 +1593,7 @@ def test_exit_slash_command_prints_exit_summary(tmp_path):
     )
 
     assert next_session == "__exit__"
-    assert "Goodbye!" in console.export_text()
+    assert "Deepy Session Summary" in console.export_text()
 
 
 def test_print_usage_footer_shows_known_usage():
@@ -2456,6 +2469,29 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     rendered = console.export_text()
     assert result == 0
     assert "Press Ctrl+D again to exit." in rendered
+    assert "Deepy Session Summary" in rendered
+
+
+def test_stable_non_status_exit_does_not_fetch_balance(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", fail_fetch)
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "Deepy Session Summary" in console.export_text()
 
 
 def test_run_interactive_prompts_for_missing_theme_before_welcome(tmp_path, monkeypatch):
@@ -2558,3 +2594,4 @@ def test_run_interactive_resets_ctrl_d_exit_confirmation_after_input(tmp_path, m
     assert result == 0
     assert calls == 4
     assert rendered.count("Press Ctrl+D again to exit.") == 2
+    assert "Deepy Session Summary" in rendered

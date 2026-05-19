@@ -125,6 +125,19 @@ deepy tui
 和 assistant 区块、slash command 与 `@file` 提示、状态/帮助面板，以及 Deepy
 自有的 diff view。它仍是实验功能，后续版本可能调整交互和外观。
 
+![Deepy Textual TUI](https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-tui.webp)
+
+稳定终端 UI 和 TUI 都支持 `/status`。它会在一个紧凑面板里显示 session/project
+用量、上下文窗口压力和 DeepSeek 余额。余额接口只会在用户显式运行 `/status`
+时调用，不会在启动、模型请求、输入建议或退出时调用。
+
+![Deepy TUI status 面板](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-status.webp)
+
+`/exit`、`/quit` 和 Ctrl+D 连按两次现在会在稳定 UI 与 TUI 中输出一致的紧凑
+session summary。
+
+![Deepy TUI session summary](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-summary.webp)
+
 已知限制：当前 TUI 不新增交互式 shell/PTTY 支持；toad / textual-diff-view 只作为设计参考，
 Deepy 不复制它们的 AGPL 源码，也不依赖这些包。
 
@@ -191,6 +204,7 @@ uv tool uninstall deepy-cli
 
 ```text
 /model       选择模型和 thinking 强度
+/status      查看用量、上下文压力和 DeepSeek 余额
 /resume      恢复历史项目会话
 /new         开始新会话
 /compact     压缩当前上下文
@@ -280,6 +294,7 @@ deepy config theme
 deepy doctor
 deepy doctor --live --json
 deepy status
+deepy tui
 deepy skills list
 deepy sessions list
 deepy sessions show <session-id>
@@ -296,6 +311,7 @@ deepy run "summarize this project"
 /skill:<name> [request] 直接调用某个 skill
 /init                   创建或更新项目 AGENTS.md
 /mcp                    查看 MCP server 状态和工具
+/status                 查看用量、上下文压力和 DeepSeek 余额
 ```
 
 ## AGENTS.md 指令和 Skills

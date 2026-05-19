@@ -6,19 +6,23 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from textual.widgets import Label, OptionList, TextArea
 from textual.command import CommandPalette
+from textual.widgets import Label, OptionList, TextArea
 from textual.widgets.option_list import Option
 
+import deepy.tui.app as tui_app
+import deepy.tui.runner as tui_runner
 from deepy.config import Settings
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.skill_market import InstalledSkill, MarketSkill
 from deepy.skills import SkillInfo
+from deepy.status import BalanceStatus
 from deepy.tui.app import DeepyTuiApp
 from deepy.tui.commands import DeepyCommandProvider
 from deepy.tui.screens import ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
+from deepy.tui.state import set_session_id
 from deepy.tui.widgets import (
     AssistantBlock,
     DiffBlock,
@@ -81,6 +85,65 @@ async def test_tui_exit_slash_command_exits_without_model_turn(tmp_path, monkeyp
 
         assert exited == [True]
         assert calls == []
+        assert app.exit_summary_text is not None
+        assert "Deepy Session Summary" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_ctrl_d_confirm_exits_with_summary(tmp_path, monkeypatch) -> None:
+    exited: list[bool] = []
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+d")
+        await pilot.press("ctrl+d")
+        await pilot.pause(0.1)
+
+        assert exited == [True]
+        assert app.exit_summary_text is not None
+        assert "Deepy Session Summary" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_counts_session_messages(tmp_path) -> None:
+    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    await session.add_items(
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "assistant", "content": "done"},
+        ]
+    )
+    session.record_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.state = set_session_id(app.state, "s1")
+
+    summary = app._build_exit_summary_text()
+
+    assert "messages" in summary
+    assert "3 total" in summary
+    assert "2 assistant" in summary
+    assert "requests 2" in summary
+
+
+def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, capsys) -> None:
+    class FakeApp:
+        exit_summary_text = "Deepy Session Summary\nmodel deepseek-v4-pro"
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(tui_app, "DeepyTuiApp", FakeApp)
+
+    code = tui_runner.run_tui(Settings(), project_root=tmp_path)
+
+    assert code == 0
+    assert "Deepy Session Summary" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -1400,7 +1463,15 @@ async def test_tui_help_command_opens_info_screen(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_status_command_opens_status_screen(tmp_path) -> None:
+async def test_tui_status_command_opens_status_screen(tmp_path, monkeypatch) -> None:
+    calls = 0
+
+    def fake_fetch(settings):
+        nonlocal calls
+        calls += 1
+        return BalanceStatus(is_available=True)
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fake_fetch)
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -1411,9 +1482,31 @@ async def test_tui_status_command_opens_status_screen(tmp_path) -> None:
         await pilot.pause(0.2)
 
         assert isinstance(app.screen, InfoScreen)
+        assert calls == 1
         assert "Project:" in app.screen.markdown
         assert "MCP:" in app.screen.markdown
+        assert "Balance:" in app.screen.markdown
         app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_non_status_surfaces_do_not_fetch_balance(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app._update_status("Idle")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/help"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
 
 
 @pytest.mark.asyncio

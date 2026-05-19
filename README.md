@@ -138,6 +138,20 @@ scrollable transcript, live thinking and assistant blocks, prompt suggestions
 for slash commands and `@file` mentions, status/help surfaces, and a Deepy-owned
 diff view. It is experimental and may change between releases.
 
+![Deepy Textual TUI](https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-tui.webp)
+
+`/status` is available in both the stable terminal UI and the TUI. It shows
+session/project usage, context window pressure, and DeepSeek balance in one
+compact view. The balance API is called only when `/status` is invoked, not on
+startup, model turns, input suggestions, or exit.
+
+![Deepy TUI status panel](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-status.webp)
+
+`/exit`, `/quit`, and pressing Ctrl+D twice now print the same compact session
+summary in both UIs.
+
+![Deepy TUI session summary](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-summary.webp)
+
 Known limitations: the TUI does not add interactive shell/PTTY support yet, and
 toad / textual-diff-view are only design references. Deepy does not copy their
 AGPL source or depend on those packages.
@@ -205,6 +219,7 @@ Inside an interactive Deepy session:
 
 ```text
 /model       Select model and thinking strength
+/status      Show usage, context pressure, and DeepSeek balance
 /resume      Resume a previous project session
 /new         Start a fresh session
 /compact     Compact the active session context
@@ -295,6 +310,7 @@ deepy config theme
 deepy doctor
 deepy doctor --live --json
 deepy status
+deepy tui
 deepy skills list
 deepy sessions list
 deepy sessions show <session-id>
@@ -311,6 +327,7 @@ Inside the interactive terminal:
 /skill:<name> [request] Invoke a skill directly
 /init                   Create or update project AGENTS.md
 /mcp                    Show MCP server status and tools
+/status                 Show usage, context pressure, and DeepSeek balance
 ```
 
 ## AGENTS.md Instructions And Skills

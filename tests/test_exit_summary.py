@@ -49,28 +49,34 @@ def test_build_exit_summary_text_shows_usage_and_reasoning_tokens():
             {"role": "user", "content": "hello"},
         ],
         model="mimo-v2.5-pro",
+        session_id="s1",
     )
 
-    assert "Goodbye!" in summary
+    assert "Deepy Session Summary" in summary
     assert "╭" in summary
     assert "╰" in summary
-    assert "Cumulative Model Usage" in summary
-    assert "Cached Tokens" in summary
-    assert "Reasoning" in summary
+    assert "model usage" in summary
+    assert "cached" in summary
+    assert "reasoning" in summary
     assert "mimo-v2.5-pro" in summary
+    assert "session" in summary
+    assert "s1" in summary
     assert "11,966" in summary
     assert "11,776" in summary
     assert "144" in summary
     assert "Agent powering down" not in summary
     assert "Interaction Summary" not in summary
     assert "Context Window" not in summary
+    assert "balance" not in summary.lower()
 
 
 def test_build_exit_summary_text_omits_usage_table_without_usage():
     summary = build_exit_summary_text(model="deepseek-v4-pro")
 
-    assert "Goodbye!" in summary
-    assert "Cumulative Model Usage" not in summary
+    assert "Deepy Session Summary" in summary
+    assert "model" in summary
+    assert "deepseek-v4-pro" in summary
+    assert "model usage" not in summary
 
 
 def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
@@ -95,8 +101,8 @@ def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
         model="deepseek-v4-pro",
     )
 
-    assert "Cumulative Model Usage" in summary
-    assert "Input Suggestion Usage" in summary
+    assert "model usage" in summary
+    assert "suggestions" in summary
     assert "deepseek-v4-flash" in summary
     assert "12" in summary
     assert "3" in summary

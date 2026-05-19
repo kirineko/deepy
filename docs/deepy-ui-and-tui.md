@@ -19,7 +19,9 @@ Deepy UI 是稳定界面，基于 Rich 和 prompt-toolkit。
 - Thinking、工具调用、工具结果、usage、错误信息渲染。
 - `shell`、`read`、`modify`、`todo_write`、`AskUserQuestion`、Web、MCP 等工具输出。
 - `/new`、`/resume`、`/sessions`、`/compact` 等 session/context 命令。
-- `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/skills` 等管理命令。
+- `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/status`、`/skills` 等管理命令。
+- `/status` 会显示用量、上下文窗口和 DeepSeek 余额；余额接口只在显式运行 `/status` 时调用。
+- `/exit`、`/quit` 和 Ctrl+D 连按两次会输出统一的 session summary。
 - `!command` 本地命令模式。
 - slash 命令补全和 `@file` 文件补全。
 - prompt history。
@@ -39,7 +41,9 @@ Deepy TUI 是实验界面，基于 Textual。
 - `shell`、`read`、`todo_write`、Web、MCP、`load_skill` 等工具有专门显示效果。
 - AskUserQuestion 支持单选、多选、自定义回答、取消和同 session 继续。
 - `/new`、`/resume`、`/sessions`、`/compact` 已支持。
-- `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/skills` 已支持。
+- `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/status`、`/skills` 已支持。
+- `/status` 会显示用量、上下文窗口和 DeepSeek 余额；余额接口只在显式运行 `/status` 时调用。
+- `/exit`、`/quit` 和 Ctrl+D 连按两次会在退出后输出与稳定 UI 一致的 session summary。
 - `!command` 本地命令模式已支持，并复用 shell 工具块显示结果。
 - slash 命令补全和 `@file` 文件补全已支持。
 - prompt history 已支持。
@@ -68,7 +72,9 @@ Deepy TUI 是实验界面，基于 Textual。
 | `/model` | 支持 | 支持 | 已对齐 |
 | `/theme` | 支持 | 支持 | 已对齐 |
 | `/mcp` | 支持 | 支持 | 已对齐 |
+| `/status` | 支持 | 支持 | 已对齐，只在显式调用时查询余额 |
 | `/skills` market | 支持 | 支持 | 已对齐 |
+| 退出 summary | 支持 | 支持 | 已对齐，覆盖 `/exit`、`/quit`、Ctrl+D |
 | 删除 user/project skill | 支持 | 支持 | 已对齐 |
 | built-in skill 管理显示 | 不显示 | 不显示 | 已对齐 |
 | `!command` | 支持 | 支持 | 已对齐 |

@@ -54,7 +54,11 @@ from deepy.skill_market import (
     update_market_skill,
 )
 from deepy.skills import SkillInfo, discover_skills, find_skill, format_skills_for_terminal, read_skill_body
-from deepy.status import build_status_report, format_status_report
+from deepy.status import (
+    build_status_report,
+    fetch_deepseek_balance,
+    format_compact_status_report,
+)
 from deepy.update_check import VersionUpdate
 from deepy.update_check import check_for_version_update
 from deepy.ui.ask_user_question import OTHER_VALUE
@@ -224,6 +228,7 @@ def run_interactive(
                 input_suggestions.dismiss()
             except EOFError:
                 if ctrl_d_exit_pending:
+                    _print_exit_summary(output, root, session_id, settings)
                     output.print()
                     return 0
                 ctrl_d_exit_pending = True
@@ -235,6 +240,7 @@ def run_interactive(
 
             if text == CTRL_D_EXIT_CONFIRM_SIGNAL:
                 if ctrl_d_exit_pending:
+                    _print_exit_summary(output, root, session_id, settings)
                     output.print()
                     return 0
                 ctrl_d_exit_pending = True
@@ -887,7 +893,7 @@ def _handle_slash_command(
         console.print("/mcp       Show MCP server status and tools")
         console.print("/model      Select model and thinking strength")
         console.print("/input-suggestion Toggle input suggestions")
-        console.print("/status     Show project status")
+        console.print("/status     Show status, usage, and DeepSeek balance")
         console.print("/theme      Show or change UI theme")
         console.print("/reset      Delete config and run setup again")
         console.print("/sessions   List project sessions")
@@ -941,7 +947,17 @@ def _handle_slash_command(
             )
         return current_session_id
     if command.name == "status":
-        console.print(format_status_report(build_status_report(project_root, settings)))
+        balance = fetch_deepseek_balance(settings)
+        console.print(
+            format_compact_status_report(
+                build_status_report(
+                    project_root,
+                    settings,
+                    current_session_id=current_session_id,
+                    balance=balance,
+                )
+            )
+        )
         return current_session_id
     if command.name == "mcp":
         statuses = mcp_runtime.statuses if mcp_runtime is not None else []
@@ -1972,6 +1988,7 @@ def _print_exit_summary(
             session=session_entry,
             messages=messages,
             model=settings.model.name,
+            session_id=session_id,
         )
     )
 

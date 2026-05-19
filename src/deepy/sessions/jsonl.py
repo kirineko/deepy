@@ -103,6 +103,9 @@ class DeepyJsonlSession:
         return cls(session_id=session_id, path=sessions_dir / f"{session_id}.jsonl")
 
     async def get_items(self, limit: int | None = None) -> list[dict[str, Any]]:
+        return self.get_items_sync(limit=limit)
+
+    def get_items_sync(self, limit: int | None = None) -> list[dict[str, Any]]:
         items = self._load_items()
         if limit is not None:
             if limit <= 0:

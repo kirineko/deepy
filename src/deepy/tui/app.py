@@ -56,7 +56,13 @@ from deepy.skills import (
     format_skills_for_terminal,
     read_skill_body,
 )
-from deepy.status import build_status_report, format_status_report
+from deepy.status import (
+    BalanceStatus,
+    build_status_report,
+    fetch_deepseek_balance,
+    format_balance_status,
+    format_status_report,
+)
 from deepy.tui.commands import (
     UNSUPPORTED_TUI_COMMANDS,
     DeepyCommandProvider,
@@ -106,6 +112,7 @@ from deepy.ui.ask_user_question import (
     format_ask_user_question_decline,
     normalize_questions,
 )
+from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui import parse_slash_command
 from deepy.ui.local_command import (
     LocalCommandInput,
@@ -381,6 +388,7 @@ class DeepyTuiApp(App[None]):
         self._new_output_available = False
         self._todo_text = ""
         self._local_command_sequence = 0
+        self.exit_summary_text: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -444,7 +452,7 @@ class DeepyTuiApp(App[None]):
         if slash is None:
             return False
         if slash.name in {"exit", "quit"}:
-            self.exit()
+            self._exit_with_summary()
             return True
         if slash.name in UNSUPPORTED_TUI_COMMANDS:
             await self._append_block(ErrorBlock(UNSUPPORTED_TUI_COMMANDS[slash.name]))
@@ -502,7 +510,12 @@ class DeepyTuiApp(App[None]):
             self.push_screen(InfoScreen("Deepy TUI Help", self._help_markdown()))
             return
         if name == "status":
-            self.push_screen(InfoScreen("Deepy TUI Status", self._status_markdown()))
+            self.push_screen(
+                InfoScreen(
+                    "Deepy TUI Status",
+                    self._status_markdown(balance=fetch_deepseek_balance(self.settings)),
+                )
+            )
             return
         if name == "mcp":
             self.push_screen(InfoScreen("Deepy TUI MCP", self._mcp_markdown()))
@@ -551,8 +564,18 @@ class DeepyTuiApp(App[None]):
             ]
         )
 
-    def _status_markdown(self, *, include_runtime: bool = True) -> str:
-        report = build_status_report(self.project_root, self.settings)
+    def _status_markdown(
+        self,
+        *,
+        include_runtime: bool = True,
+        balance: BalanceStatus | None = None,
+    ) -> str:
+        report = build_status_report(
+            self.project_root,
+            self.settings,
+            current_session_id=self.state.session_id,
+            balance=balance,
+        )
         lines = [
             "# Status",
             "",
@@ -567,7 +590,11 @@ class DeepyTuiApp(App[None]):
             f"- Skills: `{report.skill_count}`",
             f"- MCP: `{'enabled' if report.mcp.get('enabled') else 'disabled'}`",
             f"- Config: `{self.settings.path or 'unknown'}`",
+            f"- Session usage: `{format_usage_line(report.active_session_usage) if report.active_session_usage else 'unknown'}`",
+            f"- Project usage: `{format_usage_line(report.project_usage) if report.project_usage else 'unknown'}`",
         ]
+        if balance is not None:
+            lines.append(f"- Balance: `{format_balance_status(balance)}`")
         if include_runtime:
             lines.extend(["", "## Runtime", "```text", format_status_report(report), "```"])
         return "\n".join(lines)
@@ -1434,11 +1461,41 @@ class DeepyTuiApp(App[None]):
 
     def action_confirm_quit(self) -> None:
         if self.state.quit_confirm_pending:
-            self.exit()
+            self._exit_with_summary()
             return
         self.state = set_quit_confirm(self.state, True)
         self._update_status("Press Ctrl+D again to exit")
         self.set_timer(2.0, self._clear_quit_confirm)
+
+    def _exit_with_summary(self) -> None:
+        self.exit_summary_text = self._build_exit_summary_text()
+        self.exit()
+
+    def _build_exit_summary_text(self) -> str:
+        session_entry: SessionEntry | None = None
+        messages: list[dict[str, Any]] = []
+        if self.state.session_id:
+            session_entry = next(
+                (
+                    entry
+                    for entry in list_session_entries(self.project_root)
+                    if entry.id == self.state.session_id
+                ),
+                None,
+            )
+            try:
+                messages = DeepyJsonlSession.open(
+                    self.project_root,
+                    self.state.session_id,
+                ).get_items_sync()
+            except Exception:
+                messages = []
+        return build_exit_summary_text(
+            session=session_entry,
+            messages=messages,
+            model=self.settings.model.name,
+            session_id=self.state.session_id,
+        )
 
     def _clear_quit_confirm(self) -> None:
         if self.state.quit_confirm_pending:
