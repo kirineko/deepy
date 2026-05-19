@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.7 是为 DeepSeek 设计的终端编程 Agent，支持 Textual TUI、/status 用量和余额统计、Agent Skills、AGENTS.md 项目规则、MCP、代码修改和长上下文会话。"
+      content="Deepy 0.2.8 是为 DeepSeek 设计的终端编程 Agent，支持 Textual TUI、/status 用量和余额统计、Agent Skills、AGENTS.md 项目规则、MCP、代码修改和长上下文会话。"
     >
-    <title>Deepy 0.2.7 - DeepSeek 终端编程 Agent</title>
+    <title>Deepy 0.2.8 - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -34,12 +34,11 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.7</p>
+          <p class="release-kicker">Deepy 0.2.8</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            为 DeepSeek 设计的终端编程 Agent。0.2.7 补强实验性 Textual TUI，
-            新增紧凑 `/status` 用量统计和 DeepSeek 余额查询，并统一稳定 UI 与 TUI 的退出总结面板，
-            让长会话的状态、成本和收尾信息更清楚。
+            为 DeepSeek 设计的终端编程 Agent。0.2.8 统一实验性 Textual TUI 与稳定 UI 的多行输入体验，
+            在两个界面里都使用 Ctrl+J 换行、Enter 发送，让日常输入和 Windows 终端操作保持一致。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
@@ -47,10 +46,10 @@
             <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.7 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.8 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.7</dd>
+            <dd>0.2.8</dd>
           </div>
           <div>
             <dt>TUI</dt>
@@ -69,10 +68,10 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.7 的重点</h2>
+          <h2 id="capabilities-title">0.2.8 的重点</h2>
           <p>
-            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时把会话状态做得更直接：
-            `/status` 在需要时才查询余额，TUI 和稳定 UI 都能在退出时给出同一套紧凑总结。
+            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时把 TUI 的输入契约拉回稳定 UI：
+            Ctrl+J 负责插入换行，Enter 继续发送 prompt，帮助文案和测试也保持一致。
           </p>
         </div>
         <div class="capability-grid">
@@ -119,7 +118,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.7 已覆盖主要日常路径：对话、状态检查和退出总结。
+            TUI 仍是 opt-in 实验入口，但 0.2.8 已覆盖主要日常路径：对话、状态检查和退出总结。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -193,7 +192,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.7 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.8 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -378,7 +377,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.7</span>
+      <span>Deepy 0.2.8</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

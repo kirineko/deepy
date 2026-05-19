@@ -40,7 +40,7 @@ from deepy.ui.slash_commands import (
 class PromptTextArea(TextArea):
     BINDINGS = [
         Binding("enter", "submit", "Send", priority=True),
-        Binding("shift+enter", "newline", "Newline", priority=True),
+        Binding("ctrl+j", "newline", "Newline", priority=True),
         Binding("tab", "accept_suggestion", "Accept suggestion", priority=True, show=False),
         Binding("ctrl+up", "history_previous", "History previous", priority=True, show=False),
         Binding("ctrl+down", "history_next", "History next", priority=True, show=False),
@@ -115,7 +115,7 @@ class PromptTextArea(TextArea):
 class QuestionTextArea(TextArea):
     BINDINGS = [
         Binding("enter", "submit", "Submit", priority=True),
-        Binding("shift+enter", "newline", "Newline", priority=True),
+        Binding("ctrl+j", "newline", "Newline", priority=True),
     ]
 
     class Submitted(Message):

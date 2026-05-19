@@ -57,11 +57,23 @@ async def test_tui_starts_and_exits_headless(tmp_path) -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         assert app.query_one("#prompt-input", PromptTextArea).has_focus
-        assert app.query_one(InfoBlock).body.startswith("Experimental Textual TUI.")
+        startup_text = app.query_one(InfoBlock).body
+        assert startup_text.startswith("Experimental Textual TUI.")
+        assert "Ctrl+J for newline" in startup_text
+        assert "Shift+Enter" not in startup_text
         assert app.query(InfoBlock).first() is not None
         await pilot.press("ctrl+o")
         assert app.query_one("#side-panel").has_class("-visible")
         app.exit()
+
+
+def test_tui_help_markdown_advertises_ctrl_j_newline(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    help_markdown = app._help_markdown()
+
+    assert "- **Ctrl+J** - insert newline" in help_markdown
+    assert "Shift+Enter" not in help_markdown
 
 
 @pytest.mark.asyncio
@@ -187,7 +199,7 @@ async def test_tui_prompt_newline_slash_and_file_suggestions(tmp_path) -> None:
 
         prompt.text = "hello"
         prompt.move_cursor((0, len(prompt.text)))
-        await pilot.press("shift+enter")
+        await pilot.press("ctrl+j")
         assert prompt.text == "hello\n"
 
         panel.refresh_suggestions("/")
@@ -1906,10 +1918,14 @@ async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> Non
         assert custom.has_focus
 
         custom.text = "AI"
+        custom.move_cursor((0, len(custom.text)))
+        await pilot.press("ctrl+j")
+        assert custom.text == "AI\n"
+        custom.insert("coding")
         await pilot.press("enter")
         await pilot.pause(0.3)
 
-        assert '"Python goal?"="AI"' in prompts[-1]
+        assert '"Python goal?"="AI coding"' in prompts[-1]
         app.exit()
 
 

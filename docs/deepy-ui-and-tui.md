@@ -82,14 +82,13 @@ Deepy TUI 是实验界面，基于 Textual。
 | `@file` 补全 | 支持 | 支持 | 已对齐 |
 | prompt history | 支持 | 支持 | 已对齐 |
 | 底部状态 | 支持 | 支持 | 已对齐 |
-| 换行快捷键 | `Ctrl+J` | `Shift+Enter` | TUI 设计差异 |
+| 换行快捷键 | `Ctrl+J` | `Ctrl+J` | 已对齐 |
 | diff 显示 | 单列 | 单列 | 当前选择 |
 
 ## 尚未对齐或待确认
 
 - Windows PowerShell 7：发版后继续验证 `!command`、文件编码、换行和工具输出。
 - TUI 仍是实验入口，不作为默认 `deepy` 界面。
-- TUI 换行快捷键使用 `Shift+Enter`，这是设计差异，不按稳定 UI 的 `Ctrl+J` 改。
 
 当前没有已知的核心日常功能缺口。
 

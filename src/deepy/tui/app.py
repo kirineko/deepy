@@ -410,7 +410,7 @@ class DeepyTuiApp(App[None]):
         await self.query_one("#transcript", VerticalScroll).mount(
             InfoBlock(
                 "Experimental Textual TUI. Press Ctrl+O for status, Enter to send, "
-                "Shift+Enter for newline, Ctrl+D twice to exit."
+                "Ctrl+J for newline, Ctrl+D twice to exit."
             )
         )
         self._scroll_transcript_to_end(force=True)
@@ -554,7 +554,7 @@ class DeepyTuiApp(App[None]):
                 command_catalog_markdown(),
                 "## Keybindings\n"
                 "- **Enter** - send prompt\n"
-                "- **Shift+Enter** - insert newline\n"
+                "- **Ctrl+J** - insert newline\n"
                 "- **Ctrl+P** - command palette\n"
                 "- **Ctrl+O** - toggle side panel\n"
                 "- **Alt+Up / Alt+Down** - move between transcript blocks\n"
