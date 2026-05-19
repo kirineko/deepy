@@ -2464,19 +2464,12 @@ def _windows_terminal_cursor_row() -> int | None:
     try:
         windll = getattr(ctypes, "windll")
         kernel32 = windll.kernel32
-        with contextlib.suppress(Exception):
-            kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
-            kernel32.GetStdHandle.restype = wintypes.HANDLE
-            kernel32.GetConsoleScreenBufferInfo.argtypes = [
-                wintypes.HANDLE,
-                ctypes.POINTER(_WindowsConsoleScreenBufferInfo),
-            ]
-            kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
-        handle = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+        get_std_handle, get_console_screen_buffer_info = _windows_console_functions(kernel32)
+        handle = get_std_handle(_STD_OUTPUT_HANDLE)
         if handle in {None, 0, _INVALID_HANDLE_VALUE}:
             return None
         info = _WindowsConsoleScreenBufferInfo()
-        if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+        if not get_console_screen_buffer_info(handle, ctypes.byref(info)):
             return None
         return _visible_cursor_row_from_windows_buffer(
             cursor_y=int(info.dwCursorPosition.Y),
@@ -2485,6 +2478,20 @@ def _windows_terminal_cursor_row() -> int | None:
         )
     except Exception:
         return None
+
+
+def _windows_console_functions(kernel32: Any) -> tuple[Callable[[int], Any], Callable[[Any, Any], Any]]:
+    prototype_factory = getattr(ctypes, "WINFUNCTYPE", None)
+    if prototype_factory is None:
+        return kernel32.GetStdHandle, kernel32.GetConsoleScreenBufferInfo
+    return (
+        prototype_factory(wintypes.HANDLE, wintypes.DWORD)(("GetStdHandle", kernel32)),
+        prototype_factory(
+            wintypes.BOOL,
+            wintypes.HANDLE,
+            ctypes.POINTER(_WindowsConsoleScreenBufferInfo),
+        )(("GetConsoleScreenBufferInfo", kernel32)),
+    )
 
 
 def _visible_cursor_row_from_windows_buffer(

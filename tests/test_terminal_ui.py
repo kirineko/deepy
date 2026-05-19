@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import os
 from pathlib import Path
@@ -982,12 +983,26 @@ def test_visible_cursor_row_from_windows_buffer_accounts_for_scrolled_window():
 
 
 def test_windows_terminal_cursor_row_uses_console_buffer_info(monkeypatch):
+    class FakeFunction:
+        argtypes = "prompt-toolkit-owned"
+        restype = "prompt-toolkit-owned"
+
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
     class FakeKernel32:
-        def GetStdHandle(self, value):
+        def __init__(self):
+            self.GetStdHandle = FakeFunction(self._get_std_handle)
+            self.GetConsoleScreenBufferInfo = FakeFunction(self._get_console_screen_buffer_info)
+
+        def _get_std_handle(self, value):
             assert value == terminal._STD_OUTPUT_HANDLE
             return 123
 
-        def GetConsoleScreenBufferInfo(self, handle, info_ptr):
+        def _get_console_screen_buffer_info(self, handle, info_ptr):
             assert handle == 123
             info = info_ptr._obj
             info.dwCursorPosition.Y = 123
@@ -995,14 +1010,17 @@ def test_windows_terminal_cursor_row_uses_console_buffer_info(monkeypatch):
             info.srWindow.Bottom = 123
             return 1
 
+    kernel32 = FakeKernel32()
     monkeypatch.setattr(
         terminal.ctypes,
         "windll",
-        SimpleNamespace(kernel32=FakeKernel32()),
+        SimpleNamespace(kernel32=kernel32),
         raising=False,
     )
 
     assert terminal._windows_terminal_cursor_row() == 24
+    assert kernel32.GetConsoleScreenBufferInfo.argtypes == "prompt-toolkit-owned"
+    assert kernel32.GetConsoleScreenBufferInfo.restype == "prompt-toolkit-owned"
 
 
 def test_windows_terminal_cursor_row_fails_closed(monkeypatch):
@@ -2352,6 +2370,7 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     prompts = iter(["start", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
     calls: list[dict[str, object]] = []
     collected_questions: list[str] = []
+    status_anchors: list[tuple[bool, int]] = []
 
     async def fake_run_once(prompt, **kwargs):
         calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
@@ -2381,6 +2400,13 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
     monkeypatch.setattr(terminal, "_collect_pending_question_response", fake_collect)
 
+    @contextlib.contextmanager
+    def fake_status_display(console, initial_status, *, palette, anchor_output=False, anchor_output_lines=0):
+        status_anchors.append((anchor_output, anchor_output_lines))
+        yield terminal._SilentStatus()
+
+    monkeypatch.setattr(terminal, "_status_display", fake_status_display)
+
     result = terminal.run_interactive(
         Settings(),
         project_root=tmp_path,
@@ -2393,6 +2419,7 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     assert collected_questions == ["First?", "Second?"]
     assert [call["session_id"] for call in calls] == [None, "s1", "s1"]
     assert [call["prompt"] for call in calls] == ["start", "answer for First?", "answer for Second?"]
+    assert status_anchors == [(False, 0), (True, 0), (True, 0)]
     rendered = console.export_text()
     assert "done" in rendered
     assert "> answer for First?" not in rendered

@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.9 是为 DeepSeek 设计的终端编程 Agent，修复 Windows 稳定 UI 底部输入滚动，并支持 Textual TUI、/status 用量和余额统计、Agent Skills、AGENTS.md 项目规则、MCP、代码修改和长上下文会话。"
+      content="Deepy 0.2.10 是为 DeepSeek 设计的终端编程 Agent，修复 Windows 稳定 UI 底部输入滚动和 Win32 cursor 查询兼容性，并支持 Textual TUI、/status 用量和余额统计、Agent Skills、AGENTS.md 项目规则、MCP、代码修改和长上下文会话。"
     >
-    <title>Deepy 0.2.9 - DeepSeek 终端编程 Agent</title>
+    <title>Deepy 0.2.10 - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -34,11 +34,11 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.9</p>
+          <p class="release-kicker">Deepy 0.2.10</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            为 DeepSeek 设计的终端编程 Agent。0.2.9 修复 Windows 稳定 UI 中输入贴底后运行状态行挤占
-            transcript 的问题，并保留 0.2.x 的 Textual TUI、/status 和 Ctrl+J 多行输入体验。
+            为 DeepSeek 设计的终端编程 Agent。0.2.10 修复 Windows 稳定 UI 中输入贴底后的滚动锚定，
+            并避免 Win32 cursor 查询影响 prompt_toolkit 后续输入渲染。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
@@ -46,10 +46,10 @@
             <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.9 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.10 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.9</dd>
+            <dd>0.2.10</dd>
           </div>
           <div>
             <dt>TUI</dt>
@@ -68,10 +68,10 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.9 的重点</h2>
+          <h2 id="capabilities-title">0.2.10 的重点</h2>
           <p>
             Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时修复 Windows 稳定 UI 的底部
-            输入锚定：当 prompt 贴近终端底部后立即开始模型或本地命令工作，transcript 会被保留在运行状态行上方。
+            输入锚定和 Win32 cursor 查询兼容性：运行完成或 Esc 中断后可以继续回到 prompt。
           </p>
         </div>
         <div class="capability-grid">
@@ -118,7 +118,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.9 已覆盖主要日常路径：对话、状态检查和退出总结。
+            TUI 仍是 opt-in 实验入口，但 0.2.10 已覆盖主要日常路径：对话、状态检查和退出总结。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -192,7 +192,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.9 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.10 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -377,7 +377,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.9</span>
+      <span>Deepy 0.2.10</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>
