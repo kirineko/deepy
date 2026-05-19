@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.widgets import Label, OptionList, TextArea
@@ -12,9 +14,11 @@ from deepy.config import Settings
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
+from deepy.skill_market import InstalledSkill, MarketSkill
+from deepy.skills import SkillInfo
 from deepy.tui.app import DeepyTuiApp
 from deepy.tui.commands import DeepyCommandProvider
-from deepy.tui.screens import ChoiceScreen, InfoScreen
+from deepy.tui.screens import ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
 from deepy.tui.widgets import (
     AssistantBlock,
     DiffBlock,
@@ -29,6 +33,7 @@ from deepy.tui.widgets import (
     UserBlock,
 )
 from deepy.sessions import DeepyJsonlSession
+from deepy.ui.local_command import LocalCommandResult
 from deepy.usage import TokenUsage
 
 
@@ -231,7 +236,7 @@ async def test_tui_skills_use_loads_skill_without_printing_body(tmp_path) -> Non
         await pilot.pause(0.1)
 
         assert not calls
-        transcript_text = "\n".join(block.body for block in app.query(UserBlock))
+        transcript_text = "\n".join(block.body for block in app.query(InfoBlock))
         assert "Loaded skill: demo" in transcript_text
         assert "VERY LONG SKILL BODY" not in transcript_text
 
@@ -240,6 +245,544 @@ async def test_tui_skills_use_loads_skill_without_printing_body(tmp_path) -> Non
         await pilot.pause(0.2)
 
         assert calls == [("use it", ["demo"])]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_init_command_routes_generated_prompt_without_unsupported_message(tmp_path) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs.get("session_id")))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/init prefer concise guidance"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert len(calls) == 1
+        assert "Analyze this repository and create the project root AGENTS.md file." in calls[0][0]
+        assert "Additional user instruction:\nprefer concise guidance" in calls[0][0]
+        assert not any("not supported" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, ResetConfigScreen)
+        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-model").value = "deepseek-v4-flash"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-base-url").value = "https://example.test"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-theme").value = "light"  # type: ignore[attr-defined]
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.2)
+
+        saved = load_settings(config_path)
+        assert saved.model.api_key == "sk-test"
+        assert saved.model.name == "deepseek-v4-flash"
+        assert saved.model.base_url == "https://example.test"
+        assert saved.ui.theme == "light"
+        assert app.settings.ui.theme == "light"
+        assert any("Wrote" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[model]\nname = \"deepseek-v4-pro\"\n", encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+
+        assert config_path.read_text(encoding="utf-8") == "[model]\nname = \"deepseek-v4-pro\"\n"
+        assert app.settings.model.name == "deepseek-v4-pro"
+        app.exit()
+
+
+def _local_command_result(
+    command: str,
+    *,
+    output: str = "ok\n",
+    exit_code: int = 0,
+    shell_kind: str = "zsh",
+    command_dialect: str = "posix",
+    os_family: str = "posix",
+    tty_mode: str = "pty",
+) -> LocalCommandResult:
+    return LocalCommandResult(
+        command=command,
+        output=output,
+        display_output=output,
+        context_output=output,
+        exit_code=exit_code,
+        cwd=Path("/tmp"),
+        shell_path="powershell.exe" if shell_kind == "powershell" else "cmd.exe" if shell_kind == "cmd" else "/bin/zsh",
+        shell_kind=shell_kind,
+        command_dialect=command_dialect,
+        path_style="windows" if os_family == "windows" else "posix",
+        os_family=os_family,
+        tty_mode=tty_mode,
+        duration_ms=12,
+        timeout_ms=120000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_runs_renders_and_persists_without_model_turn(tmp_path, monkeypatch) -> None:
+    model_calls: list[str] = []
+    local_calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        model_calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        local_calls.append(command)
+        return _local_command_result(command, output="hello\n")
+
+    monkeypatch.setattr("deepy.tui.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!echo hello"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        assert local_calls == ["echo hello"]
+        assert model_calls == []
+        assert app.state.session_id is not None
+        assert any("hello" in block.body for block in app.query(ToolBlock))
+        session = DeepyJsonlSession.open(tmp_path, app.state.session_id)
+        items = await session.get_items()
+        assert items[0]["role"] == "user"
+        assert items[0]["content"] == "!echo hello"
+        assert items[1]["name"] == "shell"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_appends_separate_shell_blocks_for_later_commands(tmp_path, monkeypatch) -> None:
+    local_calls: list[str] = []
+
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        local_calls.append(command)
+        return _local_command_result(command, output=f"{command}\n")
+
+    monkeypatch.setattr("deepy.tui.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!pwd"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        prompt.text = "!ls"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        blocks = list(app.query(ToolBlock))
+        assert local_calls == ["pwd", "ls"]
+        assert len(blocks) == 2
+        assert "pwd" in blocks[0].body
+        assert "ls" in blocks[1].body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_empty_local_command_shows_usage_without_session_or_model(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert calls == []
+        assert app.state.session_id is None
+        assert any("Usage: !<command>" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_renders_windows_powershell_pipe_metadata(tmp_path, monkeypatch) -> None:
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        return _local_command_result(
+            command,
+            output="中文\n",
+            shell_kind="powershell",
+            command_dialect="powershell",
+            os_family="windows",
+            tty_mode="pipe",
+        )
+
+    monkeypatch.setattr("deepy.tui.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!Write-Output 中文"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        block = app.query_one(ToolBlock)
+        assert "中文" in block.body
+        assert "Power" in block.body or "powershell" in block.body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_accepts_windows_cmd_pipe_metadata(tmp_path, monkeypatch) -> None:
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        return _local_command_result(
+            command,
+            output="ok\n",
+            shell_kind="cmd",
+            command_dialect="cmd",
+            os_family="windows",
+            tty_mode="pipe",
+        )
+
+    monkeypatch.setattr("deepy.tui.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!echo ok"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        block = app.query_one(ToolBlock)
+        assert "ok" in block.body
+        assert app.state.session_id is not None
+        app.exit()
+
+
+def _installed_record(name: str, path: Path) -> InstalledSkill:
+    return InstalledSkill(
+        name=name,
+        scope="user",
+        install_path=path,
+        market_url="https://market.test",
+        version_id="v1",
+        version="1.0.0",
+        sha256="sha",
+        content_hash="hash",
+        installed_at="2026-05-19T00:00:00Z",
+    )
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_market_subcommands(tmp_path, monkeypatch) -> None:
+    installed = _installed_record("demo", tmp_path / ".agents" / "skills" / "demo")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        "deepy.tui.app.search_market_skills",
+        lambda query: [MarketSkill(name="demo", description=f"result {query}", version="1.0.0")],
+    )
+    monkeypatch.setattr(
+        "deepy.tui.app.install_market_skill",
+        lambda name, **kwargs: calls.append(("install", kwargs["scope"])) or installed,
+    )
+    monkeypatch.setattr(
+        "deepy.tui.app.uninstall_market_skill",
+        lambda name: calls.append(("uninstall", name)) or name,
+    )
+    monkeypatch.setattr("deepy.tui.app.list_installed_skills", lambda: [installed])
+    monkeypatch.setattr(
+        "deepy.tui.app.update_market_skill",
+        lambda name: calls.append(("update", name)) or ("updated", installed),
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+
+        prompt.text = "/skills search pdf"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert any("demo" in block.body and "result pdf" in block.body for block in app.query(InfoBlock))
+
+        prompt.text = "/skills install demo"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, ChoiceScreen)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert ("install", "user") in calls
+
+        prompt.text = "/skills installed"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert any("Market-installed skills" in block.body for block in app.query(InfoBlock))
+
+        prompt.text = "/skills update demo"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert ("update", "demo") in calls
+
+        prompt.text = "/skills uninstall demo"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert ("uninstall", "demo") in calls
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_installs_market_skill(tmp_path, monkeypatch) -> None:
+    installed = _installed_record("market-demo", tmp_path / ".agents" / "skills" / "market-demo")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        "deepy.tui.app.search_market_skills",
+        lambda query: [MarketSkill(name="market-demo", description="Market demo", version="1.0.0")],
+    )
+    monkeypatch.setattr(
+        "deepy.tui.app.install_market_skill",
+        lambda name, **kwargs: calls.append((name, kwargs["scope"])) or installed,
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "market"
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "installed"
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "market"
+
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, ChoiceScreen)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == [("market-demo", "user")]
+        assert any("Installed skill: market-demo" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_blocks_builtin_uninstall_from_command(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fail_uninstall(name: str) -> str:
+        calls.append(name)
+        raise AssertionError("builtin uninstall should not call market uninstall")
+
+    monkeypatch.setattr("deepy.tui.app.uninstall_market_skill", fail_uninstall)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills uninstall skill-creator"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == []
+        assert any("Built-in skill cannot be uninstalled" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_uses_compact_market_rows(tmp_path, monkeypatch) -> None:
+    long_description = " ".join(["description"] * 40)
+
+    monkeypatch.setattr(
+        "deepy.tui.app.search_market_skills",
+        lambda query: [MarketSkill(name="long-demo", description=long_description, version="1.0.0")],
+    )
+    monkeypatch.setattr(
+        "deepy.tui.app.discover_skills",
+        lambda project_root: [
+            SkillInfo(
+                name="skill-creator",
+                path=tmp_path / "builtin" / "skill-creator" / "SKILL.md",
+                description="Create skills",
+                scope="builtin",
+            )
+        ],
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "market"
+        assert app.screen._title() == "Skill Market (1)"
+        options = app.screen.query_one("#skill-options", OptionList)
+        market_prompt = str(options.get_option_at_index(0).prompt)
+        assert market_prompt.count("\n") <= 1
+        assert len(market_prompt) < 160
+
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert app.screen.view == "installed"
+        assert app.screen._title() == "Installed Skills (0)"
+        assert app.screen._selected_entry() is None
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skills_uninstall_removes_manual_project_skill(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    skill_dir = tmp_path / ".agents" / "skills" / "manual"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\ndescription: Manual skill\n---\n# Manual\n", encoding="utf-8")
+
+    def fail_uninstall(name: str) -> str:
+        calls.append(name)
+        raise AssertionError("manual skill removal should not call market uninstall")
+
+    monkeypatch.setattr("deepy.tui.app.uninstall_market_skill", fail_uninstall)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills uninstall manual"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == []
+        assert not skill_dir.exists()
+        assert any("Removed local skill: manual" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path)
+    entry = SimpleNamespace(
+        id="s1",
+        latest_context_window_tokens=900,
+        usage=None,
+    )
+    monkeypatch.setattr("deepy.tui.app.list_session_entries", lambda project_root: [entry])
+    monkeypatch.setattr(
+        "deepy.tui.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=(object(),)),
+    )
+    app = DeepyTuiApp(
+        settings=settings.__class__(
+            model=settings.model,
+            context=settings.context.__class__(window_tokens=1000, compact_trigger_ratio=0.8),
+            logging=settings.logging,
+            notify=settings.notify,
+            tools=settings.tools,
+            mcp=settings.mcp,
+            ui=settings.ui,
+            path=settings.path,
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+        app.state = app.state.__class__(session_id="s1")
+        app._update_status("Idle")
+        await pilot.pause(0.1)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert "model deepseek-v4-pro[max]" in left
+        assert "cwd" in left
+        assert "mcp 1" in left
+        assert "ctx 900/1K" in left
+        assert "compact next" in left
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_bar_hides_mcp_when_no_servers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deepy.tui.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    app = DeepyTuiApp(settings=Settings(path=tmp_path / "config.toml"), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause()
+        app._update_status("Idle")
+        await pilot.pause(0.1)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert not any(segment.strip().startswith("mcp ") for segment in left.split("·"))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_initial_setup_guides_missing_config(tmp_path) -> None:
+    settings = Settings(path=tmp_path / "config.toml")
+    app = DeepyTuiApp(
+        settings=settings,
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+        guide_missing_config=True,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, ResetConfigScreen)
+        assert any("Deepy needs a DeepSeek API key" in block.body for block in app.query(InfoBlock))
         app.exit()
 
 

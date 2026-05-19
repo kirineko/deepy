@@ -28,6 +28,7 @@ def run_tui(
         settings=settings,
         project_root=(project_root or Path.cwd()).resolve(),
         run_once=run_prompt_once,
+        guide_missing_config=True,
     )
     app.run()
     return 0

@@ -241,7 +241,9 @@ class StatusBar(Horizontal):
         yield Label("Deepy TUI experimental", id="status-left")
         yield Label("Idle", id="status-right")
 
-    def update_status(self, status: str) -> None:
+    def update_status(self, status: str, context: str | None = None) -> None:
+        if context is not None:
+            self.query_one("#status-left", Label).update(context)
         self.query_one("#status-right", Label).update(status)
 
 

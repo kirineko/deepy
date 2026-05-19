@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import shutil
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -23,12 +25,31 @@ from deepy.config import (
     load_settings,
     update_config_model_settings,
     update_config_theme,
+    write_config,
 )
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
+from deepy.mcp import load_mcp_config
+from deepy.prompts.init_agents import build_agents_init_prompt
+from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, list_session_entries
 from deepy.sessions.manager import DeepySessionManager
-from deepy.skills import discover_skills, find_skill, format_skills_for_terminal
+from deepy.skill_market import (
+    InstalledSkill,
+    MarketSkill,
+    install_market_skill,
+    list_installed_skills,
+    search_market_skills,
+    uninstall_market_skill,
+    update_market_skill,
+)
+from deepy.skills import (
+    SkillInfo,
+    discover_skills,
+    find_skill,
+    format_skills_for_terminal,
+    read_skill_body,
+)
 from deepy.status import build_status_report, format_status_report
 from deepy.tui.commands import (
     UNSUPPORTED_TUI_COMMANDS,
@@ -36,7 +57,16 @@ from deepy.tui.commands import (
     command_catalog_markdown,
 )
 from deepy.tui.diff import diff_view_from_tool_output
-from deepy.tui.screens import Choice, ChoiceScreen, InfoScreen
+from deepy.tui.screens import (
+    Choice,
+    ChoiceScreen,
+    InfoScreen,
+    ResetConfigResult,
+    ResetConfigScreen,
+    SkillManagementScreen,
+    SkillScreenAction,
+    SkillScreenEntry,
+)
 from deepy.tui.state import (
     TuiController,
     TuiState,
@@ -71,10 +101,18 @@ from deepy.ui.ask_user_question import (
     normalize_questions,
 )
 from deepy.ui import parse_slash_command
+from deepy.ui.local_command import (
+    LocalCommandInput,
+    build_synthetic_shell_transcript_items,
+    parse_local_command,
+    run_local_command,
+    shell_tool_result_json,
+)
 from deepy.ui.message_view import parse_tool_output
 from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.model_picker import REASONING_MODE_CHOICES
-from deepy.usage import format_usage_line
+from deepy.ui.welcome import format_home_relative_path
+from deepy.usage import context_window_usage, format_usage_line
 from deepy.utils import json as json_utils
 
 
@@ -309,11 +347,13 @@ class DeepyTuiApp(App[None]):
         settings: Settings,
         project_root: Path,
         run_once: RunOnce,
+        guide_missing_config: bool = False,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.project_root = project_root
         self.run_once = run_once
+        self.guide_missing_config = guide_missing_config
         self.controller = TuiController(settings=settings)
         self._assistant_block: AssistantBlock | None = None
         self._thinking_block: ThinkingBlock | None = None
@@ -322,6 +362,7 @@ class DeepyTuiApp(App[None]):
         self._pending_question_answers: OrderedDict[str, str] = OrderedDict()
         self._new_output_available = False
         self._todo_text = ""
+        self._local_command_sequence = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -349,9 +390,18 @@ class DeepyTuiApp(App[None]):
         self._scroll_transcript_to_end(force=True)
         self.query_one("#prompt-input", PromptTextArea).focus()
         self._update_status("Idle")
+        if self.guide_missing_config and not self.settings.model.api_key:
+            self.call_after_refresh(self._start_initial_setup)
 
     def _apply_theme(self) -> None:
         self.theme = "textual-light" if self.settings.ui.theme == "light" else "textual-dark"
+
+    def _start_initial_setup(self) -> None:
+        self.run_worker(self._initial_setup_command(), exclusive=False)
+
+    async def _initial_setup_command(self) -> None:
+        await self._append_block(InfoBlock("Deepy needs a DeepSeek API key before starting TUI."))
+        await self._reset_command()
 
     @on(PromptTextArea.Submitted)
     async def on_prompt_submitted(self, event: PromptTextArea.Submitted) -> None:
@@ -359,17 +409,16 @@ class DeepyTuiApp(App[None]):
         if self.state.busy:
             self.notify("Deepy is still working.", severity="warning")
             return
+        local_command = parse_local_command(event.text)
+        if local_command is not None:
+            await self._handle_local_command(local_command)
+            return
         if await self._handle_prompt_command(event.text):
             return
         self.controller.add_prompt_history(event.text)
         await self._append_block(UserBlock(event.text))
         self._scroll_transcript_to_end(force=True)
-        self.state = set_busy(reset_turn_buffers(self.state), True, "Running")
-        self._assistant_block = None
-        self._thinking_block = None
-        self._tool_blocks.clear()
-        self._update_status("Running")
-        self.run_model_turn(event.text, list(self.controller.loaded_skill_names))
+        self._start_model_turn(event.text, list(self.controller.loaded_skill_names), status="Running")
 
     async def _handle_prompt_command(self, text: str) -> bool:
         slash = parse_slash_command(text)
@@ -381,6 +430,11 @@ class DeepyTuiApp(App[None]):
         if slash.name in UNSUPPORTED_TUI_COMMANDS:
             await self._append_block(ErrorBlock(UNSUPPORTED_TUI_COMMANDS[slash.name]))
             return True
+        if slash.name == "init":
+            request = build_agents_init_prompt(self.project_root, extra_instruction=slash.argument)
+            await self._append_block(UserBlock(text))
+            self._start_model_turn(request, list(self.controller.loaded_skill_names), status="Initializing AGENTS.md")
+            return True
         if slash.name in {
             "help",
             "status",
@@ -391,11 +445,13 @@ class DeepyTuiApp(App[None]):
             "compact",
             "theme",
             "model",
+            "reset",
         }:
             self.invoke_tui_command(slash.name, slash.argument)
             return True
         if slash.name == "skills":
-            return await self._handle_skills_command(slash.argument)
+            self.invoke_tui_command("skills", slash.argument)
+            return True
         if slash.name.startswith("skill:"):
             skill_name = slash.name.removeprefix("skill:")
             skill = find_skill(self.project_root, skill_name)
@@ -404,15 +460,18 @@ class DeepyTuiApp(App[None]):
                 return True
             request = slash.argument or f"Use the {skill.name} skill."
             await self._append_block(UserBlock(text))
-            self.state = set_busy(reset_turn_buffers(self.state), True, "Running")
-            self._assistant_block = None
-            self._thinking_block = None
-            self._tool_blocks.clear()
-            self._update_status(f"Using skill {skill.name}")
-            self.run_model_turn(request, [skill.name])
+            self._start_model_turn(request, [skill.name], status=f"Using skill {skill.name}")
             return True
         await self._append_block(ErrorBlock(f"Unsupported TUI command: /{slash.name}"))
         return True
+
+    def _start_model_turn(self, prompt: str, skill_names: list[str], *, status: str) -> None:
+        self.state = set_busy(reset_turn_buffers(self.state), True, status)
+        self._assistant_block = None
+        self._thinking_block = None
+        self._tool_blocks.clear()
+        self._update_status(status)
+        self.run_model_turn(prompt, skill_names)
 
     def invoke_tui_command(self, name: str, argument: str = "") -> None:
         self.run_worker(self._run_tui_command(name, argument), exclusive=False)
@@ -444,6 +503,12 @@ class DeepyTuiApp(App[None]):
             return
         if name == "model":
             await self._model_command(argument.strip())
+            return
+        if name == "reset":
+            await self._reset_command()
+            return
+        if name == "skills":
+            await self._handle_skills_command(argument)
             return
 
     def _help_markdown(self) -> str:
@@ -648,12 +713,95 @@ class DeepyTuiApp(App[None]):
         )
         self._update_status("Model saved")
 
+    async def _reset_command(self) -> None:
+        if self.settings.path is None:
+            await self._append_block(ErrorBlock("Cannot reset config: config path is unknown."))
+            return
+        result = await self.push_screen_wait(
+            ResetConfigScreen(
+                api_key=self.settings.model.api_key or "",
+                model=self.settings.model.name,
+                base_url=self.settings.model.base_url,
+                theme=self.settings.ui.theme,
+            )
+        )
+        if result is None:
+            self._update_status("Reset cancelled")
+            return
+        error = _reset_config_validation_error(result)
+        if error:
+            await self._append_block(ErrorBlock(error))
+            return
+        try:
+            if self.settings.path.exists():
+                self.settings.path.unlink()
+            write_config(
+                self.settings.path,
+                api_key=result.api_key,
+                model=result.model,
+                base_url=result.base_url,
+                theme=result.theme,
+            )
+        except Exception as exc:
+            await self._append_block(ErrorBlock(f"Config reset failed: {exc}"))
+            return
+        self.settings = load_settings(self.settings.path)
+        self.controller.settings = self.settings
+        self._apply_theme()
+        await self._append_block(InfoBlock(f"Wrote {self.settings.path}"))
+        self._update_status("Config reset")
+
+    async def _handle_local_command(self, command_input: LocalCommandInput) -> None:
+        if not command_input.command:
+            await self._append_block(ErrorBlock("Usage: !<command>"))
+            return
+        self.controller.add_prompt_history(command_input.raw_text)
+        await self._append_block(UserBlock(command_input.raw_text))
+        self.state = set_busy(reset_turn_buffers(self.state), True, "Running local command")
+        self._update_status("Running local command")
+        self._local_command_sequence += 1
+        call_id = f"deepy-local-command-{self._local_command_sequence}"
+        self.run_worker(self._run_local_command(command_input, call_id=call_id), exclusive=False)
+
+    async def _run_local_command(self, command_input: LocalCommandInput, *, call_id: str) -> None:
+        try:
+            result = await asyncio.to_thread(
+                run_local_command,
+                command_input.command,
+                cwd=self.project_root,
+                should_interrupt=lambda: self.state.interrupt_requested,
+            )
+            tool_output = shell_tool_result_json(result, output=result.display_output)
+            await self._handle_stream_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=tool_output,
+                    payload={"call_id": call_id},
+                )
+            )
+            session = (
+                DeepyJsonlSession.open(self.project_root, self.state.session_id)
+                if self.state.session_id
+                else DeepyJsonlSession.create(self.project_root)
+            )
+            await session.add_items(build_synthetic_shell_transcript_items(command_input.raw_text, result))
+            self.state = set_session_id(self.state, session.session_id)
+            self.state = set_busy(reset_turn_buffers(self.state), False, "Idle")
+            self._update_status("Idle")
+        except Exception as exc:
+            self.state = set_busy(reset_turn_buffers(self.state), False, "Error")
+            await self._append_block(ErrorBlock(f"Local command failed: {exc}"))
+            self._update_status("Error")
+
     async def _handle_skills_command(self, argument: str) -> bool:
         action, _, rest = argument.partition(" ")
         action = action.strip().lower()
         name = rest.strip()
-        if action in {"", "list"}:
-            await self._append_block(UserBlock(format_skills_for_terminal(discover_skills(self.project_root))))
+        if not action:
+            await self._open_skill_management()
+            return True
+        if action == "list":
+            await self._append_block(InfoBlock(format_skills_for_terminal(discover_skills(self.project_root))))
             return True
         if action == "use":
             if not name:
@@ -665,7 +813,8 @@ class DeepyTuiApp(App[None]):
                 return True
             if skill.name not in self.controller.loaded_skill_names:
                 self.controller.loaded_skill_names.append(skill.name)
-            await self._append_block(UserBlock(f"Loaded skill: {skill.name}"))
+            self._refresh_prompt_commands()
+            await self._append_block(InfoBlock(f"Loaded skill: {skill.name}"))
             self._update_status(f"Loaded skill {skill.name}")
             return True
         if action == "show":
@@ -676,16 +825,212 @@ class DeepyTuiApp(App[None]):
             if skill is None:
                 await self._append_block(ErrorBlock(f"Skill not found: {name}"))
                 return True
-            await self._append_block(
-                UserBlock(
-                    f"Skill: {skill.name}\n"
-                    f"Description: {skill.description or '(no description)'}\n"
-                    f"Scope: {skill.scope}\n"
-                    f"Path: {skill.path.parent}"
-                )
-            )
+            self.push_screen(InfoScreen(f"Skill: {skill.name}", _skill_detail_markdown(skill)))
+            return True
+        if action == "search":
+            await self._skills_search(name)
+            return True
+        if action == "install":
+            await self._skills_install(name)
+            return True
+        if action == "uninstall":
+            await self._skills_uninstall(name)
+            return True
+        if action == "installed":
+            await self._skills_installed()
+            return True
+        if action == "update":
+            await self._skills_update(name)
             return True
         return False
+
+    async def _open_skill_management(self) -> None:
+        view = "market"
+        while True:
+            installed_entries = _installed_skill_entries(self.project_root)
+            market_entries, market_error = await self._load_market_entries()
+            action = await self.push_screen_wait(
+                SkillManagementScreen(
+                    installed_entries,
+                    market_entries,
+                    view=view,
+                    market_error=market_error,
+                )
+            )
+            if action is None:
+                self._update_status("Skills closed")
+                return
+            view = action.source
+            if action.action == "refresh":
+                continue
+            handled = await self._handle_skill_screen_action(action, market_entries)
+            if not handled:
+                return
+
+    async def _handle_skill_screen_action(
+        self,
+        action: SkillScreenAction,
+        market_entries: list[SkillScreenEntry],
+    ) -> bool:
+        if action.action == "use":
+            skill = find_skill(self.project_root, action.name)
+            if skill is None:
+                await self._append_block(ErrorBlock(f"Skill not found: {action.name}"))
+                return True
+            if skill.name not in self.controller.loaded_skill_names:
+                self.controller.loaded_skill_names.append(skill.name)
+            self._refresh_prompt_commands()
+            await self._append_block(InfoBlock(f"Loaded skill: {skill.name}"))
+            self._update_status(f"Loaded skill {skill.name}")
+            return True
+        if action.action == "show":
+            if action.source == "market" and find_skill(self.project_root, action.name) is None:
+                entry = next((item for item in market_entries if item.name == action.name), None)
+                if entry is not None:
+                    await self.push_screen_wait(
+                        InfoScreen(f"Market Skill: {entry.name}", _market_detail_markdown(entry))
+                    )
+                    return True
+            skill = find_skill(self.project_root, action.name)
+            if skill is None:
+                await self._append_block(ErrorBlock(f"Skill not found: {action.name}"))
+                return True
+            await self.push_screen_wait(InfoScreen(f"Skill: {skill.name}", _skill_detail_markdown(skill)))
+            return True
+        if action.action == "install":
+            await self._skills_install(action.name)
+            return True
+        if action.action == "uninstall":
+            await self._skills_uninstall(action.name)
+            return True
+        if action.action == "update":
+            await self._skills_update(action.name)
+            return True
+        return False
+
+    async def _load_market_entries(self) -> tuple[list[SkillScreenEntry], str]:
+        try:
+            skills = await asyncio.to_thread(search_market_skills, "")
+        except Exception as exc:
+            return [], f"Skill market error: {exc}"
+        local_names = {
+            skill.name for skill in discover_skills(self.project_root) if skill.scope in {"project", "user"}
+        }
+        return [_market_skill_entry(skill, local_names=local_names) for skill in skills], ""
+
+    async def _skills_search(self, query: str) -> None:
+        try:
+            skills = await asyncio.to_thread(search_market_skills, query)
+        except Exception as exc:
+            await self._append_block(ErrorBlock(f"Skill market error: {exc}"))
+            return
+        await self._append_block(InfoBlock(_format_market_skills(skills)))
+
+    async def _skills_install(self, name: str) -> None:
+        if not name:
+            await self._append_block(ErrorBlock("Usage: /skills install NAME"))
+            return
+        scope = await self.push_screen_wait(
+            ChoiceScreen(
+                "Install skill",
+                [
+                    Choice("user", "user", "Install into ~/.agents/skills"),
+                    Choice("project", "project", "Install into this project's .agents/skills"),
+                ],
+            )
+        )
+        install_scope: Literal["user", "project"]
+        if scope == "user":
+            install_scope = "user"
+        elif scope == "project":
+            install_scope = "project"
+        else:
+            self._update_status("Install cancelled")
+            return
+        try:
+            record = await asyncio.to_thread(
+                install_market_skill,
+                name,
+                scope=install_scope,
+                project_root=self.project_root,
+            )
+        except Exception as exc:
+            await self._append_block(ErrorBlock(f"Skill market error: {exc}"))
+            return
+        self._refresh_prompt_commands()
+        await self._append_block(InfoBlock(f"Installed skill: {record.name} ({record.scope}) -> {record.install_path}"))
+        self._update_status(f"Installed {record.name}")
+
+    async def _skills_uninstall(self, name: str) -> None:
+        if not name:
+            await self._append_block(ErrorBlock("Usage: /skills uninstall NAME"))
+            return
+        skill = find_skill(self.project_root, name)
+        if skill is not None and skill.scope == "builtin":
+            await self._append_block(ErrorBlock(f"Built-in skill cannot be uninstalled: {skill.name}"))
+            return
+        record = next((item for item in list_installed_skills() if item.name.lower() == name.lower()), None)
+        if record is None and skill is not None and skill.scope in {"project", "user"}:
+            try:
+                removed_path = await asyncio.to_thread(_remove_local_skill_directory, skill.path.parent)
+            except Exception as exc:
+                await self._append_block(ErrorBlock(f"Skill remove failed: {exc}"))
+                return
+            self.controller.loaded_skill_names = [
+                skill_name for skill_name in self.controller.loaded_skill_names if skill_name.lower() != name.lower()
+            ]
+            self._refresh_prompt_commands()
+            await self._append_block(InfoBlock(f"Removed local skill: {skill.name} ({skill.scope}) -> {removed_path}"))
+            self._update_status(f"Removed {skill.name}")
+            return
+        try:
+            removed = await asyncio.to_thread(uninstall_market_skill, name)
+        except Exception as exc:
+            await self._append_block(ErrorBlock(f"Skill market error: {exc}"))
+            return
+        self.controller.loaded_skill_names = [
+            skill_name for skill_name in self.controller.loaded_skill_names if skill_name.lower() != name.lower()
+        ]
+        self._refresh_prompt_commands()
+        await self._append_block(InfoBlock(f"Uninstalled skill: {removed}"))
+        self._update_status(f"Uninstalled {removed}")
+
+    async def _skills_installed(self) -> None:
+        records = await asyncio.to_thread(list_installed_skills)
+        await self._append_block(InfoBlock(_format_installed_records(records)))
+
+    async def _skills_update(self, name: str) -> None:
+        if not name:
+            await self._append_block(ErrorBlock("Usage: /skills update NAME|--all"))
+            return
+        try:
+            if name == "--all":
+                records = await asyncio.to_thread(list_installed_skills)
+                if not records:
+                    await self._append_block(InfoBlock("No market-installed skills."))
+                    return
+                lines = []
+                for record in records:
+                    status, updated = await asyncio.to_thread(update_market_skill, record.name)
+                    lines.append(f"{updated.name}: {status}")
+                await self._append_block(InfoBlock("\n".join(lines)))
+            else:
+                status, updated = await asyncio.to_thread(update_market_skill, name)
+                await self._append_block(InfoBlock(f"{updated.name}: {status}"))
+        except Exception as exc:
+            await self._append_block(ErrorBlock(f"Skill market error: {exc}"))
+            return
+        self._refresh_prompt_commands()
+        self._update_status("Skills updated")
+
+    def _refresh_prompt_commands(self) -> None:
+        panel = self.query_one(PromptPanel)
+        panel.slash_commands = build_slash_commands(
+            discover_skills(self.project_root),
+            self.controller.loaded_skill_names,
+        )
+        prompt = self.query_one("#prompt-input", PromptTextArea)
+        panel.refresh_suggestions(prompt.text)
 
     @on(PromptTextArea.SuggestionAccepted)
     def on_suggestion_accepted(self, event: PromptTextArea.SuggestionAccepted) -> None:
@@ -987,7 +1332,18 @@ class DeepyTuiApp(App[None]):
             if self._new_output_available and status != "New output below"
             else status
         )
-        self.query_one(StatusBar).update_status(display)
+        try:
+            status_bar = self.query_one(StatusBar)
+        except NoMatches:
+            return
+        status_bar.update_status(display, self._status_context())
+
+    def _status_context(self) -> str:
+        return _build_tui_status_context(
+            self.state.session_id,
+            project_root=self.project_root,
+            settings=self.settings,
+        )
 
     def action_confirm_quit(self) -> None:
         if self.state.quit_confirm_pending:
@@ -1173,3 +1529,200 @@ def _model_usage_text() -> str:
         "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
         "/model reasoning none|high|max"
     )
+
+
+def _reset_config_validation_error(result: ResetConfigResult) -> str:
+    if not result.model:
+        return "Model is required."
+    if not is_supported_deepseek_model(result.model):
+        return f"Invalid model: {result.model}\n{_model_usage_text()}"
+    if not result.base_url:
+        return "Base URL is required."
+    if not result.theme:
+        return "Theme is required."
+    if not is_valid_ui_theme(result.theme):
+        return "Usage: theme must be auto|dark|light"
+    return ""
+
+
+def _build_tui_status_context(
+    session_id: str | None,
+    *,
+    project_root: Path,
+    settings: Settings,
+) -> str:
+    segments = [
+        f"model {settings.model.name}[{settings.model.reasoning_mode}]",
+        f"cwd {format_home_relative_path(project_root)}",
+    ]
+    if has_agents_instructions(project_root):
+        segments.append("[AGENTS.md]")
+    mcp_count = _configured_mcp_server_count(settings, project_root)
+    if mcp_count > 0:
+        segments.append(f"mcp {mcp_count}")
+    segments.append(
+        _format_tui_context_window_status(
+            _tui_session_entry(project_root, session_id),
+            settings.context.window_tokens,
+            settings.context.resolved_compact_threshold,
+        )
+    )
+    return " · ".join(segments)
+
+
+def _tui_session_entry(project_root: Path, session_id: str | None) -> Any | None:
+    if not session_id:
+        return None
+    return next((entry for entry in list_session_entries(project_root) if entry.id == session_id), None)
+
+
+def _configured_mcp_server_count(settings: Settings, project_root: Path) -> int:
+    try:
+        return len(load_mcp_config(settings, project_root=project_root).definitions)
+    except Exception:
+        return 0
+
+
+def _format_tui_context_window_status(
+    session_entry: Any | None,
+    window_tokens: int,
+    compact_threshold: int,
+) -> str:
+    window_text = _format_token_count_short(window_tokens)
+    if window_tokens <= 0:
+        return "ctx unknown"
+    if session_entry is not None and session_entry.latest_context_window_tokens is not None:
+        used_tokens = session_entry.latest_context_window_tokens
+    else:
+        usage_payload = session_entry.usage if session_entry is not None else None
+        usage = context_window_usage(usage_payload) if isinstance(usage_payload, dict) else None
+        used_tokens = usage.used_tokens if usage is not None else None
+    if used_tokens is None:
+        return f"ctx unknown/{window_text}"
+    remaining_tokens = max(window_tokens - used_tokens, 0)
+    percentage = used_tokens / window_tokens * 100
+    status = (
+        f"ctx {_format_token_count_short(used_tokens)}/{window_text} "
+        f"({percentage:.1f}%, {_format_token_count_short(remaining_tokens)} left)"
+    )
+    if compact_threshold > 0 and used_tokens >= compact_threshold:
+        status = f"{status} · compact next"
+    return status
+
+
+def _format_token_count_short(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+    return str(value)
+
+
+def _remove_local_skill_directory(path: Path) -> Path:
+    skill_path = path / "SKILL.md"
+    if not path.is_dir() or not skill_path.is_file():
+        raise ValueError(f"Skill path is invalid: {path}")
+    if path.parent.name != "skills" or path.parent.parent.name != ".agents":
+        raise ValueError(f"Refusing to remove unexpected path: {path}")
+    shutil.rmtree(path)
+    return path
+
+
+def _installed_skill_entries(project_root: Path) -> list[SkillScreenEntry]:
+    records = {record.name.lower(): record for record in list_installed_skills()}
+    entries: list[SkillScreenEntry] = []
+    seen: set[str] = set()
+    for skill in discover_skills(project_root):
+        if skill.scope == "builtin":
+            continue
+        record = records.get(skill.name.lower())
+        entries.append(
+            SkillScreenEntry(
+                name=skill.name,
+                scope=record.scope if record is not None else skill.scope,
+                description=skill.description,
+                version=record.version if record is not None else "",
+                path=str(record.install_path if record is not None else skill.path.parent),
+                installed=True,
+                managed_by_market=record is not None,
+                source="installed",
+                removable=skill.scope != "builtin",
+            )
+        )
+        seen.add(skill.name.lower())
+    for record in records.values():
+        if record.name.lower() in seen:
+            continue
+        entries.append(
+            SkillScreenEntry(
+                name=record.name,
+                scope=record.scope,
+                version=record.version,
+                path=str(record.install_path),
+                installed=True,
+                managed_by_market=True,
+                source="installed",
+                removable=True,
+            )
+        )
+    return sorted(entries, key=lambda entry: (entry.scope != "project", entry.name))
+
+
+def _market_skill_entry(skill: MarketSkill, *, local_names: set[str]) -> SkillScreenEntry:
+    return SkillScreenEntry(
+        name=skill.name,
+        scope="market",
+        description=skill.description,
+        version=skill.version,
+        installed=skill.installed or skill.name in local_names,
+        managed_by_market=skill.installed,
+        source="market",
+    )
+
+
+def _skill_detail_markdown(skill: SkillInfo) -> str:
+    body = read_skill_body(skill) or "(empty skill)"
+    return "\n\n".join(
+        [
+            f"# {skill.name}",
+            f"- Scope: `{skill.scope}`",
+            f"- Path: `{skill.path.parent}`",
+            body,
+        ]
+    )
+
+
+def _market_detail_markdown(entry: SkillScreenEntry) -> str:
+    lines = [
+        f"# {entry.name}",
+        "",
+        f"- Scope: `{entry.scope}`",
+        f"- Version: `{entry.version or 'unknown'}`",
+        f"- Installed: `{'yes' if entry.installed else 'no'}`",
+    ]
+    if entry.description:
+        lines.extend(["", entry.description])
+    return "\n".join(lines)
+
+
+def _format_market_skills(skills: list[MarketSkill]) -> str:
+    if not skills:
+        return "No market skills found."
+    lines = ["Market skills:"]
+    for skill in skills:
+        marker = " (installed)" if skill.installed else ""
+        description = f" - {skill.description}" if skill.description else ""
+        version = f" version={skill.version}" if skill.version else ""
+        lines.append(f"- {skill.name}{marker}{version}{description}")
+    return "\n".join(lines)
+
+
+def _format_installed_records(records: list[InstalledSkill]) -> str:
+    if not records:
+        return "No market-installed skills."
+    lines = ["Market-installed skills:"]
+    for record in records:
+        lines.append(
+            f"- {record.name} ({record.scope}) -> {record.install_path} installed={record.installed_at}"
+        )
+    return "\n".join(lines)

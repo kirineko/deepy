@@ -25,17 +25,16 @@ TUI_COMMANDS: tuple[TuiCommand, ...] = (
     TuiCommand("sessions", "/sessions", "List project sessions", "Session"),
     TuiCommand("resume", "/resume", "Resume a previous session", "Session"),
     TuiCommand("compact", "/compact", "Compact the active session context", "Session"),
-    TuiCommand("skills", "/skills", "List and load available skills", "Skills"),
+    TuiCommand("skills", "/skills", "Manage local and market skills", "Skills"),
     TuiCommand("model", "/model", "Select model and reasoning mode", "Settings"),
     TuiCommand("theme", "/theme", "Select UI theme", "Settings"),
+    TuiCommand("init", "/init", "Create or update project AGENTS.md", "System"),
+    TuiCommand("reset", "/reset", "Reset config and run TUI setup", "System"),
     TuiCommand("mcp", "/mcp", "Show MCP status", "Tools"),
     TuiCommand("exit", "/exit", "Quit Deepy TUI", "System"),
 )
 
-UNSUPPORTED_TUI_COMMANDS = {
-    "init": "/init is not supported in the experimental TUI yet. Run it in the stable `deepy` UI.",
-    "reset": "/reset is not supported in the experimental TUI yet. Run it in the stable `deepy` UI.",
-}
+UNSUPPORTED_TUI_COMMANDS: dict[str, str] = {}
 
 
 def command_catalog_markdown() -> str:
