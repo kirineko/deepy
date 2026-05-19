@@ -75,7 +75,7 @@ class PromptTextArea(TextArea):
 
     def action_accept_suggestion(self) -> None:
         panel = self.parent
-        if isinstance(panel, PromptPanel) and panel.move_suggestion(1):
+        if isinstance(panel, PromptPanel) and panel.accept_selected_suggestion():
             return
         if isinstance(panel, PromptPanel) and panel.accept_input_suggestion():
             return

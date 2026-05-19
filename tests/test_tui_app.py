@@ -246,11 +246,13 @@ async def test_tui_enter_does_not_accept_input_suggestion(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_file_suggestions_support_keyboard_selection(tmp_path) -> None:
+async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selection(tmp_path) -> None:
     tmp_path.joinpath("aaa.py").write_text("", encoding="utf-8")
     tmp_path.joinpath("bbb.py").write_text("", encoding="utf-8")
     tmp_path.joinpath("ui").mkdir()
     tmp_path.joinpath("ui", "panel.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("ui", "nested").mkdir()
+    tmp_path.joinpath("ui", "nested", "view.py").write_text("", encoding="utf-8")
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -268,23 +270,28 @@ async def test_tui_file_suggestions_support_keyboard_selection(tmp_path) -> None
         assert options.highlighted == 1
 
         await pilot.press("tab")
+        assert prompt.text == "@bbb.py "
+        assert options.display is False
+
+        prompt.text = "@"
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("down")
         assert options.highlighted == 2
 
-        await pilot.press("up")
-        assert options.highlighted == 1
-
         await pilot.press("enter")
-        assert prompt.text == "@bbb.py "
+        assert prompt.text == "@ui/"
+        assert "@ui/nested/" in panel.suggestions
+        assert "@ui/panel.py" in panel.suggestions
 
         prompt.text = "@"
         await pilot.pause()
         assert options.highlighted == 0
-        await pilot.press("tab")
-        await pilot.press("tab")
+        await pilot.press("down")
+        await pilot.press("down")
         assert options.highlighted == 2
         await pilot.press("enter")
         assert prompt.text == "@ui/"
-        assert "@ui/panel.py" in panel.suggestions
         app.exit()
 
 
@@ -308,10 +315,10 @@ async def test_tui_slash_suggestions_tab_cycles_and_enter_confirms(tmp_path) -> 
         assert options.display is True
         assert options.highlighted == 0
 
-        await pilot.press("tab")
+        await pilot.press("down")
         assert options.highlighted == 1
 
-        await pilot.press("enter")
+        await pilot.press("tab")
         assert prompt.text == "/reset "
         assert options.display is False
         assert calls == []
@@ -1544,6 +1551,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
 async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
     session = DeepyJsonlSession.create(tmp_path, session_id="s1")
     await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 120, "completion_tokens": 4, "total_tokens": 124})
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -1555,6 +1563,18 @@ async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
 
         assert isinstance(app.screen, ChoiceScreen)
         assert app.screen.title_text == "Sessions"
+        container = app.screen.query_one("Vertical")
+        assert "width: 112" in container.styles.css
+        options = app.screen.query_one("#choice-list", OptionList)
+        label = _option_prompt_text(options.get_option_at_index(0))
+        assert label.startswith("hello  ")
+        assert "\n" not in label
+        assert "completed" in label
+        assert "120 tokens" in label
+        assert "s1" in label
+        assert "updated=" not in label
+        assert "history estimate" not in label
+        assert ".jsonl" not in label
         app.exit()
 
 

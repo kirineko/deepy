@@ -38,7 +38,7 @@ from deepy.llm.runner import RunSummary
 from deepy.mcp import load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
-from deepy.sessions import DeepyJsonlSession, list_session_entries
+from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
     InstalledSkill,
@@ -115,6 +115,8 @@ from deepy.ui.local_command import (
     shell_tool_result_json,
 )
 from deepy.ui.message_view import parse_tool_output
+from deepy.ui.session_list import format_session_title
+from deepy.ui.session_picker import ResumeSessionPreview, format_session_time
 from deepy.ui.slash_commands import build_slash_commands
 from deepy.ui.model_picker import REASONING_MODE_CHOICES
 from deepy.ui.welcome import format_home_relative_path
@@ -608,15 +610,19 @@ class DeepyTuiApp(App[None]):
         if not entries:
             await self._append_block(InfoBlock("No sessions found for this project."))
             return None
-        choices = [
-            Choice(
-                label=_session_label(entry.id, entry.updated_at, entry.active_tokens),
-                value=entry.id,
-                description=entry.path,
-            )
-            for entry in entries
-        ]
+        choices = [await self._session_choice(entry) for entry in entries]
         return await self.push_screen_wait(ChoiceScreen(title, choices))
+
+    async def _session_choice(self, entry: SessionEntry) -> Choice:
+        items = await _load_session_items(self.project_root, entry.id)
+        preview = ResumeSessionPreview(
+            id=entry.id,
+            title=_session_title(items),
+            status=_session_status(items),
+            updated_at=entry.updated_at,
+            active_tokens=entry.active_tokens,
+        )
+        return Choice(label=_format_tui_session_label(preview), value=entry.id)
 
     async def _compact_session(self, focus_instruction: str | None) -> None:
         if not self.state.session_id:
@@ -1468,9 +1474,72 @@ class DeepyTuiApp(App[None]):
         panel.toggle_class("-visible")
 
 
-def _session_label(session_id: str, updated_at: int, active_tokens: int) -> str:
-    updated = str(updated_at) if updated_at else "unknown time"
-    return f"{session_id}  updated={updated}  tokens={active_tokens}"
+async def _load_session_items(project_root: Path, session_id: str) -> list[dict[str, Any]]:
+    try:
+        return await DeepyJsonlSession.open(project_root, session_id).get_items()
+    except Exception:
+        return []
+
+
+def _session_title(items: list[dict[str, Any]]) -> str:
+    for item in items:
+        if _role(item) == "user":
+            text = _visible_item_text(item)
+            if text.strip():
+                return text
+    for item in items:
+        text = _visible_item_text(item)
+        if text.strip():
+            return text
+    return "Untitled"
+
+
+def _session_status(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "empty"
+    for item in reversed(items):
+        if _role(item) == "user":
+            break
+        if _is_waiting_tool_output(item):
+            return "waiting"
+    last = items[-1]
+    if _item_type(last) == "function_call":
+        return "interrupted"
+    if _is_failed_tool_output(last):
+        return "failed"
+    return "completed"
+
+
+def _format_tui_session_label(preview: ResumeSessionPreview) -> str:
+    title = format_session_title(preview.title, max_chars=36)
+    return (
+        f"{title}  {format_session_time(preview.updated_at)}"
+        f" · {preview.status}"
+        f" · {preview.active_tokens:,} tokens"
+        f" · {preview.id[:8]}"
+    )
+
+
+def _is_waiting_tool_output(item: dict[str, Any]) -> bool:
+    if _item_type(item) != "function_call_output" and _role(item) != "tool":
+        return False
+    return parse_tool_output(_tool_output_text(item)).await_user_response
+
+
+def _is_failed_tool_output(item: dict[str, Any]) -> bool:
+    if _item_type(item) != "function_call_output" and _role(item) != "tool":
+        return False
+    return parse_tool_output(_tool_output_text(item)).ok is False
+
+
+def _visible_item_text(item: dict[str, Any]) -> str:
+    if "content" in item:
+        return _item_text(item["content"])
+    if "text" in item:
+        return _item_text(item["text"])
+    if "output" in item:
+        return _item_text(item["output"])
+    return ""
 
 
 def _history_tool_call_event(item: dict[str, Any]) -> DeepyStreamEvent:

@@ -74,8 +74,8 @@ class ChoiceScreen(ModalScreen[str | None]):
     }
 
     ChoiceScreen > Vertical {
-        width: 76;
-        max-width: 95%;
+        width: 112;
+        max-width: 98%;
         height: auto;
         max-height: 90%;
         border: round $primary;
