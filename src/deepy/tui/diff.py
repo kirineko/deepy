@@ -28,6 +28,7 @@ class TuiDiffView:
     removed: int
     lines: list[DiffPreviewLine]
     truncated: bool = False
+    hunks: tuple[str, ...] = ()
 
 
 def diff_view_from_tool_output(
@@ -53,6 +54,7 @@ def diff_view_from_tool_output(
         removed=preview.removed,
         lines=lines,
         truncated=truncated,
+        hunks=tuple(line for line in raw.splitlines() if line.startswith("@@")),
     )
 
 
@@ -86,7 +88,10 @@ def render_unified_diff_rich(
     renderables = [
         render_diff_preview_header(preview, tool_name=view.tool_name, palette=palette),
         *(
-            render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
+            _fit_diff_line(
+                render_diff_preview_line(line, palette=palette, width=width, syntax=syntax),
+                width=width,
+            )
             for line in preview.lines
         ),
     ]
@@ -97,6 +102,13 @@ def render_unified_diff_rich(
 
 def _line_number(value: int | None) -> str:
     return "    " if value is None else f"{value:>4}"
+
+
+def _fit_diff_line(line: Text, *, width: int | None) -> Text:
+    if width is None or width <= 0:
+        return line
+    line.truncate(width, overflow="ellipsis", pad=True)
+    return line
 
 
 def _palette_for_theme(theme: str) -> UiPalette:

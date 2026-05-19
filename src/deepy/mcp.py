@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -156,7 +157,6 @@ class DeepyMcpRuntime:
 
     def _build_sdk_servers(self) -> list[Any]:
         from agents.mcp import (
-            MCPServerStdio,
             MCPServerStdioParams,
             MCPServerStreamableHttp,
             MCPServerStreamableHttpParams,
@@ -185,7 +185,7 @@ class DeepyMcpRuntime:
                     params["env"] = dict(definition.env)
                 if definition.cwd:
                     params["cwd"] = definition.cwd
-                server = MCPServerStdio(
+                server = _quiet_stdio_server(
                     params=params,
                     name=definition.name,
                     cache_tools_list=self.settings.mcp.cache_tools_list,
@@ -417,6 +417,25 @@ def _status_from_definition(
         tools=tools,
         preferred_web_search_tools=preferred_web_search_tools,
     )
+
+
+def _quiet_stdio_server(**kwargs: Any) -> Any:
+    from agents.mcp import MCPServerStdio
+
+    class DeepyQuietMCPServerStdio(MCPServerStdio):
+        def create_streams(self) -> Any:
+            return _quiet_stdio_client(self.params)
+
+    return DeepyQuietMCPServerStdio(**kwargs)
+
+
+@asynccontextmanager
+async def _quiet_stdio_client(params: Any):
+    from mcp import stdio_client
+
+    with open(os.devnull, "w", encoding="utf-8") as errlog:
+        async with stdio_client(params, errlog=errlog) as streams:
+            yield streams
 
 
 def _load_mcp_file(

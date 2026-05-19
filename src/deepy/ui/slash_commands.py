@@ -53,7 +53,11 @@ def filter_slash_commands(items: list[SlashCommandItem], token: str) -> list[Sla
     query = token[1:].lower()
     if not query:
         return items
-    return [item for item in items if query in item.name.lower() or query in item.label[1:].lower()]
+    return [
+        item
+        for item in items
+        if item.name.lower().startswith(query) or item.label[1:].lower().startswith(query)
+    ]
 
 
 def find_exact_slash_command(

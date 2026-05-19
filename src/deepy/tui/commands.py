@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import partial
+from typing import TYPE_CHECKING
+
+from textual.command import DiscoveryHit, Hit, Hits, Provider
+
+if TYPE_CHECKING:
+    from deepy.tui.app import DeepyTuiApp
+
+
+@dataclass(frozen=True)
+class TuiCommand:
+    name: str
+    label: str
+    description: str
+    group: str
+
+
+TUI_COMMANDS: tuple[TuiCommand, ...] = (
+    TuiCommand("help", "/help", "Show commands, keybindings, and TUI state", "Help"),
+    TuiCommand("status", "/status", "Show project, session, MCP, and settings status", "Help"),
+    TuiCommand("new", "/new", "Start a fresh TUI session", "Session"),
+    TuiCommand("sessions", "/sessions", "List project sessions", "Session"),
+    TuiCommand("resume", "/resume", "Resume a previous session", "Session"),
+    TuiCommand("compact", "/compact", "Compact the active session context", "Session"),
+    TuiCommand("skills", "/skills", "List and load available skills", "Skills"),
+    TuiCommand("model", "/model", "Select model and reasoning mode", "Settings"),
+    TuiCommand("theme", "/theme", "Select UI theme", "Settings"),
+    TuiCommand("mcp", "/mcp", "Show MCP status", "Tools"),
+    TuiCommand("exit", "/exit", "Quit Deepy TUI", "System"),
+)
+
+UNSUPPORTED_TUI_COMMANDS = {
+    "init": "/init is not supported in the experimental TUI yet. Run it in the stable `deepy` UI.",
+    "reset": "/reset is not supported in the experimental TUI yet. Run it in the stable `deepy` UI.",
+}
+
+
+def command_catalog_markdown() -> str:
+    lines: list[str] = ["# Deepy TUI Commands", ""]
+    current_group = ""
+    for command in TUI_COMMANDS:
+        if command.group != current_group:
+            current_group = command.group
+            lines.extend(["", f"## {current_group}"])
+        lines.append(f"- **{command.label}** - {command.description}")
+    if UNSUPPORTED_TUI_COMMANDS:
+        lines.extend(["", "## Not Supported Yet"])
+        for message in UNSUPPORTED_TUI_COMMANDS.values():
+            lines.append(f"- {message}")
+    return "\n".join(lines).strip()
+
+
+def command_by_name(name: str) -> TuiCommand | None:
+    return next((command for command in TUI_COMMANDS if command.name == name), None)
+
+
+class DeepyCommandProvider(Provider):
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        app = self.app
+        for command in TUI_COMMANDS:
+            candidate = f"{command.label} {command.description} {command.group}"
+            score = matcher.match(candidate)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(command.label),
+                    partial(app.invoke_tui_command, command.name),
+                    help=f"{command.group}: {command.description}",
+                )
+
+    async def discover(self) -> Hits:
+        app = self.app
+        for command in TUI_COMMANDS:
+            yield DiscoveryHit(
+                command.label,
+                partial(app.invoke_tui_command, command.name),
+                help=f"{command.group}: {command.description}",
+            )
+
+    @property
+    def app(self) -> DeepyTuiApp:
+        from deepy.tui.app import DeepyTuiApp
+
+        app = self.screen.app
+        assert isinstance(app, DeepyTuiApp)
+        return app

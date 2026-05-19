@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from rich.cells import cell_len
+from textual.app import App, ComposeResult
 
 from deepy.tui.diff import (
     diff_view_from_tool_output,
     render_unified_diff_rich,
     render_unified_diff_text,
 )
+from deepy.tui.widgets import DiffBlock
 
 
 def _tool_output(diff: str, *, name: str = "write", path: str = "src/app.py") -> str:
@@ -85,6 +88,24 @@ def test_tui_diff_rich_rendering_uses_diff_colors_and_syntax() -> None:
     assert cell_len(lines[2].plain) == 64
 
 
+def test_tui_diff_rich_rendering_wraps_to_narrow_and_wide_widths() -> None:
+    output = _tool_output(
+        "--- a/sample.py\n+++ b/sample.py\n@@ -1,1 +1,1 @@\n"
+        "-old_value = 'abcdefghijklmnopqrstuvwxyz'\n"
+        "+new_value = 'abcdefghijklmnopqrstuvwxyz'\n",
+        path="sample.py",
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    narrow_lines = list(render_unified_diff_rich(view, width=32).renderables)
+    wide_lines = list(render_unified_diff_rich(view, width=120).renderables)
+    assert cell_len(narrow_lines[1].plain) == 32
+    assert cell_len(narrow_lines[2].plain) == 32
+    assert cell_len(wide_lines[1].plain) == 120
+    assert cell_len(wide_lines[2].plain) == 120
+
+
 def test_tui_diff_model_compacts_large_diffs() -> None:
     diff = "--- a/file\n+++ b/file\n@@ -0,0 +1,150 @@\n" + "\n".join(
         f"+line {index}" for index in range(150)
@@ -96,6 +117,58 @@ def test_tui_diff_model_compacts_large_diffs() -> None:
     assert view.truncated is True
     assert len(view.lines) == 12
     assert render_unified_diff_text(view).endswith("... diff truncated ...")
+
+
+def test_tui_diff_tracks_hunks_and_block_navigation() -> None:
+    output = _write_output(
+        "--- a/src/app.py\n+++ b/src/app.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+        "@@ -10 +10 @@\n-before\n+after\n"
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    assert view.hunks == ("@@ -1 +1 @@", "@@ -10 +10 @@")
+
+
+class _DiffBlockTestApp(App[None]):
+    def __init__(self, block: DiffBlock) -> None:
+        super().__init__()
+        self.block = block
+
+    def compose(self) -> ComposeResult:
+        yield self.block
+
+
+@pytest.mark.asyncio
+async def test_tui_diff_block_navigates_and_folds_hunks() -> None:
+    output = _write_output(
+        "--- a/src/app.py\n+++ b/src/app.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+        "@@ -10 +10 @@\n-before\n+after\n"
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    app = _DiffBlockTestApp(DiffBlock(view, width=40))
+    async with app.run_test(size=(60, 20)) as pilot:
+        await pilot.pause()
+        block = app.query_one(DiffBlock)
+        block.focus()
+        assert block.current_hunk == 0
+
+        await pilot.press("n")
+        await pilot.pause()
+        assert block.current_hunk == 1
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert block.current_hunk == 0
+
+        await pilot.press("f")
+        await pilot.pause()
+        assert block.folded is True
+        app.exit()
 
 
 def test_tui_diff_does_not_import_reference_packages() -> None:

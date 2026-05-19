@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from deepy.config import Settings
 from deepy.usage import TokenUsage, normalize_usage
 
 
@@ -18,6 +19,46 @@ class TuiState:
     pending_questions: list[dict[str, Any]] = field(default_factory=list)
     quit_confirm_pending: bool = False
     interrupt_requested: bool = False
+
+
+@dataclass
+class TuiController:
+    settings: Settings
+    loaded_skill_names: list[str] = field(default_factory=list)
+    prompt_history: list[str] = field(default_factory=list)
+    prompt_history_index: int | None = None
+    prompt_history_draft: str = ""
+
+    def add_prompt_history(self, prompt: str) -> None:
+        text = prompt.strip()
+        if not text:
+            return
+        if not self.prompt_history or self.prompt_history[-1] != text:
+            self.prompt_history.append(text)
+        self.prompt_history_index = None
+        self.prompt_history_draft = ""
+
+    def previous_prompt(self, current: str) -> str | None:
+        if not self.prompt_history:
+            return None
+        if self.prompt_history_index is None:
+            self.prompt_history_draft = current
+            self.prompt_history_index = len(self.prompt_history) - 1
+        else:
+            self.prompt_history_index = max(0, self.prompt_history_index - 1)
+        return self.prompt_history[self.prompt_history_index]
+
+    def next_prompt(self) -> str | None:
+        if self.prompt_history_index is None:
+            return None
+        self.prompt_history_index += 1
+        if self.prompt_history_index >= len(self.prompt_history):
+            self.prompt_history_index = None
+            return self.prompt_history_draft
+        return self.prompt_history[self.prompt_history_index]
+
+    def reset_session_state(self) -> None:
+        self.loaded_skill_names.clear()
 
 
 def set_busy(state: TuiState, busy: bool, status: str) -> TuiState:

@@ -47,6 +47,15 @@ def test_filter_slash_commands_matches_partial_tokens():
     ]
 
 
+def test_filter_slash_commands_only_matches_command_prefixes():
+    items = build_slash_commands(SKILLS)
+
+    assert [item.name for item in filter_slash_commands(items, "/re")] == [
+        "resume",
+        "reset",
+    ]
+
+
 def test_filter_slash_commands_returns_all_on_bare_slash():
     items = build_slash_commands(SKILLS)
 

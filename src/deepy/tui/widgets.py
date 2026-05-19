@@ -12,6 +12,14 @@ from textual.widgets import Label, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from deepy.tui.diff import TuiDiffView, render_unified_diff_rich, render_unified_diff_text
+from deepy.todos import normalize_todo_items, todo_counts
+from deepy.ui.ask_user_question import (
+    AskUserQuestionItem,
+    AskUserQuestionOptionEntry,
+    OTHER_VALUE,
+    build_answer_for_question,
+    build_options,
+)
 from deepy.ui.file_mentions import (
     FileMentionDiscovery,
     extract_file_mention_fragment,
@@ -34,6 +42,8 @@ class PromptTextArea(TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("shift+enter", "newline", "Newline", priority=True),
         Binding("tab", "accept_suggestion", "Accept suggestion", priority=True, show=False),
+        Binding("ctrl+up", "history_previous", "History previous", priority=True, show=False),
+        Binding("ctrl+down", "history_next", "History next", priority=True, show=False),
     ]
 
     class Submitted(Message):
@@ -44,7 +54,16 @@ class PromptTextArea(TextArea):
     class SuggestionAccepted(Message):
         pass
 
+    class HistoryPrevious(Message):
+        pass
+
+    class HistoryNext(Message):
+        pass
+
     def action_submit(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel) and panel.accept_selected_suggestion():
+            return
         text = self.text.strip()
         if not text:
             return
@@ -55,7 +74,65 @@ class PromptTextArea(TextArea):
         self.insert("\n")
 
     def action_accept_suggestion(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel) and panel.move_suggestion(1):
+            return
         self.post_message(self.SuggestionAccepted())
+
+    def action_history_previous(self) -> None:
+        self.post_message(self.HistoryPrevious())
+
+    def action_history_next(self) -> None:
+        self.post_message(self.HistoryNext())
+
+    def action_cursor_up(self, select: bool = False) -> None:
+        panel = self.parent
+        if not select and isinstance(panel, PromptPanel) and panel.move_suggestion(-1):
+            return
+        if not select and self.cursor_at_first_line:
+            self.action_history_previous()
+            return
+        super().action_cursor_up(select)
+
+    def action_cursor_down(self, select: bool = False) -> None:
+        panel = self.parent
+        if not select and isinstance(panel, PromptPanel) and panel.move_suggestion(1):
+            return
+        if not select and self.cursor_at_last_line:
+            self.action_history_next()
+            return
+        super().action_cursor_down(select)
+
+
+class QuestionTextArea(TextArea):
+    BINDINGS = [
+        Binding("enter", "submit", "Submit", priority=True),
+        Binding("shift+enter", "newline", "Newline", priority=True),
+    ]
+
+    class Submitted(Message):
+        pass
+
+    def action_submit(self) -> None:
+        self.post_message(self.Submitted())
+
+    def action_newline(self) -> None:
+        self.insert("\n")
+
+
+class QuestionOptionList(OptionList):
+    def action_cursor_up(self) -> None:
+        super().action_cursor_up()
+        self._sync_parent_selection()
+
+    def action_cursor_down(self) -> None:
+        super().action_cursor_down()
+        self._sync_parent_selection()
+
+    def _sync_parent_selection(self) -> None:
+        parent = self.parent
+        if isinstance(parent, QuestionBlock):
+            parent.sync_single_selection_to_highlight()
 
 
 class PromptPanel(Vertical):
@@ -87,22 +164,53 @@ class PromptPanel(Vertical):
         option_list.clear_options()
         if not suggestions:
             option_list.display = False
+            option_list.highlighted = None
             return
         option_list.display = True
         option_list.add_options([Option(suggestion, id=suggestion) for suggestion in suggestions[:8]])
+        option_list.highlighted = 0
 
     def accept_first_suggestion(self) -> bool:
-        if not self.suggestions:
+        return self.accept_selected_suggestion()
+
+    def accept_selected_suggestion(self) -> bool:
+        suggestion = self.selected_suggestion()
+        if suggestion is None:
             return False
         prompt = self.query_one("#prompt-input", PromptTextArea)
-        prompt.text = self._apply_suggestion(prompt.text, self.suggestions[0])
+        prompt.text = self._apply_suggestion(prompt.text, suggestion)
         prompt.move_cursor((0, len(prompt.text)))
         self.refresh_suggestions(prompt.text)
         return True
 
+    def selected_suggestion(self) -> str | None:
+        if not self.suggestions:
+            return None
+        option_list = self.query_one("#prompt-suggestions", OptionList)
+        if not option_list.display or option_list.option_count == 0:
+            return None
+        index = option_list.highlighted if option_list.highlighted is not None else 0
+        return str(option_list.get_option_at_index(index).id or self.suggestions[index])
+
+    def move_suggestion(self, delta: int) -> bool:
+        option_list = self.query_one("#prompt-suggestions", OptionList)
+        if not option_list.display or option_list.option_count == 0:
+            return False
+        current = option_list.highlighted if option_list.highlighted is not None else 0
+        option_list.highlighted = (current + delta) % option_list.option_count
+        option_list.scroll_to_highlight()
+        return True
+
     def _suggestions_for_text(self, text: str) -> list[str]:
         token = text.strip()
-        if token.startswith("/") and "\n" not in token:
+        if (
+            token.startswith("/")
+            and "\n" not in text
+            and token == text
+            and not any(char.isspace() for char in token)
+        ):
+            if any(item.label == token for item in self.slash_commands):
+                return []
             return [
                 f"{format_slash_command_label(item)}  {item.description}"
                 for item in filter_slash_commands(self.slash_commands, token)
@@ -124,7 +232,8 @@ class PromptPanel(Vertical):
         mention = extract_file_mention_fragment(text)
         if mention is None:
             return text
-        return text[: mention.start - 1] + value + " "
+        suffix = "" if value.endswith("/") else " "
+        return text[: mention.start - 1] + value + suffix
 
 
 class StatusBar(Horizontal):
@@ -205,49 +314,127 @@ class ToolBlock(TranscriptBlock):
         *,
         call_id: str = "",
         arguments: str = "",
+        details: str = "",
+        waiting_for_user: bool = False,
+        tool_name: str = "",
     ) -> None:
-        super().__init__(label, body, classes="tool-block")
+        classes = "tool-block todo-block" if tool_name == "todo_write" else "tool-block"
+        super().__init__(label, body, classes=classes)
         self.call_id = call_id
         self.arguments = arguments.strip()
+        self.details = details.strip()
+        self.waiting_for_user = waiting_for_user
+        self.tool_name = tool_name
 
     @classmethod
     def from_call(cls, name: str, arguments: str, *, call_id: str) -> ToolBlock:
         display_name = format_tool_display_name(name or "tool")
         params = _tool_arguments_body(name or "tool", arguments)
+        body = (
+            "Waiting for user input."
+            if name == "AskUserQuestion"
+            else f"Parameters\n  {params}"
+            if params
+            else "Running"
+        )
         return cls(
             f"{display_name} running",
-            f"Parameters\n  {params}" if params else "Running",
+            body,
             call_id=call_id,
             arguments=params,
+            tool_name=name or "tool",
         )
 
     @classmethod
     def from_output(cls, view: ToolOutputView, *, call_id: str = "") -> ToolBlock:
         body = _tool_output_body(view)
-        return cls(_tool_output_title(view), body, call_id=call_id)
+        return cls(
+            _tool_output_title(view),
+            body,
+            call_id=call_id,
+            details=_tool_output_details(view),
+            waiting_for_user=view.await_user_response,
+            tool_name=view.name,
+        )
 
     def update_from_output(self, view: ToolOutputView) -> None:
+        self.tool_name = view.name
         self.title = _tool_output_title(view)
         output_body = _tool_output_body(view)
+        self.details = _tool_output_details(view)
+        self.waiting_for_user = view.await_user_response
         self.body = (
             f"Parameters\n  {self.arguments}\n\nOutput\n{_indent_block(output_body)}"
-            if self.arguments and output_body
+            if self.arguments and output_body and view.name != "todo_write"
             else output_body
         )
         self.query_one(".block-title", Label).update(self.title)
         self.query_one(".block-body", Static).update(self.body)
+        details = self.query_one(".tool-details", Static)
+        details.update(self.details)
+        details.display = bool(self.details and self.expanded)
+        self.set_class(self.waiting_for_user, "-waiting")
+        self.set_class(view.name == "todo_write", "todo-block")
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.title, classes="block-title")
+        yield Static(self.body, classes="block-body")
+        detail = Static(self.details, classes="tool-details")
+        detail.display = False
+        yield detail
+
+    def action_toggle_expand(self) -> None:
+        super().action_toggle_expand()
+        self.query_one(".tool-details", Static).display = bool(self.expanded and self.details)
 
 
 class DiffBlock(Vertical, can_focus=True):
+    BINDINGS = [
+        Binding("n", "next_hunk", "Next hunk", show=False),
+        Binding("p", "previous_hunk", "Previous hunk", show=False),
+        Binding("f", "toggle_hunk_fold", "Fold hunk", show=False),
+    ]
+
     def __init__(self, diff: TuiDiffView, *, theme: str = "dark", width: int | None = None) -> None:
         super().__init__(classes="transcript-block diff-block")
         self.diff = diff
         self.body = render_unified_diff_text(diff)
         self.renderable = render_unified_diff_rich(diff, theme=theme, width=width)
+        self.current_hunk = 0
+        self.folded = False
 
     def compose(self) -> ComposeResult:
         yield Label("Diff", classes="block-title")
         yield Static(self.renderable, classes="block-body")
+
+    def action_next_hunk(self) -> None:
+        if not self.diff.hunks:
+            return
+        self.current_hunk = min(len(self.diff.hunks) - 1, self.current_hunk + 1)
+        self._update_hunk_status()
+
+    def action_previous_hunk(self) -> None:
+        if not self.diff.hunks:
+            return
+        self.current_hunk = max(0, self.current_hunk - 1)
+        self._update_hunk_status()
+
+    def action_toggle_hunk_fold(self) -> None:
+        self.folded = not self.folded
+        body = self.query_one(".block-body", Static)
+        if self.folded:
+            body.update(f"{self.diff.path or 'file'} (+{self.diff.added} -{self.diff.removed})\n... hunk folded ...")
+        else:
+            body.update(self.renderable)
+        self._update_hunk_status()
+
+    def _update_hunk_status(self) -> None:
+        title = "Diff"
+        if self.diff.hunks:
+            title = f"Diff hunk {self.current_hunk + 1}/{len(self.diff.hunks)}"
+            if self.folded:
+                title += " folded"
+        self.query_one(".block-title", Label).update(title)
 
 
 class ErrorBlock(TranscriptBlock):
@@ -262,6 +449,205 @@ class UsageLine(Static, can_focus=False):
         self.body = text
 
 
+class QuestionBlock(Vertical, can_focus=True):
+    BINDINGS = [
+        Binding("enter", "submit", "Submit"),
+        Binding("space", "toggle_selected", "Toggle", show=False),
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    selected_values = reactive(frozenset[str]())
+    custom_mode = reactive(False)
+
+    class Answered(Message):
+        def __init__(self, question: str, answer: str) -> None:
+            self.question = question
+            self.answer = answer
+            super().__init__()
+
+    class Cancelled(Message):
+        pass
+
+    def __init__(self, question: AskUserQuestionItem) -> None:
+        super().__init__(classes="transcript-block question-block")
+        self.question = question
+        self.options = build_options(question)
+        self.body = question.question
+        self._refreshing_options = False
+
+    def compose(self) -> ComposeResult:
+        yield Label("Question", classes="block-title")
+        yield Static(self.question.question, classes="block-body")
+        yield QuestionOptionList(
+            *[
+                Option(
+                    _question_option_label(option, selected=False),
+                    id=option.value,
+                )
+                for option in self.options
+            ],
+            id="question-options",
+        )
+        custom = QuestionTextArea(id="question-custom")
+        custom.display = False
+        yield custom
+
+    def on_mount(self) -> None:
+        self.query_one("#question-options", OptionList).focus()
+        if not self.question.multi_select and self.options:
+            self.selected_values = frozenset({self.options[0].value})
+            self._refresh_options()
+
+    @on(OptionList.OptionHighlighted, "#question-options")
+    def on_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        event.stop()
+        self.sync_single_selection_to_highlight()
+
+    def sync_single_selection_to_highlight(self) -> None:
+        if self._refreshing_options or self.question.multi_select:
+            return
+        option = self._highlighted_option()
+        if option is None:
+            return
+        self.selected_values = frozenset({option.value})
+        self._refresh_options()
+
+    @on(OptionList.OptionSelected, "#question-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        value = str(event.option_id or "")
+        if self.question.multi_select:
+            values = set(self.selected_values)
+            if value in values:
+                values.remove(value)
+            else:
+                values.add(value)
+            self.selected_values = frozenset(values)
+            self.custom_mode = OTHER_VALUE in values
+            self._refresh_options()
+            if self.custom_mode:
+                self._focus_custom()
+            return
+        option = self._option_by_value(value)
+        if option is None:
+            return
+        self.selected_values = frozenset({option.value})
+        self.custom_mode = option.is_other
+        self._refresh_options()
+        if option.is_other:
+            self._focus_custom()
+            return
+        answer = build_answer_for_question(self.question, option, [], "")
+        if answer:
+            self.post_message(self.Answered(self.question.question, answer))
+
+    @on(QuestionTextArea.Submitted)
+    def on_custom_submitted(self, event: QuestionTextArea.Submitted) -> None:
+        event.stop()
+        self.action_submit()
+
+    def action_toggle_selected(self) -> None:
+        if not self.question.multi_select:
+            option = self._highlighted_option()
+            if option is None:
+                return
+            self.selected_values = frozenset({option.value})
+            self.custom_mode = option.is_other
+            self._refresh_options()
+            if option.is_other:
+                self._focus_custom()
+            return
+        option = self._highlighted_option()
+        if option is None:
+            return
+        values = set(self.selected_values)
+        if option.value in values:
+            values.remove(option.value)
+        else:
+            values.add(option.value)
+        self.selected_values = frozenset(values)
+        self.custom_mode = OTHER_VALUE in values
+        self._refresh_options()
+
+    def action_submit(self) -> None:
+        if self.question.multi_select:
+            answer = build_answer_for_question(
+                self.question,
+                None,
+                list(self.selected_values),
+                self._custom_text(),
+            )
+        else:
+            option = self._selected_single_option() or self._highlighted_option()
+            answer = build_answer_for_question(
+                self.question,
+                option,
+                [],
+                self._custom_text() if option is not None and option.is_other else "",
+            )
+        if answer:
+            self.post_message(self.Answered(self.question.question, answer))
+
+    def action_cancel(self) -> None:
+        self.post_message(self.Cancelled())
+
+    def _option_by_value(self, value: str) -> AskUserQuestionOptionEntry | None:
+        return next((option for option in self.options if option.value == value), None)
+
+    def _highlighted_option(self) -> AskUserQuestionOptionEntry | None:
+        option_list = self.query_one("#question-options", OptionList)
+        highlighted = option_list.highlighted_option
+        if highlighted is None or highlighted.id is None:
+            return None
+        return self._option_by_value(str(highlighted.id))
+
+    def _selected_single_option(self) -> AskUserQuestionOptionEntry | None:
+        if self.question.multi_select or not self.selected_values:
+            return None
+        return self._option_by_value(next(iter(self.selected_values)))
+
+    def _custom_text(self) -> str:
+        return self.query_one("#question-custom", TextArea).text.strip()
+
+    def _focus_custom(self) -> None:
+        custom = self.query_one("#question-custom", TextArea)
+        custom.display = True
+        custom.focus()
+
+    def _refresh_options(self) -> None:
+        option_list = self.query_one("#question-options", OptionList)
+        highlighted_id = (
+            str(option_list.highlighted_option.id)
+            if option_list.highlighted_option is not None and option_list.highlighted_option.id is not None
+            else None
+        )
+        self._refreshing_options = True
+        try:
+            option_list.clear_options()
+            option_list.add_options(
+                [
+                    Option(
+                        _question_option_label(option, selected=option.value in self.selected_values),
+                        id=option.value,
+                    )
+                    for option in self.options
+                ]
+            )
+            target_id = highlighted_id
+            if not self.question.multi_select and self.selected_values:
+                target_id = next(iter(self.selected_values))
+            elif target_id is None and self.selected_values:
+                target_id = next(iter(self.selected_values))
+            if target_id is not None:
+                for index, option in enumerate(self.options):
+                    if option.value == target_id:
+                        option_list.highlighted = index
+                        break
+        finally:
+            self._refreshing_options = False
+        self.query_one("#question-custom", TextArea).display = self.custom_mode
+
+
 def _tool_output_title(view: ToolOutputView) -> str:
     detail = view.path or ""
     if view.name == "load_skill" and view.metadata:
@@ -272,12 +658,16 @@ def _tool_output_title(view: ToolOutputView) -> str:
 
 
 def _tool_arguments_body(name: str, arguments: str) -> str:
+    if name == "AskUserQuestion":
+        return ""
     if not arguments.strip():
         return ""
     return build_tool_params_snippet({"name": name, "arguments": arguments})
 
 
 def _tool_output_body(view: ToolOutputView) -> str:
+    if view.name == "AskUserQuestion":
+        return "Waiting for user input." if view.await_user_response else _compact_text(view.output or view.summary)
     if view.name == "load_skill" and view.ok is True:
         metadata = view.metadata or {}
         name = str(metadata.get("name") or "skill")
@@ -289,7 +679,153 @@ def _tool_output_body(view: ToolOutputView) -> str:
         if root:
             lines.append(f"Root: {root}")
         return "\n".join(lines)
+    if view.name == "shell":
+        return _shell_body(view)
+    if view.name == "read":
+        return _read_body(view)
+    if view.name == "todo_write":
+        return _todo_body(view)
+    if view.name in {"WebSearch", "WebFetch"}:
+        return _web_body(view)
+    if _is_mcp_view(view):
+        return _mcp_body(view)
     return _compact_text(view.error or view.output or view.summary)
+
+
+def _tool_output_details(view: ToolOutputView) -> str:
+    if view.name == "AskUserQuestion":
+        return ""
+    text = view.error or view.output or ""
+    if not text:
+        return ""
+    compact = _compact_text(text)
+    return "" if compact == text.strip() else text.strip()
+
+
+def _shell_body(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    lines = [
+        f"Status: {view.status}",
+        f"Exit code: {metadata.get('exit_code', metadata.get('exitCode', 'unknown'))}",
+    ]
+    duration = metadata.get("duration_ms", metadata.get("durationMs"))
+    if duration is not None:
+        lines.append(f"Duration: {duration} ms")
+    cwd = metadata.get("cwd")
+    if cwd:
+        lines.append(f"Cwd: {cwd}")
+    shell_path = metadata.get("shellPath") or metadata.get("shell_path")
+    if shell_path:
+        lines.append(f"Shell: {shell_path}")
+    dialect = metadata.get("commandDialect") or metadata.get("command_dialect")
+    if dialect:
+        lines.append(f"Dialect: {dialect}")
+    command = metadata.get("command")
+    if command:
+        lines.append(f"Command: {command}")
+    if metadata.get("outputTruncated") or metadata.get("captureTruncated"):
+        lines.append("Truncated: true")
+    output = _compact_text(view.error or view.output)
+    if output:
+        lines.extend(["", output])
+    return "\n".join(str(line) for line in lines)
+
+
+def _read_body(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    lines = []
+    if view.path:
+        lines.append(f"Path: {view.path}")
+    if metadata.get("pages"):
+        lines.append(f"Pages: {metadata['pages']}")
+    if metadata.get("start_line") or metadata.get("startLine"):
+        lines.append(f"Start: {metadata.get('start_line', metadata.get('startLine'))}")
+    preview = _compact_text(view.error or view.output, max_lines=12, max_chars=1200)
+    if preview:
+        lines.extend(["", preview] if lines else [preview])
+    return "\n".join(lines)
+
+
+def _todo_body(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    todos = metadata.get("todos")
+    items, error = normalize_todo_items(todos)
+    if error is None and items:
+        counts = todo_counts(items)
+        total = counts["total"]
+        completed = counts["completed"]
+        percent = round((completed / total) * 100) if total else 0
+        current = next((item for item in items if item.status == "in_progress"), None)
+        if current is None:
+            current = next((item for item in items if item.status == "pending"), None)
+        lines = [
+            f"Progress  {_progress_bar(completed, total)}  {completed}/{total} completed ({percent}%)",
+            (
+                "Status    "
+                f"{counts['completed']} done | "
+                f"{counts['in_progress']} active | "
+                f"{counts['pending']} pending"
+            ),
+        ]
+        if current is not None:
+            lines.append(f"Current   {current.id}: {current.content}")
+        lines.append("")
+        lines.append("Tasks")
+        for item in items[:12]:
+            marker = _todo_marker(item.status)
+            lines.append(f"  {marker} {item.id}: {item.content}")
+        if len(items) > 12:
+            lines.append("  ... todos truncated ...")
+        return "\n".join(lines)
+    return _compact_text(view.error or view.output or view.summary)
+
+
+def _web_body(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    lines = []
+    preview = _compact_text(view.error or view.output)
+    if preview:
+        lines.append(preview)
+    url = metadata.get("url") or metadata.get("final_url") or metadata.get("finalUrl")
+    provider = metadata.get("provider")
+    metadata_lines = []
+    if provider:
+        metadata_lines.append(f"Provider: {provider}")
+    if url:
+        metadata_lines.append(f"URL: {url}")
+    if metadata_lines:
+        lines.extend(["", *metadata_lines] if lines else metadata_lines)
+    return "\n".join(str(line) for line in lines)
+
+
+def _is_mcp_view(view: ToolOutputView) -> bool:
+    metadata = view.metadata or {}
+    return bool(
+        metadata.get("mcp_server")
+        or metadata.get("server")
+        or metadata.get("serverName")
+        or metadata.get("mcp_tool")
+        or metadata.get("tool")
+        or str(metadata.get("kind") or "").startswith("mcp")
+    )
+
+
+def _mcp_body(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    lines = [f"Status: {view.status}"]
+    server = metadata.get("mcp_server") or metadata.get("server") or metadata.get("serverName")
+    tool = metadata.get("mcp_tool") or metadata.get("tool")
+    state = metadata.get("state") or metadata.get("cleanup") or metadata.get("availability")
+    if server:
+        lines.append(f"Server: {server}")
+    if tool:
+        lines.append(f"Tool: {tool}")
+    if state:
+        lines.append(f"State: {state}")
+    preview = _compact_text(view.error or view.output)
+    if preview:
+        lines.extend(["", preview])
+    return "\n".join(str(line) for line in lines)
 
 
 def _indent_block(text: str) -> str:
@@ -310,3 +846,25 @@ def _compact_text(text: str, *, max_lines: int = 8, max_chars: int = 900) -> str
     if truncated:
         compact += "\n... output truncated ..."
     return compact
+
+
+def _progress_bar(completed: int, total: int, *, width: int = 18) -> str:
+    if total <= 0:
+        return "[" + "-" * width + "]"
+    filled = round((completed / total) * width)
+    filled = max(0, min(width, filled))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _todo_marker(status: str) -> str:
+    if status == "completed":
+        return "[x]"
+    if status == "in_progress":
+        return "[>]"
+    return "[ ]"
+
+
+def _question_option_label(option: AskUserQuestionOptionEntry, *, selected: bool) -> str:
+    marker = "[x]" if selected else "[ ]"
+    detail = f" - {option.description}" if option.description else ""
+    return f"{marker} {option.label}{detail}"

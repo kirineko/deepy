@@ -1,252 +1,272 @@
-# Deepy TUI Next Version Checklist
+# Deepy TUI Next Version Handoff
 
 Date: 2026-05-19
 
-This document summarizes what the experimental `deepy tui` supports today and
-what remains before it reaches feature parity with the stable `deepy` terminal
-UI. It is the handoff document for the next TUI iteration after archiving the
-`add-experimental-textual-tui` OpenSpec change.
+This document tracks the current state of the experimental `deepy tui` after the
+`polish-experimental-textual-tui` apply pass. It replaces the earlier pre-apply
+checklist: most of the original parity gaps have now been implemented, while a
+small set of intentional next-version gaps, structural follow-ups, and Windows
+verification tasks remain open.
 
 ## Current Status
 
-`deepy tui` is an opt-in experimental Textual app. It does not replace the
+`deepy tui` remains an opt-in experimental Textual app. It does not replace the
 stable Rich and prompt-toolkit UI started by `deepy`.
 
-The current TUI is usable for normal model turns, basic skill loading, live
-thinking/tool display, and colored write/modify diffs. It is not yet feature
-complete relative to the stable UI, especially around slash commands,
-AskUserQuestion continuation, shell/todo-specific surfaces, MCP status, session
-management, and mature auxiliary views.
+The TUI now supports normal model turns, live thinking and tool rendering,
+session continuity, first-class command surfaces, AskUserQuestion continuation,
+session/context commands, richer tool-specific blocks, prompt history,
+controlled auto-scroll, interactive diff navigation, file mention completion,
+slash command completion, and core visual polish. The code path still uses the
+shared Deepy runner and shared model-facing tool contracts.
+
+OpenSpec progress for `polish-experimental-textual-tui` is currently `49/54`.
+The remaining items are either intentional next-version feature gaps,
+follow-up refactors, or Windows cross-platform verification.
+
+Manual macOS validation for the current pass has been completed. Based on that
+validation and the current implementation, the TUI is broadly aligned with the
+stable `deepy` UI for core chat, session, context, AskUserQuestion, tool
+rendering, prompt history, slash/file completion, resume, compact, MCP status,
+model/theme, scrolling, and diff workflows. The gaps below should be treated as
+known next-version work rather than regressions in this pass.
 
 ## Implemented
 
 ### Entry And Compatibility
 
-- `deepy tui` CLI command starts the experimental Textual app.
+- `deepy tui` still starts the experimental Textual app.
 - The default `deepy` command still starts the stable Rich/prompt-toolkit UI.
-- Textual is added with a Python 3.12-compatible dependency range.
-- The TUI code lives in `src/deepy/tui/`, parallel to `src/deepy/ui/`.
-- Toad and `textual-diff-view` are reference-only; they are not imported,
+- The TUI remains under `src/deepy/tui/`, parallel to `src/deepy/ui/`.
+- Toad and `textual-diff-view` remain reference-only; they are not imported,
   vendored, or added as dependencies.
-- Startup failure falls back to a concise terminal error that points users back
-  to `deepy`.
+- The TUI consumes shared runner events and shared `ToolResult` JSON payloads
+  rather than defining separate model/tool contracts.
 
-### App Shell And Input
+### Structure And State
 
-- Textual layout with header, transcript, status bar, prompt area, footer, and a
-  collapsible side status panel.
-- Experimental startup hint without labeling it as a user message.
-- Theme mapping for Deepy's `auto`, `dark`, and `light` settings through
-  Textual themes.
-- Enter submits; Shift+Enter inserts a newline.
-- Ctrl+D twice exits; `/exit` and `/quit` exit without starting a model turn.
-- Escape requests interruption during a running model turn.
-- Ctrl+O toggles the side status panel.
-- Alt+Up and Alt+Down move focus between transcript blocks.
-- Slash command suggestions appear when typing `/`.
-- `@file` suggestions use existing project file mention matching.
-- Transcript auto-scrolls as new blocks are appended and as live thinking,
-  assistant, or tool blocks grow.
-- The app keeps `session_id` between turns, so the second prompt continues the
-  same conversation context.
+- Added a small `TuiController` boundary for per-TUI state such as loaded
+  skills, prompt history, prompt draft restoration, and session reset.
+- Added dedicated TUI modules for command catalog/provider support and reusable
+  modal screens.
+- Preserved external CLI entrypoints and stable terminal UI behavior.
 
-### Runner And Stream Integration
+Still open:
 
-- The TUI invokes the existing `run_prompt_once()` path in a Textual worker.
-- TUI widgets consume normalized `DeepyStreamEvent` values instead of provider
-  SDK objects.
-- Assistant text is rendered as Textual Markdown.
-- Reasoning deltas render as live `Thinking` blocks.
-- Tool calls render as running blocks and update when output arrives.
-- Final assistant output is ordered after thinking/tool blocks, matching actual
-  stream order instead of jumping ahead.
-- Duplicate final `message` events are ignored when equivalent text deltas were
-  already streamed.
-- Usage appears as a compact one-line transcript item rather than a large block.
-- Errors render as readable error blocks.
+- Further split the large app/widget modules into focused transcript, tool
+  widget, command, and prompt-history modules. The functional boundary exists,
+  but the code is not yet fully extracted.
 
-### Tool Rendering
+### Command Discovery And Slash Commands
 
-- All existing Deepy function tools remain available to the model through the
-  shared runner: `shell`, `AskUserQuestion`, `read`, `modify`, `WebSearch`,
-  `WebFetch`, `load_skill`, and `todo_write`.
-- TUI tool execution does not use a separate tool implementation; it consumes
-  the same JSON `ToolResult` payloads via `parse_tool_output()`.
-- Tool parameters are summarized with the existing `message_view` helpers.
-- Tool output is compacted to avoid dumping very long raw content.
-- `load_skill` output is summarized by skill name, description, and root instead
-  of printing the full `SKILL.md` body.
-- `write`, `modify`, and legacy `edit` outputs produce a Deepy-owned diff view.
-- Diff rendering now reuses the existing Rich diff renderer, including line
-  gutters, added/removed colors, and syntax highlighting.
-- Large diffs are truncated in the TUI diff model.
+- Added a Textual command provider for TUI commands grouped by help, session,
+  skills, settings, tools, and system commands.
+- Slash suggestions continue to work from the prompt.
+- Unknown slash commands no longer start accidental model turns.
+- Unsupported stable commands now show explicit TUI unsupported messages.
+- `/help` opens a Textual help surface with commands, keybindings, model,
+  session, loaded skills, config path, and core state.
+- `/status` opens a dismissible status surface with project, model, reasoning,
+  session, context, MCP, loaded skills, and theme information.
+- `/theme` persists `auto`, `dark`, and `light` through existing settings.
+- `/model` supports direct model/reasoning changes and picker-based selection.
+- `/mcp` shows MCP status without leaving the TUI.
+- `/exit` and `/quit` exit without starting a model turn.
 
-### Implemented Slash Command Behavior
+Implemented session/context commands:
 
-- `/exit` and `/quit`: exit the TUI.
-- `/skills list` and `/skills`: list available skills in the transcript.
-- `/skills use NAME`: load a skill for subsequent prompts without printing the
-  full skill body.
-- `/skills show NAME`: show basic skill metadata.
-- `/skill:NAME [prompt]`: invoke one skill for a model turn.
+- `/new`
+- `/sessions`
+- `/resume [ID]`
+- `/compact [focus]`
 
-### Tests
+Still intentionally unsupported in TUI after this pass:
 
-- Headless Textual startup/exit tests.
-- Prompt tests for Enter, Shift+Enter, slash suggestions, and file mentions.
-- Session continuity test for passing `session_id` between turns.
-- Stream rendering tests for assistant output, thinking, tool calls, tool
-  output, diffs, usage, and errors.
-- Regression test for duplicate streamed output.
-- Regression test for transcript auto-scroll while a live block grows.
-- Diff tests for write/modify recognition, syntax/color rendering, truncation,
-  and AGPL reference package avoidance.
-- Legacy UI regression tests remain in the full suite.
+- `/init` shows an explicit unsupported message. Use the stable `deepy` UI for
+  AGENTS.md initialization for now.
+- `/reset` shows an explicit unsupported message. Use the stable `deepy` UI for
+  config reset/setup for now.
 
-## Missing Feature Parity
+Additional command parity gaps deferred to the next version:
 
-### Slash Commands
+- `!command` local shell command mode is not implemented in the TUI. The TUI
+  renders model-invoked `shell` tool output, but it does not actively execute
+  user-entered local commands.
+- Skill market and full skill management are not connected in the TUI. The TUI
+  supports local skill listing/loading/showing and `/skill:NAME` invocation,
+  but market search/install/update/uninstall and the full skill management menu
+  remain stable-UI-only.
 
-The stable UI supports many slash commands that the TUI only suggests or does
-not expose at all.
+### AskUserQuestion Continuation
 
-Not implemented in TUI:
+- Pending `RunSummary.pending_questions` are normalized and rendered inside the
+  TUI.
+- Single-select answers submit and continue the same session id.
+- Multi-select answers submit and continue the same session id.
+- Custom answers are supported when the question offers an "other" path.
+- Cancellation is recoverable and records clear transcript feedback.
+- Answer submissions reuse the stable AskUserQuestion formatting path.
 
-- `/help`: no dedicated help screen or command output.
-- `/new`: does not clear current session or reset loaded skills.
-- `/resume [ID]`: no session picker and no session resume flow.
-- `/sessions`: no session list view.
-- `/status`: no full project status report view.
-- `/mcp`: no MCP server/tool status view.
-- `/compact [focus]`: no active session compaction flow.
-- `/model`, `/model list`, `/model set ...`, `/model reasoning ...`: no model
-  picker or persisted model/reasoning settings flow.
-- `/theme [auto|dark|light]`: no persisted theme update flow.
-- `/reset`: no config reset/setup flow.
-- `/init`: no AGENTS.md initialization flow.
+### Session And Context Flow
 
-Partially implemented:
-
-- `/skills`: basic list/use/show exists, but no Textual skills screen.
-- `/skills search`, `/skills install`, `/skills uninstall`,
-  `/skills installed`, `/skills update NAME`, `/skills update --all`: missing.
-- `/skills show NAME`: currently shows metadata only, not a polished markdown
-  skill detail window.
-- `/skill:NAME`: invokes a skill, but does not yet share the stable UI's full
-  clarification loop behavior.
-
-Also missing:
-
-- Slash suggestion selection is simple first-match Tab acceptance; there is no
-  rich command palette, grouped command categories, or per-command forms.
+- `/new` clears the active session id and resets per-session TUI state without
+  changing global settings.
+- `/sessions` opens a navigable Textual session picker using existing JSONL
+  session entries.
+- `/resume [ID]` supports direct resume.
+- Picker-based resume is supported.
+- Visible transcript history is restored from previous session items.
+- `/compact [focus]` uses the existing durable compaction flow.
+- Compaction running, success, no-op, and failure states are rendered inside the
+  TUI.
 
 ### Tool-Specific Surfaces
 
-The model can call all tools, but several tools still render through generic
-compact output instead of first-class TUI widgets.
+- Added reusable expandable tool blocks with summary, status, metadata, hidden
+  details, keyboard expansion, and pointer expansion.
+- Model-invoked `shell` output now shows command, cwd, exit code, status,
+  duration, stdout, stderr, truncation, timeout, and interruption metadata when
+  present.
+- `read` output has a file preview treatment with path/range metadata and
+  folded large content.
+- `todo_write` renders a main-transcript todo board with progress, current item,
+  task markers, and a side-panel projection for quick reference.
+- `WebSearch` and `WebFetch` show source/URL metadata with expandable bodies.
+- MCP tool/status results show server/tool identity, success/failure/cleanup or
+  unavailable state, and concise errors.
+- Stdio MCP child-process stderr is suppressed in TUI runs so server startup
+  banners do not overwrite prompt input.
+- Tool waiting-for-user state has dedicated visual treatment.
+- `load_skill` continues to summarize skill metadata without dumping full
+  `SKILL.md` bodies.
+- Model-facing tool names, argument schemas, and JSON result contracts are
+  preserved.
 
-Missing or partial:
+### Transcript, Diff, And Visual Polish
 
-- `shell`: no dedicated shell output block with command, exit code, stdout,
-  stderr, duration, wrapping, copy support, or large-output navigation.
-- `todo_write`: no todo board or side-panel projection using existing todo
-  metadata.
-- `AskUserQuestion`: pending questions are stored and summarized, but there is
-  no interactive Textual question view for options, multi-select, custom answer,
-  cancellation, or continuation.
-- `WebSearch`: no search-result cards, source list, or expandable result body.
-- `WebFetch`: no URL metadata card beyond compact parameter/output text.
-- `read`: no file preview widget with syntax highlighting or large file
+- Controlled auto-scroll distinguishes bottom-anchored output from the user
+  reading older transcript history.
+- A "new output below" status affordance appears when output arrives while the
+  user is away from the bottom.
+- Prompt input history supports Ctrl+Up and Ctrl+Down without losing the
+  current draft.
+- Thinking and tool labels use consistent title treatment and semantic state
+  colors.
+- Diff views track hunk boundaries.
+- Diff blocks support next/previous hunk navigation.
+- Diff blocks support hunk fold/unfold.
+- Long changed diff lines are constrained to terminal width with ellipsis
   folding.
-- MCP tool calls: no MCP-specific output normalization beyond generic tool
-  rendering and no MCP status/cleanup UI.
-- Tool waiting-for-user state: no dedicated visual treatment beyond generic
-  tool status text.
-- Tool expand/collapse: the base block binding exists, but large hidden-detail
-  models are not yet implemented.
+- Large diffs remain truncated in the TUI diff model.
 
-### Diff Surface
+Still open:
 
-Implemented:
+- Optional wide-layout or side-by-side diff behavior. The current single-column
+  fallback is the supported behavior.
+- Manual narrow and wide layout verification for overlap, prompt stability, and
+  side-panel behavior.
 
-- Unified diff model for `write`, `modify`, and `edit`.
-- Added/removed colors, line gutters, syntax highlighting, path summary, and
-  truncation.
+## Tests And Validation
 
-Still missing:
+Added or updated coverage includes:
 
-- Terminal-width wrapping for long changed lines.
-- Hunk headers and hunk-level folding controls in the interactive widget.
-- File summary for multi-file or future multi-hunk outputs.
-- Side-by-side diff mode for wide terminals.
-- Keyboard actions for next/previous hunk, copy path, copy hunk, or open file.
-- Visual tests for narrow and wide terminal widths.
+- Textual command provider discovery and search.
+- Slash command dispatch and unsupported command messages.
+- `/help`, `/status`, `/theme`, and `/model` surfaces.
+- AskUserQuestion single-select, multi-select, selected-option markers,
+  non-duplicated tool chrome, custom answer Enter submission, cancellation, and
+  same-session continuation.
+- `/new`, `/sessions`, `/resume`, transcript restoration, and `/compact`.
+- Tool widget behavior for shell, read, todo progress, web, MCP,
+  waiting-for-user, expansion, and truncation.
+- MCP stdio stderr suppression to keep server banners out of the prompt area.
+- Diff wrapping, hunk tracking, hunk navigation, hunk folding, truncation,
+  narrow width, and wide width.
+- Controlled auto-scroll, new-output indicator, prompt-submit scroll recovery,
+  and input-history regressions.
+- Continued regression coverage for stream ordering, duplicate final messages,
+  skill loading, usage lines, errors, and AGPL reference package avoidance.
 
-### Conversation And Session Flow
+Latest verification:
 
-Missing:
+- `uv run pytest tests/test_tui_app.py tests/test_tui_diff.py -q`: `46 passed`
+- `uv run pytest -q`: `668 passed`
+- `uv run ruff check`: passed
+- `uv run ty check src`: passed
+- `openspec validate polish-experimental-textual-tui --type change --strict`:
+  passed
 
-- Interactive AskUserQuestion clarification loop after `waiting_for_user`.
-- `/resume` and `/sessions` views.
-- `/new` session reset.
-- `/compact` context compaction.
-- Exit summary parity with the stable UI.
-- Transcript restoration from previous sessions.
-- Input history navigation.
-- Copy/select/export actions for transcript blocks.
-- A clearer distinction between visible assistant text and hidden reasoning in
-  configurations where reasoning should be minimized.
+## Remaining Open Items
 
-### Auxiliary Views
+### Code Structure
 
-Missing:
+- Extract focused TUI modules for transcript behavior, tool widgets, command
+  handling, screens, and prompt history. This is a maintainability follow-up,
+  not a current behavior blocker.
 
-- Full status/help view with model, reasoning mode, project root, active
-  session, MCP status, loaded skills, keybindings, and config path.
-- Model/reasoning picker.
-- Theme picker.
-- Sessions picker.
-- Skills browser with installed/market tabs and markdown detail view.
-- AskUserQuestion modal/screen.
-- Settings/config reset/setup screens.
+### Diff Layout
 
-### Performance And Robustness
+- Decide whether optional wide-layout diff behavior is worth implementing.
+- Keep single-column diff as the default and supported fallback.
 
-Missing:
+### Manual Verification
 
-- Batching or throttling for high-frequency text and reasoning deltas.
-- Backpressure strategy for very large tool outputs.
-- More careful auto-scroll behavior when the user has intentionally scrolled up.
-- Windows Terminal and PowerShell 7 manual verification.
-- Richer resize tests for narrow/mobile-like terminal widths and wide layouts.
-- More direct tests for interruption and cancellation cleanup.
+- macOS manual validation for the current pass has been completed.
+- Manually verify `deepy tui` on Windows Terminal with PowerShell 7 before
+  treating the TUI as release-ready.
+- During Windows verification and any future regression pass, check:
+  - long prompts and prompt resizing
+  - side-panel toggle behavior
+  - prompt submission while scrolled into transcript history returns to the
+    bottom for the new turn
+  - while a long model turn is still streaming, scrolling up preserves the
+    reading position and shows `New output below` when later output arrives
+  - narrow terminal layout
+  - wide terminal layout
+  - live tool output growth
+  - AskUserQuestion keyboard flow
+  - `/sessions` and `/resume`
+  - `/compact`
+  - diff hunk navigation and folding
+  - unsupported `/init` and `/reset` messages
+  - no accidental support claim for `!command` local shell command mode
+  - current TUI skill command boundary versus stable UI skill market behavior
 
-## Suggested Next Version Scope
+### Next-Version Feature Gaps
 
-Recommended next version focus:
+- Add real TUI support for `/init` if AGENTS.md initialization should be
+  available without leaving the experimental app.
+- Add real TUI support for `/reset` if config reset/setup should be available
+  without leaving the experimental app.
+- Decide and implement the TUI-local command strategy for `!command` execution,
+  including transcript persistence, interruption, exit-code display, and
+  cross-platform behavior.
+- Connect skill market and full skill management to the TUI, including market
+  search, install, update, uninstall, installed-skill state, and a first-class
+  Textual management surface.
 
-1. Implement AskUserQuestion continuation as a Textual modal or screen.
-2. Add session and context commands: `/new`, `/resume`, `/sessions`, `/compact`.
-3. Add first-class tool widgets for `shell`, `todo_write`, and `read`.
-4. Build a real `/skills` screen with installed/market tabs and markdown detail.
-5. Add `/model`, `/theme`, `/status`, and `/mcp` views.
-6. Improve diff interactivity: wrapping, hunk folding, hunk navigation, and
-   optional side-by-side view.
-7. Add input history, user-controlled auto-scroll behavior, and high-frequency
-   stream throttling.
-8. Run manual verification on macOS, Linux, and Windows Terminal with
-   PowerShell 7.
+## Release Readiness Bar
 
-## Acceptance Bar For Next Iteration
+Before archiving or releasing this TUI polish change:
 
-- All stable slash commands either work in TUI or show a clear "not supported in
-  TUI yet" message.
-- AskUserQuestion can complete a real pending-question turn without leaving the
-  TUI.
-- Shell, todo, read, write, modify, WebSearch, WebFetch, load_skill, and MCP
-  outputs each have readable TUI treatment.
-- Session resume, new session, and compaction work without returning to the
-  stable UI.
-- TUI tests cover the new views with Textual Pilot/headless helpers.
-- Full suite passes: `uv run pytest -q`, `uv run ruff check`, `uv run ty check
-  src`, and OpenSpec strict validation.
+- Complete or explicitly defer the module extraction item.
+- Decide whether wide-layout diff is in scope or intentionally deferred.
+- Keep the completed macOS manual checklist as the regression baseline.
+- Run Windows Terminal with PowerShell 7 manual verification.
+- Re-run:
+  - `uv run pytest -q`
+  - `uv run ruff check`
+  - `uv run ty check src`
+  - `openspec validate polish-experimental-textual-tui --type change --strict`
+
+## Current Recommendation
+
+Treat the TUI as broadly aligned with stable `deepy` for core day-to-day
+workflows after the completed macOS validation. The main remaining intentional
+parity gaps are `/init`, `/reset`, user-entered `!command` local shell command
+mode, and skill market/full skill management. These should be planned for the
+next version unless they are explicitly accepted as stable-UI-only features.
+
+Before archive or release, finish Windows Terminal with PowerShell 7
+verification and decide whether module extraction and optional wide diff layout
+are release blockers or deferred maintainability work.

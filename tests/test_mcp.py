@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from deepy.config import McpConfig, Settings
@@ -174,6 +175,36 @@ def test_mcp_runtime_collects_active_tools_and_web_search_preference(tmp_path):
     assert runtime.statuses[0].state == "active"
     assert runtime.statuses[0].tools == ("mcp_tavily__tavily_search",)
     assert server.cleaned is True
+
+
+def test_mcp_runtime_stdio_servers_suppress_child_stderr(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx", "args": ["-y", "tavily-mcp"]}}}',
+        encoding="utf-8",
+    )
+    captured = {}
+
+    @asynccontextmanager
+    async def fake_stdio_client(params, *, errlog):
+        captured["command"] = params.command
+        captured["errlog"] = errlog
+        yield ("read", "write")
+
+    monkeypatch.setattr("mcp.stdio_client", fake_stdio_client)
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    server = runtime._build_sdk_servers()[0]
+
+    async def use_streams():
+        async with server.create_streams() as streams:
+            assert streams == ("read", "write")
+            assert captured["command"] == "npx"
+            assert captured["errlog"].name == "/dev/null"
+            assert captured["errlog"].closed is False
+
+    asyncio.run(use_streams())
+
+    assert captured["errlog"].closed is True
 
 
 def test_sdk_mcp_tool_name_matches_agents_sdk_prefix():
