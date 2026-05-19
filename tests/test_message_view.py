@@ -38,6 +38,19 @@ def test_format_tool_output_summary_uses_path_detail():
     assert format_tool_output_summary(output) == "[Read] ok - /tmp/a"
 
 
+def test_format_tool_output_summary_summarizes_loaded_skill_by_name():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "load_skill",
+            "output": "# Skill: demo\n\nVERY LONG SKILL BODY",
+            "metadata": {"name": "demo"},
+        }
+    )
+
+    assert format_tool_output_summary(output) == "[Load Skill] ok - demo"
+
+
 def test_format_tool_output_summary_uses_error_detail():
     output = (
         '{"ok":false,"name":"shell","output":"stderr","error":"Command exited with code 1.",'
@@ -64,6 +77,7 @@ def test_format_tool_display_label_normalizes_protocol_names():
     assert format_tool_display_label("WebFetch") == "[WebFetch]"
     assert format_tool_display_label("edit") == "[Modify]"
     assert format_tool_display_label("todo_write") == "[Todo]"
+    assert format_tool_display_label("load_skill") == "[Load Skill]"
 
 
 def test_todo_tool_params_snippet_hides_raw_json():
@@ -315,6 +329,22 @@ def test_tool_diff_preview_only_for_successful_edit():
             "ok": True,
             "name": "edit",
             "output": "Edited file",
+            "error": None,
+            "metadata": {"path": "file", "diff": diff},
+            "awaitUserResponse": False,
+        }
+    )
+
+    assert tool_diff_preview(output) == diff
+
+
+def test_tool_diff_preview_supports_modify_outputs():
+    diff = "--- a/file\n+++ b/file\n@@\n-old\n+new\n"
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "modify",
+            "output": "Modified file",
             "error": None,
             "metadata": {"path": "file", "diff": diff},
             "awaitUserResponse": False,

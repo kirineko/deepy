@@ -124,6 +124,27 @@ cd your-project
 deepy
 ```
 
+### Experimental Textual TUI
+
+Deepy's stable default UI is still launched with `deepy`. Users who want to try
+the new opt-in Textual interface can run:
+
+```bash
+deepy tui
+```
+
+This first iteration focuses on experience and TUI-native interactions: a
+scrollable transcript, live thinking and assistant blocks, prompt suggestions
+for slash commands and `@file` mentions, status/help surfaces, and a Deepy-owned
+diff view. It is experimental and may change between releases.
+
+Known limitations: the TUI does not add interactive shell/PTTY support yet, and
+toad / textual-diff-view are only design references. Deepy does not copy their
+AGPL source or depend on those packages.
+
+Please report feedback through GitHub Issues and include your terminal, shell,
+operating system, and the exact `deepy tui` workflow you tried.
+
 ## Installation Notes
 
 Use this order for a fresh machine:

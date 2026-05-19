@@ -25,7 +25,7 @@ MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
-DIFF_PREVIEW_TOOLS = {"edit", "write"}
+DIFF_PREVIEW_TOOLS = {"edit", "modify", "write"}
 SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
 SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_text", "text"}
 SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
@@ -40,6 +40,7 @@ TOOL_DISPLAY_LABELS = {
     "read": "Read",
     "shell": "Shell",
     "todo_write": "Todo",
+    "load_skill": "Load Skill",
 }
 ROLE_TITLES = {
     "user": "You",
@@ -109,7 +110,10 @@ def parse_tool_output(output: str) -> ToolOutputView:
     text_output = _string_or_default(payload.get("output"), "")
     await_user_response = bool(payload.get("awaitUserResponse"))
 
-    detail = (error or path or _first_nonempty_line(text_output) or "").strip()
+    if name == "load_skill" and ok_value is True:
+        detail = _string_or_none(metadata_dict.get("name")) or path or ""
+    else:
+        detail = (error or path or _first_nonempty_line(text_output) or "").strip()
     summary = f"{format_tool_display_label(name)} {status}" + (
         f" - {_truncate(detail)}" if detail else ""
     )

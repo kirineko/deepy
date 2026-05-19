@@ -2380,6 +2380,8 @@ def _print_stream_event(
             reasoning_sink.add_reasoning(event.text)
         return
     if event.kind == "tool_call":
+        if reasoning_sink is not None:
+            reasoning_sink.flush()
         summary = format_tool_call_summary(
             event.name or "tool",
             _string_payload(event.payload.get("arguments")),
@@ -2394,8 +2396,6 @@ def _print_stream_event(
                 )
                 if reasoning_sink is not None:
                     reasoning_sink.set_tool_status(summary)
-                return
-        console.print(_status_line(summary, palette.info))
         return
     if event.kind == "tool_output":
         if reasoning_sink is not None:

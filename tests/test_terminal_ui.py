@@ -576,6 +576,30 @@ def test_print_stream_event_merges_tool_call_and_output():
     assert "tool output:" not in rendered
 
 
+def test_print_stream_event_hides_tool_call_until_output():
+    console = Console(record=True)
+    pending = {}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="WebFetch",
+            payload={
+                "call_id": "call-1",
+                "arguments": '{"url":"https://leetcode.cn/problems/two-sum/description/"}',
+            },
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert rendered == ""
+    assert pending["call-1"].summary == (
+        "[WebFetch] https://leetcode.cn/problems/two-sum/description/"
+    )
+
+
 def test_print_stream_event_does_not_dump_unknown_tool_output_without_debug_env():
     console = Console(record=True)
 
@@ -937,6 +961,71 @@ def test_terminal_stream_renderer_flushes_reasoning_summary():
     rendered = console.export_text()
     assert "Thinking" in rendered
     assert "让我先看看项目结构。" in rendered
+
+
+def test_terminal_stream_renderer_interleaves_reasoning_and_tool_calls():
+    console = Console(record=True, width=160)
+    renderer = terminal.TerminalStreamRenderer(console, project_root="/repo")
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="先抓取题目。"))
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="WebFetch",
+            payload={
+                "call_id": "call-1",
+                "arguments": '{"url":"https://leetcode.cn/problems/two-sum/description/"}',
+            },
+        )
+    )
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "WebFetch",
+                    "output": "Fetched page",
+                    "error": None,
+                    "metadata": {},
+                    "awaitUserResponse": False,
+                }
+            ),
+        )
+    )
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="再看项目结构。"))
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="shell",
+            payload={"call_id": "call-2", "arguments": '{"command":"ls -la"}'},
+        )
+    )
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-2"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "shell",
+                    "output": "README.md",
+                    "error": None,
+                    "metadata": {},
+                    "awaitUserResponse": False,
+                }
+            ),
+        )
+    )
+    renderer.flush()
+
+    rendered = console.export_text()
+    first_reasoning = rendered.index("先抓取题目。")
+    webfetch = rendered.index("[WebFetch] https://leetcode.cn/problems/two-sum/description/")
+    second_reasoning = rendered.index("再看项目结构。")
+    shell = rendered.index("[Shell] ls -la")
+    assert first_reasoning < webfetch < second_reasoning < shell
 
 
 def test_terminal_stream_renderer_flushes_reasoning_for_each_model_turn():

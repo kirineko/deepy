@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import uuid
 from argparse import Namespace
 
 from deepy.cli import _doctor, main
@@ -153,6 +154,37 @@ def test_interactive_mode_requires_tty(monkeypatch, capsys):
     assert "interactive mode requires a TTY" in capsys.readouterr().err
 
 
+def test_tui_requires_tty(monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+    code = main(["tui"])
+
+    assert code == 1
+    assert "experimental TUI requires a TTY" in capsys.readouterr().err
+
+
+def test_tui_dispatches_to_experimental_runner(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    calls: list[object] = []
+
+    def fake_run_tui(settings, *, project_root):
+        calls.append((settings, project_root))
+        return 23
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("deepy.tui.run_tui", fake_run_tui)
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--config", str(config), "tui"])
+
+    assert code == 23
+    assert len(calls) == 1
+    settings, project_root = calls[0]
+    assert settings.model.api_key == "sk-test"
+    assert project_root == tmp_path
+
+
 def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):
     skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
@@ -198,8 +230,10 @@ def test_run_reports_missing_skill_without_traceback(tmp_path, capsys):
 
 
 def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    project_root = tmp_path / uuid.uuid4().hex
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+    session = DeepyJsonlSession.create(project_root, session_id="s1")
     asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
 
     code = main(["sessions", "show", "s1"])

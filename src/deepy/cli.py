@@ -78,6 +78,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--session", help="Resume an existing session id.")
     run_parser.add_argument("--skill", action="append", default=[], help="Load a skill by name.")
 
+    subparsers.add_parser("tui", help="Start the experimental Textual TUI.")
+
     sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
     sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_sub.add_parser("list", help="List sessions for the current project.")
@@ -410,6 +412,29 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ensure_interactive_settings(args: argparse.Namespace) -> Settings:
+    settings = load_settings(args.config)
+    if not settings.model.api_key:
+        print("Deepy needs a DeepSeek API key before starting interactive mode.")
+        setup_args = argparse.Namespace(config=args.config, force=True)
+        _cmd_config_setup(setup_args)
+        settings = load_settings(args.config)
+    if settings.path is not None and not settings.ui.theme_configured:
+        theme = _prompt_theme_value(default=settings.ui.theme)
+        update_config_theme(settings.path, theme)
+        settings = load_settings(args.config)
+    return settings
+
+
+def _cmd_tui(args: argparse.Namespace) -> int:
+    if not sys.stdin.isatty():
+        print("experimental TUI requires a TTY; use `deepy` for the stable terminal UI.", file=sys.stderr)
+        return 1
+    from deepy.tui import run_tui
+
+    return run_tui(_ensure_interactive_settings(args), project_root=Path.cwd())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -435,20 +460,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_skills(args)
     if args.command == "status":
         return _cmd_status(args)
+    if args.command == "tui":
+        return _cmd_tui(args)
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
-    settings = load_settings(args.config)
-    if not settings.model.api_key:
-        print("Deepy needs a DeepSeek API key before starting interactive mode.")
-        setup_args = argparse.Namespace(config=args.config, force=True)
-        _cmd_config_setup(setup_args)
-        settings = load_settings(args.config)
-    if settings.path is not None and not settings.ui.theme_configured:
-        theme = _prompt_theme_value(default=settings.ui.theme)
-        update_config_theme(settings.path, theme)
-        settings = load_settings(args.config)
-    return run_interactive(settings)
+    return run_interactive(_ensure_interactive_settings(args))
 
 
 if __name__ == "__main__":

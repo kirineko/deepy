@@ -113,6 +113,24 @@ cd your-project
 deepy
 ```
 
+### 实验性 Textual TUI
+
+Deepy 默认的稳定界面仍然通过 `deepy` 启动。愿意尝鲜的用户可以显式运行：
+
+```bash
+deepy tui
+```
+
+第一版 TUI 重点放在体验和 Textual 原生交互上：可滚动 transcript、实时 thinking
+和 assistant 区块、slash command 与 `@file` 提示、状态/帮助面板，以及 Deepy
+自有的 diff view。它仍是实验功能，后续版本可能调整交互和外观。
+
+已知限制：当前 TUI 不新增交互式 shell/PTTY 支持；toad / textual-diff-view 只作为设计参考，
+Deepy 不复制它们的 AGPL 源码，也不依赖这些包。
+
+欢迎通过 GitHub Issues 反馈体验问题，并附上终端、shell、操作系统和你尝试的
+`deepy tui` 工作流。
+
 ## 安装说明
 
 完整安装顺序如下：
