@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
+from ctypes import wintypes
 import os
 import re
 import select
@@ -2379,7 +2381,9 @@ def _submitted_prompt_needs_status_anchor(console: Console, text: str) -> bool:
         return False
     rows = shutil.get_terminal_size((80, 24)).lines
     cursor_row = _terminal_cursor_row(console)
-    return cursor_row is not None and cursor_row >= rows
+    if cursor_row is not None:
+        return cursor_row >= rows
+    return _should_fallback_anchor_submitted_prompt(console, text)
 
 
 def _clear_submitted_prompt_echo(console: Console, text: str) -> None:
@@ -2405,6 +2409,12 @@ def _terminal_columns(console: Console) -> int:
 
 
 def _terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | None:
+    if os.name == "nt":
+        return _windows_terminal_cursor_row()
+    return _posix_terminal_cursor_row(console, timeout=timeout)
+
+
+def _posix_terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | None:
     if termios is None or tty is None or not Path("/dev/tty").exists():
         return None
     file = getattr(console, "file", None)
@@ -2450,6 +2460,56 @@ def _terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | No
     return None
 
 
+def _windows_terminal_cursor_row() -> int | None:
+    try:
+        windll = getattr(ctypes, "windll")
+        kernel32 = windll.kernel32
+        with contextlib.suppress(Exception):
+            kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+            kernel32.GetStdHandle.restype = wintypes.HANDLE
+            kernel32.GetConsoleScreenBufferInfo.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(_WindowsConsoleScreenBufferInfo),
+            ]
+            kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
+        handle = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+        if handle in {None, 0, _INVALID_HANDLE_VALUE}:
+            return None
+        info = _WindowsConsoleScreenBufferInfo()
+        if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+            return None
+        return _visible_cursor_row_from_windows_buffer(
+            cursor_y=int(info.dwCursorPosition.Y),
+            window_top=int(info.srWindow.Top),
+            window_bottom=int(info.srWindow.Bottom),
+        )
+    except Exception:
+        return None
+
+
+def _visible_cursor_row_from_windows_buffer(
+    *,
+    cursor_y: int,
+    window_top: int,
+    window_bottom: int,
+) -> int | None:
+    if window_top > window_bottom:
+        return None
+    if cursor_y < window_top or cursor_y > window_bottom:
+        return None
+    return cursor_y - window_top + 1
+
+
+def _should_fallback_anchor_submitted_prompt(console: Console, text: str) -> bool:
+    if os.name != "nt":
+        return False
+    return _submitted_prompt_echo_rows(text, _terminal_columns(console)) > 1
+
+
+_STD_OUTPUT_HANDLE = ctypes.c_ulong(-11).value
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
 def _cursor_row_from_terminal_response(data: bytes) -> int | None:
     match = re.search(rb"\x1b\[(\d+);\d+R", data)
     if match is None:
@@ -2463,6 +2523,32 @@ def _submitted_prompt_echo_rows(text: str, columns: int) -> int:
         measure_text_rows(line, width=columns, initial_column=2 if index == 0 else 0)
         for index, line in enumerate(lines)
     )
+
+
+class _WindowsCoord(ctypes.Structure):
+    _fields_ = [
+        ("X", ctypes.c_short),
+        ("Y", ctypes.c_short),
+    ]
+
+
+class _WindowsSmallRect(ctypes.Structure):
+    _fields_ = [
+        ("Left", ctypes.c_short),
+        ("Top", ctypes.c_short),
+        ("Right", ctypes.c_short),
+        ("Bottom", ctypes.c_short),
+    ]
+
+
+class _WindowsConsoleScreenBufferInfo(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", _WindowsCoord),
+        ("dwCursorPosition", _WindowsCoord),
+        ("wAttributes", ctypes.c_ushort),
+        ("srWindow", _WindowsSmallRect),
+        ("dwMaximumWindowSize", _WindowsCoord),
+    ]
 
 
 def _print_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> None:

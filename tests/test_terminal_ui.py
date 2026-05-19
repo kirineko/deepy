@@ -946,6 +946,123 @@ def test_submitted_prompt_needs_status_anchor_only_at_terminal_bottom(monkeypatc
     assert not terminal._submitted_prompt_needs_status_anchor(console, "hello")
 
 
+def test_visible_cursor_row_from_windows_buffer_accounts_for_scrolled_window():
+    assert (
+        terminal._visible_cursor_row_from_windows_buffer(
+            cursor_y=123,
+            window_top=100,
+            window_bottom=123,
+        )
+        == 24
+    )
+    assert (
+        terminal._visible_cursor_row_from_windows_buffer(
+            cursor_y=100,
+            window_top=100,
+            window_bottom=123,
+        )
+        == 1
+    )
+    assert (
+        terminal._visible_cursor_row_from_windows_buffer(
+            cursor_y=99,
+            window_top=100,
+            window_bottom=123,
+        )
+        is None
+    )
+    assert (
+        terminal._visible_cursor_row_from_windows_buffer(
+            cursor_y=124,
+            window_top=100,
+            window_bottom=123,
+        )
+        is None
+    )
+
+
+def test_windows_terminal_cursor_row_uses_console_buffer_info(monkeypatch):
+    class FakeKernel32:
+        def GetStdHandle(self, value):
+            assert value == terminal._STD_OUTPUT_HANDLE
+            return 123
+
+        def GetConsoleScreenBufferInfo(self, handle, info_ptr):
+            assert handle == 123
+            info = info_ptr._obj
+            info.dwCursorPosition.Y = 123
+            info.srWindow.Top = 100
+            info.srWindow.Bottom = 123
+            return 1
+
+    monkeypatch.setattr(
+        terminal.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=FakeKernel32()),
+        raising=False,
+    )
+
+    assert terminal._windows_terminal_cursor_row() == 24
+
+
+def test_windows_terminal_cursor_row_fails_closed(monkeypatch):
+    class FakeKernel32:
+        def GetStdHandle(self, value):
+            return 123
+
+        def GetConsoleScreenBufferInfo(self, handle, info_ptr):
+            raise OSError("no console")
+
+    monkeypatch.setattr(
+        terminal.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=FakeKernel32()),
+        raising=False,
+    )
+
+    assert terminal._windows_terminal_cursor_row() is None
+
+
+def test_windows_submitted_prompt_at_bottom_requests_anchor(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
+    monkeypatch.setattr(terminal.os, "name", "nt")
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: 24)
+
+    assert terminal._submitted_prompt_needs_status_anchor(console, "hello")
+
+
+def test_windows_submitted_prompt_not_at_bottom_does_not_anchor(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
+    monkeypatch.setattr(terminal.os, "name", "nt")
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: 10)
+
+    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
+
+
+def test_windows_unreadable_cursor_uses_multiline_fallback(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
+    monkeypatch.setattr(terminal.os, "name", "nt")
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
+    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: None)
+
+    assert terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
+    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello")
+
+
 def test_cursor_row_from_terminal_response_parses_ansi_report():
     assert terminal._cursor_row_from_terminal_response(b"\x1b[24;1R") == 24
     assert terminal._cursor_row_from_terminal_response(b"noise\x1b[7;42R") == 7
