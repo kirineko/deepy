@@ -40,6 +40,7 @@ class SessionEntry:
     pending_tokens: int = 0
     last_usage_record_count: int | None = None
     todo_state: list[dict[str, str]] | None = None
+    session_cost: dict[str, Any] | None = None
 
 
 def project_code(project_root: Path) -> str:
@@ -160,6 +161,7 @@ class DeepyJsonlSession:
             pending_tokens=0,
             last_usage_record_count=0,
             todo_state=[],
+            session_cost=None,
         )
 
     def record_usage(self, usage: TokenUsage | dict[str, Any] | None) -> None:
@@ -206,6 +208,32 @@ class DeepyJsonlSession:
                 0,
             ) + max(elapsed_ms, 0)
         self._touch_index(input_suggestion_usage=accumulated)
+
+    def record_session_cost_start(self, snapshot: dict[str, Any]) -> None:
+        from deepy.session_cost import start_session_cost
+
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        previous_cost = previous.get("sessionCost") if previous else None
+        if isinstance(previous_cost, dict) and isinstance(previous_cost.get("start"), dict):
+            return
+        self._touch_index(session_cost=start_session_cost(snapshot))
+
+    def record_session_cost_end(self, snapshot: dict[str, Any]) -> None:
+        from deepy.session_cost import complete_session_cost
+
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        previous_cost = previous.get("sessionCost") if previous else None
+        self._touch_index(
+            session_cost=complete_session_cost(
+                previous_cost if isinstance(previous_cost, dict) else None,
+                snapshot,
+            )
+        )
+
+    def session_cost(self) -> dict[str, Any] | None:
+        previous = _entry_for_session(self.path.parent / "sessions-index.json", self.session_id)
+        cost = previous.get("sessionCost") if previous else None
+        return cost if isinstance(cost, dict) else None
 
     def context_token_state(
         self,
@@ -361,6 +389,7 @@ class DeepyJsonlSession:
         last_usage_record_count: int | None = None,
         todo_state: object = _UNSET,
         input_suggestion_usage: dict[str, Any] | None = None,
+        session_cost: object = _UNSET,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         index_path = self.path.parent / "sessions-index.json"
@@ -432,6 +461,11 @@ class DeepyJsonlSession:
             ),
             **({"processes": previous["processes"]} if "processes" in previous else {}),
         }
+        if session_cost is _UNSET:
+            if isinstance(previous.get("sessionCost"), dict):
+                entry["sessionCost"] = previous["sessionCost"]
+        elif isinstance(session_cost, dict):
+            entry["sessionCost"] = session_cost
         if todo_state is _UNSET:
             if "todoState" in previous:
                 entry["todoState"] = previous["todoState"]
@@ -498,6 +532,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
             path = f"{session_id}.jsonl"
         usage = item.get("usage")
         input_suggestion_usage = item.get("inputSuggestionUsage")
+        session_cost = item.get("sessionCost")
         entries.append(
             SessionEntry(
                 id=session_id,
@@ -515,6 +550,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 pending_tokens=_coerce_int(item.get("pendingTokens"), 0),
                 last_usage_record_count=_optional_int(item.get("lastUsageRecordCount")),
                 todo_state=normalize_persisted_todo_state(item.get("todoState")),
+                session_cost=session_cost if isinstance(session_cost, dict) else None,
             )
         )
     return entries

@@ -237,6 +237,80 @@ async def test_session_records_input_suggestion_usage_separately(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_session_records_cost_metadata_without_touching_usage_or_context(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepyJsonlSession.create(project, deepy_home=home, session_id="s1")
+
+    await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    before_context_usage = session.latest_context_window_usage()
+    session.record_session_cost_start(
+        {
+            "capturedAt": 1,
+            "isAvailable": True,
+            "balanceInfos": [
+                {
+                    "currency": "CNY",
+                    "totalBalance": "100.00",
+                    "grantedBalance": "0.00",
+                    "toppedUpBalance": "100.00",
+                }
+            ],
+        }
+    )
+    session.record_session_cost_end(
+        {
+            "capturedAt": 2,
+            "isAvailable": True,
+            "balanceInfos": [
+                {
+                    "currency": "CNY",
+                    "totalBalance": "99.75",
+                    "grantedBalance": "0.00",
+                    "toppedUpBalance": "99.75",
+                }
+            ],
+        }
+    )
+
+    entry = list_session_entries(project, deepy_home=home)[0]
+    assert entry.session_cost is not None
+    assert entry.session_cost["amounts"][0]["spent"] == "0.25"
+    assert entry.usage is not None
+    assert entry.usage["total_tokens"] == 12
+    assert session.latest_context_window_usage() == before_context_usage
+
+
+def test_list_session_entries_treats_absent_cost_metadata_as_unknown(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    sessions_dir = project_sessions_dir(project, home)
+    sessions_dir.mkdir(parents=True)
+    sessions_dir.joinpath("sessions-index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sessions": [
+                    {
+                        "id": "s1",
+                        "path": "s1.jsonl",
+                        "activeTokens": 10,
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    entry = list_session_entries(project, deepy_home=home)[0]
+
+    assert entry.session_cost is None
+
+
+@pytest.mark.asyncio
 async def test_session_token_state_tracks_usage_checkpoint_and_pending(tmp_path):
     project = tmp_path / "project"
     home = tmp_path / "home"

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from typing import Any, Mapping
 
+from deepy.session_cost import format_session_cost
+
 
 INNER_WIDTH = 98
 CONTENT_WIDTH = INNER_WIDTH - 4
@@ -92,6 +94,9 @@ def build_exit_summary_text(
                 ),
             )
         )
+    cost = format_session_cost(_get_session_cost(session))
+    if cost:
+        rows.append(("session cost", cost))
     return _simple_box("Deepy Session Summary", rows)
 
 def _usage_summary(
@@ -132,6 +137,14 @@ def _get_input_suggestion_usage(session: Any | None) -> Any:
     if isinstance(session, Mapping):
         return session.get("input_suggestion_usage") or session.get("inputSuggestionUsage")
     return getattr(session, "input_suggestion_usage", None)
+
+
+def _get_session_cost(session: Any | None) -> Any:
+    if session is None:
+        return None
+    if isinstance(session, Mapping):
+        return session.get("session_cost") or session.get("sessionCost")
+    return getattr(session, "session_cost", None)
 
 
 def _get_session_id(session: Any | None) -> str | None:

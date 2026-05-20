@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from rich.cells import cell_len
 from rich.console import Console
 
 from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig, load_settings
@@ -19,7 +20,7 @@ from deepy.llm.runner import RunSummary
 from deepy.mcp import McpServerStatus
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
 from deepy.skill_market import MarketSkill
-from deepy.status import BalanceStatus
+from deepy.status import BalanceInfo, BalanceStatus
 from deepy.usage import TokenUsage
 import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
@@ -1254,6 +1255,42 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
     assert "第二段仍然是正文" not in status.updates[0]
 
 
+def test_terminal_stream_renderer_serializes_tool_output_with_output_lock():
+    class RecordingLock:
+        def __init__(self):
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    lock = RecordingLock()
+    console = Console(record=True, width=120)
+    renderer = terminal.TerminalStreamRenderer(console, output_lock=lock)
+
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_output",
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "WebSearch",
+                    "output": "Search results",
+                    "error": None,
+                    "metadata": {},
+                    "awaitUserResponse": False,
+                }
+            ),
+        )
+    )
+
+    assert lock.entries >= 1
+    assert "[WebSearch]" in console.export_text()
+
+
 def test_status_slash_command_prints_status(tmp_path, monkeypatch):
     console = Console(record=True, width=200)
     calls = 0
@@ -1920,6 +1957,65 @@ def test_status_display_can_scroll_one_line_for_multiline_prompt(tmp_path, monke
     assert output.startswith("\x1b[1;23r\x1b[23;1H\n\x1b[23;1H")
     assert "\x1b[24;1H\x1b[2K" in output
     assert "thinking" in output
+
+
+def test_runtime_status_line_fits_wide_web_search_text_to_display_cells():
+    text = "⠋ time 0s · esc to interrupt · tool [WebSearch] DeepSeek 最新模型 发布信息"
+
+    fitted = terminal._fit_status_line(text, width=42)
+
+    assert cell_len(fitted) == 42
+    assert "time 0s" in fitted
+    assert "esc to interrupt" in fitted
+    assert fitted.rstrip().endswith("…")
+
+
+def test_runtime_status_line_handles_very_narrow_widths():
+    assert terminal._fit_status_line("abcdef", width=1) == "…"
+    assert terminal._fit_status_line("abcdef", width=0) == ""
+
+
+def test_runtime_status_line_pads_shorter_refresh_after_longer_text():
+    long_line = terminal._fit_status_line("tool [WebSearch] " + "x" * 80, width=24)
+    short_line = terminal._fit_status_line("thinking", width=24)
+
+    assert cell_len(long_line) == 24
+    assert cell_len(short_line) == 24
+    assert short_line == "thinking" + (" " * 16)
+
+
+def test_terminal_bottom_status_uses_output_lock(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    class RecordingLock:
+        def __init__(self):
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    lock = RecordingLock()
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True)
+    status = terminal._TerminalBottomStatus(
+        console,
+        palette=terminal.DARK_PALETTE,
+        output_lock=lock,
+    )
+    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((30, 8)))
+
+    status.start()
+    status.update(terminal.Text("tool [WebSearch] DeepSeek 最新模型"))
+    status.clear()
+
+    assert lock.entries == 3
+    assert "\x1b[8;1H\x1b[2K" in buffer.getvalue()
 
 
 def test_status_display_is_silent_for_recorded_console():
@@ -2614,6 +2710,84 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     assert result == 0
     assert "Press Ctrl+D again to exit." in rendered
     assert "Deepy Session Summary" in rendered
+
+
+def test_run_interactive_exit_summary_includes_session_cost(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events = iter(["hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "99.75", "0.00", "99.75"),
+                ),
+            ),
+        ]
+    )
+
+    async def fake_run_once(prompt, **kwargs):
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", lambda settings: next(balances))
+
+    result = terminal.run_interactive(
+        Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "session cost" in rendered
+    assert "CNY 0.25" in rendered
+    assert "DeepSeek balance delta" in rendered
+
+
+def test_run_interactive_exit_summary_shows_cost_unavailable(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events = iter(["hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(unavailable_reason="timeout"),
+        ]
+    )
+
+    async def fake_run_once(prompt, **kwargs):
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", lambda settings: next(balances))
+
+    result = terminal.run_interactive(
+        Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "session cost" in rendered
+    assert "unavailable (end timeout)" in rendered
 
 
 def test_stable_non_status_exit_does_not_fetch_balance(tmp_path, monkeypatch):

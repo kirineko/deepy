@@ -106,3 +106,36 @@ def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
     assert "deepseek-v4-flash" in summary
     assert "12" in summary
     assert "3" in summary
+
+
+def test_build_exit_summary_text_shows_session_cost_delta():
+    summary = build_exit_summary_text(
+        session={
+            "sessionCost": {
+                "attempted": True,
+                "amounts": [
+                    {
+                        "currency": "CNY",
+                        "startTotal": "100.00",
+                        "endTotal": "99.75",
+                        "spent": "0.25",
+                    }
+                ],
+            }
+        },
+        model="deepseek-v4-pro",
+    )
+
+    assert "session cost" in summary
+    assert "CNY 0.25" in summary
+    assert "DeepSeek balance delta" in summary
+
+
+def test_build_exit_summary_text_shows_unavailable_session_cost():
+    summary = build_exit_summary_text(
+        session={"sessionCost": {"attempted": True, "unavailableReason": "end timeout"}},
+        model="deepseek-v4-pro",
+    )
+
+    assert "session cost" in summary
+    assert "unavailable (end timeout)" in summary

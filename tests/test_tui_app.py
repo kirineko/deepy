@@ -12,13 +12,13 @@ from textual.widgets.option_list import Option
 
 import deepy.tui.app as tui_app
 import deepy.tui.runner as tui_runner
-from deepy.config import Settings
+from deepy.config import ModelConfig, Settings
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.skill_market import InstalledSkill, MarketSkill
 from deepy.skills import SkillInfo
-from deepy.status import BalanceStatus
+from deepy.status import BalanceInfo, BalanceStatus
 from deepy.tui.app import DeepyTuiApp
 from deepy.tui.commands import DeepyCommandProvider
 from deepy.tui.screens import ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
@@ -138,6 +138,83 @@ async def test_tui_exit_summary_counts_session_messages(tmp_path) -> None:
     assert "3 total" in summary
     assert "2 assistant" in summary
     assert "requests 2" in summary
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_includes_session_cost(tmp_path, monkeypatch) -> None:
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "99.75", "0.00", "99.75"),
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", lambda settings: next(balances))
+    app = DeepyTuiApp(
+        settings=Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "CNY 0.25" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_shows_unavailable_session_cost(tmp_path, monkeypatch) -> None:
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(unavailable_reason="timeout"),
+        ]
+    )
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", lambda settings: next(balances))
+    app = DeepyTuiApp(
+        settings=Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "unavailable (end timeout)" in app.exit_summary_text
 
 
 def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, capsys) -> None:

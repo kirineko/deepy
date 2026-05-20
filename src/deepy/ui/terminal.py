@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.text import Text
@@ -47,6 +48,7 @@ from deepy.mcp import DeepyMcpRuntime, format_mcp_status
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
     install_market_skill,
@@ -282,6 +284,7 @@ def run_interactive(
                         continue
                     request = slash.argument or f"Use the {skill.name} skill."
                     anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                    cost_start = _capture_session_cost_start(root, session_id, settings)
                     summary = _run_once_with_status(
                         output,
                         run_once,
@@ -296,6 +299,7 @@ def run_interactive(
                         anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
+                    _record_session_cost_start(root, session_id, cost_start)
                     clarification_rounds = 0
                     while summary.status == "waiting_for_user":
                         if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
@@ -308,6 +312,7 @@ def run_interactive(
                         if not response:
                             break
                         clarification_rounds += 1
+                        cost_start = _capture_session_cost_start(root, session_id, settings)
                         summary = _run_once_with_status(
                             output,
                             run_once,
@@ -322,6 +327,7 @@ def run_interactive(
                             anchor_status_output=True,
                         )
                         session_id = summary.session_id
+                        _record_session_cost_start(root, session_id, cost_start)
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
                     _prepare_input_suggestion(
@@ -340,6 +346,7 @@ def run_interactive(
                     continue
                 if slash.name == "init":
                     anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                    cost_start = _capture_session_cost_start(root, session_id, settings)
                     summary = _run_once_with_status(
                         output,
                         run_once,
@@ -354,6 +361,7 @@ def run_interactive(
                         anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
+                    _record_session_cost_start(root, session_id, cost_start)
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
                     _prepare_input_suggestion(
@@ -407,6 +415,7 @@ def run_interactive(
                 continue
 
             anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+            cost_start = _capture_session_cost_start(root, session_id, settings)
             summary = _run_once_with_status(
                 output,
                 run_once,
@@ -421,6 +430,7 @@ def run_interactive(
                 anchor_status_output_lines=1 if anchor_status_output else 0,
             )
             session_id = summary.session_id
+            _record_session_cost_start(root, session_id, cost_start)
             clarification_rounds = 0
             while summary.status == "waiting_for_user":
                 if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
@@ -433,6 +443,7 @@ def run_interactive(
                 if not response:
                     break
                 clarification_rounds += 1
+                cost_start = _capture_session_cost_start(root, session_id, settings)
                 summary = _run_once_with_status(
                     output,
                     run_once,
@@ -447,6 +458,7 @@ def run_interactive(
                     anchor_status_output=True,
                 )
                 session_id = summary.session_id
+                _record_session_cost_start(root, session_id, cost_start)
             _print_assistant_output(output, summary.output, palette=palette)
             _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
             _prepare_input_suggestion(
@@ -610,6 +622,7 @@ def _run_once_with_status(
             status_started_at=started_at,
             palette=active_palette,
             footer=footer,
+            output_lock=getattr(status, "output_lock", None),
         )
         stop_status_refresh = threading.Event()
         status_thread = threading.Thread(
@@ -805,6 +818,7 @@ class TerminalStreamRenderer:
         status_started_at: float | None = None,
         palette: UiPalette | None = None,
         footer: StatusFooter | None = None,
+        output_lock: threading.RLock | None = None,
     ) -> None:
         self.console = console
         self.project_root = project_root
@@ -818,16 +832,28 @@ class TerminalStreamRenderer:
         self.pending_tool_calls: dict[str, ToolCallDisplay] = {}
         self.reasoning_started = False
         self.reasoning_buffer = ""
+        self.output_lock = output_lock
 
     def __call__(self, event: DeepyStreamEvent) -> None:
-        _print_stream_event(
-            self.console,
-            event,
-            project_root=self.project_root,
-            pending_tool_calls=self.pending_tool_calls,
-            reasoning_sink=self,
-            palette=self.palette,
-        )
+        if self.output_lock is None:
+            _print_stream_event(
+                self.console,
+                event,
+                project_root=self.project_root,
+                pending_tool_calls=self.pending_tool_calls,
+                reasoning_sink=self,
+                palette=self.palette,
+            )
+            return
+        with self.output_lock:
+            _print_stream_event(
+                self.console,
+                event,
+                project_root=self.project_root,
+                pending_tool_calls=self.pending_tool_calls,
+                reasoning_sink=self,
+                palette=self.palette,
+            )
 
     def add_reasoning(self, text: str) -> None:
         if not text:
@@ -863,6 +889,13 @@ class TerminalStreamRenderer:
             )
 
     def flush(self) -> None:
+        if self.output_lock is not None:
+            with self.output_lock:
+                self._flush_unlocked()
+            return
+        self._flush_unlocked()
+
+    def _flush_unlocked(self) -> None:
         if self.reasoning_buffer:
             self.console.print()
         self.reasoning_started = False
@@ -1977,6 +2010,7 @@ def _print_exit_summary(
     session_entry: SessionEntry | None = None
     messages: list[dict[str, object]] = []
     if session_id:
+        _record_session_cost_end(project_root, session_id, settings)
         session_entry = next(
             (entry for entry in list_session_entries(project_root) if entry.id == session_id),
             None,
@@ -1993,6 +2027,60 @@ def _print_exit_summary(
             session_id=session_id,
         )
     )
+
+
+def _capture_session_cost_start(
+    project_root: Path,
+    session_id: str | None,
+    settings: Settings,
+) -> dict[str, Any] | None:
+    if not should_track_session_cost(settings):
+        return None
+    if session_id and _session_cost_has_start(project_root, session_id):
+        return None
+    return balance_snapshot_to_dict(
+        fetch_deepseek_balance(settings),
+        captured_at_ms=_now_ms(),
+    )
+
+
+def _record_session_cost_start(
+    project_root: Path,
+    session_id: str | None,
+    snapshot: dict[str, Any] | None,
+) -> None:
+    if not session_id or snapshot is None:
+        return
+    try:
+        DeepyJsonlSession.open(project_root, session_id).record_session_cost_start(snapshot)
+    except Exception:
+        return
+
+
+def _record_session_cost_end(project_root: Path, session_id: str, settings: Settings) -> None:
+    if not should_track_session_cost(settings) or not _session_cost_has_start(project_root, session_id):
+        return
+    snapshot = balance_snapshot_to_dict(
+        fetch_deepseek_balance(settings),
+        captured_at_ms=_now_ms(),
+    )
+    try:
+        DeepyJsonlSession.open(project_root, session_id).record_session_cost_end(snapshot)
+    except Exception:
+        return
+
+
+def _session_cost_has_start(project_root: Path, session_id: str) -> bool:
+    return any(
+        entry.id == session_id
+        and isinstance(entry.session_cost, dict)
+        and isinstance(entry.session_cost.get("start"), dict)
+        for entry in list_session_entries(project_root)
+    )
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _print_usage_footer(
@@ -2149,7 +2237,8 @@ def _status_display(
     anchor_output_lines: int = 0,
 ):
     if _should_use_bottom_status_overlay(console):
-        status = _TerminalBottomStatus(console, palette=palette)
+        output_lock = threading.RLock()
+        status = _TerminalBottomStatus(console, palette=palette, output_lock=output_lock)
         status.start(anchor_output=anchor_output, anchor_output_lines=anchor_output_lines)
         status.update(initial_status)
         try:
@@ -2172,54 +2261,60 @@ class _TerminalBottomStatus:
         console: Console,
         *,
         palette: UiPalette,
+        output_lock: threading.RLock | None = None,
     ) -> None:
         self.console = console
         self.palette = palette
         self.rows = 0
         self.columns = 0
+        self.output_lock = output_lock or threading.RLock()
 
     def start(self, *, anchor_output: bool = False, anchor_output_lines: int = 0) -> None:
-        self.columns, self.rows = shutil.get_terminal_size((80, 24))
-        if self.rows <= 1:
-            return
-        scroll_bottom = self.rows - 1
-        scroll_lines = max(anchor_output_lines, 2 if anchor_output else 0)
-        if scroll_lines:
-            output_row = max(scroll_bottom - scroll_lines + 1, 1)
-            scroll_text = "\n" * scroll_lines
-            self.console.file.write(
-                f"\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H"
-                f"{scroll_text}"
-                f"\x1b[{output_row};1H"
-            )
-        else:
-            self.console.file.write(f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8")
-        self.console.file.flush()
+        with self.output_lock:
+            self.columns, self.rows = shutil.get_terminal_size((80, 24))
+            if self.rows <= 1:
+                return
+            scroll_bottom = self.rows - 1
+            scroll_lines = max(anchor_output_lines, 2 if anchor_output else 0)
+            if scroll_lines:
+                output_row = max(scroll_bottom - scroll_lines + 1, 1)
+                scroll_text = "\n" * scroll_lines
+                self.console.file.write(
+                    f"\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H"
+                    f"{scroll_text}"
+                    f"\x1b[{output_row};1H"
+                )
+            else:
+                self.console.file.write(
+                    f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8"
+                )
+            self.console.file.flush()
 
     def update(self, status: Text) -> None:
-        columns, rows = shutil.get_terminal_size((80, 24))
-        self.columns = columns
-        self.rows = rows
-        if rows <= 1:
-            return
-        self._write_line(rows, status.plain, _terminal_runtime_status_style(self.palette))
-        self.console.file.flush()
+        with self.output_lock:
+            columns, rows = shutil.get_terminal_size((80, 24))
+            self.columns = columns
+            self.rows = rows
+            if rows <= 1:
+                return
+            self._write_line(rows, status.plain, _terminal_runtime_status_style(self.palette))
+            self.console.file.flush()
 
     def clear(self) -> None:
-        columns, rows = shutil.get_terminal_size((80, 24))
-        self.columns = columns
-        self.rows = rows
-        if rows <= 1:
-            return
-        self.console.file.write("\x1b7\x1b[r")
-        self.console.file.write(f"\x1b[{rows};1H\x1b[2K")
-        self.console.file.write("\x1b8")
-        self.console.file.flush()
+        with self.output_lock:
+            columns, rows = shutil.get_terminal_size((80, 24))
+            self.columns = columns
+            self.rows = rows
+            if rows <= 1:
+                return
+            self.console.file.write("\x1b7\x1b[r")
+            self.console.file.write(f"\x1b[{rows};1H\x1b[2K")
+            self.console.file.write("\x1b8")
+            self.console.file.flush()
 
     def _write_line(self, row: int, text: str, style: str) -> None:
         width = max(self.columns - 1, 1)
-        line = _truncate_status_line(text, max_width=width)
-        padded = line.ljust(width)
+        padded = _fit_status_line(text, width=width)
         self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K{style}{padded}\x1b[0m\x1b8")
 
 
@@ -2261,11 +2356,26 @@ def _ansi_rgb(prefix: str, color: str) -> str:
 
 
 def _truncate_status_line(text: str, *, max_width: int) -> str:
-    if len(text) <= max_width:
+    if cell_len(text) <= max_width:
         return text
     if max_width <= 1:
-        return text[:max_width]
-    return f"{text[: max_width - 1]}…"
+        return "…" if max_width == 1 else ""
+    suffix = "…"
+    available = max_width - cell_len(suffix)
+    used = 0
+    result: list[str] = []
+    for char in text:
+        char_width = cell_len(char)
+        if used + char_width > available:
+            break
+        result.append(char)
+        used += char_width
+    return "".join(result).rstrip() + suffix
+
+
+def _fit_status_line(text: str, *, width: int) -> str:
+    line = _truncate_status_line(text, max_width=max(width, 0))
+    return line + (" " * max(0, width - cell_len(line)))
 
 
 def _working_status_text(

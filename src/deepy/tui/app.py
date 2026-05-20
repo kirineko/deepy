@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -39,6 +40,7 @@ from deepy.mcp import load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
     InstalledSkill,
@@ -389,6 +391,7 @@ class DeepyTuiApp(App[None]):
         self._todo_text = ""
         self._local_command_sequence = 0
         self.exit_summary_text: str | None = None
+        self._pending_session_cost_start: dict[str, Any] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -495,6 +498,7 @@ class DeepyTuiApp(App[None]):
 
     def _start_model_turn(self, prompt: str, skill_names: list[str], *, status: str) -> None:
         self._clear_input_suggestion()
+        self._pending_session_cost_start = self._capture_session_cost_start()
         self.state = set_busy(reset_turn_buffers(self.state), True, status)
         self._assistant_block = None
         self._thinking_block = None
@@ -1166,6 +1170,7 @@ class DeepyTuiApp(App[None]):
         summary = message.summary
         await self._flush_assistant_block()
         self.state = set_session_id(self.state, summary.session_id)
+        self._record_pending_session_cost_start(summary.session_id)
         self.state = set_usage(self.state, summary.usage)
         self.state = set_pending_questions(self.state, summary.pending_questions)
         self.state = set_busy(self.state, False, "Idle")
@@ -1179,6 +1184,7 @@ class DeepyTuiApp(App[None]):
     @on(TurnFailedMessage)
     async def on_turn_failed(self, message: TurnFailedMessage) -> None:
         message.stop()
+        self._pending_session_cost_start = None
         self.state = set_busy(self.state, False, "Error")
         await self._append_block(ErrorBlock(str(message.error)))
         self._update_status("Error")
@@ -1468,6 +1474,7 @@ class DeepyTuiApp(App[None]):
         self.set_timer(2.0, self._clear_quit_confirm)
 
     def _exit_with_summary(self) -> None:
+        self._record_session_cost_end()
         self.exit_summary_text = self._build_exit_summary_text()
         self.exit()
 
@@ -1495,6 +1502,53 @@ class DeepyTuiApp(App[None]):
             messages=messages,
             model=self.settings.model.name,
             session_id=self.state.session_id,
+        )
+
+    def _capture_session_cost_start(self) -> dict[str, Any] | None:
+        if not should_track_session_cost(self.settings):
+            return None
+        if self.state.session_id and self._session_cost_has_start(self.state.session_id):
+            return None
+        return balance_snapshot_to_dict(
+            fetch_deepseek_balance(self.settings),
+            captured_at_ms=_now_ms(),
+        )
+
+    def _record_pending_session_cost_start(self, session_id: str | None) -> None:
+        if not session_id or self._pending_session_cost_start is None:
+            return
+        try:
+            DeepyJsonlSession.open(self.project_root, session_id).record_session_cost_start(
+                self._pending_session_cost_start
+            )
+        except Exception:
+            pass
+        finally:
+            self._pending_session_cost_start = None
+
+    def _record_session_cost_end(self) -> None:
+        session_id = self.state.session_id
+        if (
+            not session_id
+            or not should_track_session_cost(self.settings)
+            or not self._session_cost_has_start(session_id)
+        ):
+            return
+        snapshot = balance_snapshot_to_dict(
+            fetch_deepseek_balance(self.settings),
+            captured_at_ms=_now_ms(),
+        )
+        try:
+            DeepyJsonlSession.open(self.project_root, session_id).record_session_cost_end(snapshot)
+        except Exception:
+            return
+
+    def _session_cost_has_start(self, session_id: str) -> bool:
+        return any(
+            entry.id == session_id
+            and isinstance(entry.session_cost, dict)
+            and isinstance(entry.session_cost.get("start"), dict)
+            for entry in list_session_entries(self.project_root)
         )
 
     def _clear_quit_confirm(self) -> None:
@@ -1922,6 +1976,10 @@ def _format_market_skills(skills: list[MarketSkill]) -> str:
         version = f" version={skill.version}" if skill.version else ""
         lines.append(f"- {skill.name}{marker}{version}{description}")
     return "\n".join(lines)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _format_installed_records(records: list[InstalledSkill]) -> str:
