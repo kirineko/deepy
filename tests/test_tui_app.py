@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,12 +51,34 @@ def _option_prompt_text(option: Option) -> str:
     return getattr(prompt, "plain", str(prompt))
 
 
+async def _wait_for(pilot, condition: Callable[[], object], *, timeout: float = 1.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last_error: Exception | None = None
+    while True:
+        try:
+            if condition():
+                return
+        except Exception as exc:
+            last_error = exc
+        if loop.time() >= deadline:
+            raise AssertionError("Timed out waiting for TUI test condition") from last_error
+        await pilot.pause(0.01)
+
+
+async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable[[], object]) -> None:
+    prompt = app.query_one("#prompt-input", PromptTextArea)
+    prompt.text = text
+    prompt.action_submit()
+    await _wait_for(pilot, condition)
+
+
 @pytest.mark.asyncio
 async def test_tui_starts_and_exits_headless(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         assert app.query_one("#prompt-input", PromptTextArea).has_focus
         startup_text = app.query_one(InfoBlock).body
         assert startup_text.startswith("Experimental Textual TUI.")
@@ -89,7 +112,7 @@ async def test_tui_exit_slash_command_exits_without_model_turn(tmp_path, monkeyp
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/exit"
         await pilot.press("enter")
@@ -108,7 +131,7 @@ async def test_tui_ctrl_d_confirm_exits_with_summary(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         await pilot.press("ctrl+d")
         await pilot.press("ctrl+d")
         await pilot.pause(0.1)
@@ -168,7 +191,7 @@ async def test_tui_exit_summary_includes_session_cost(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "hello"
         await pilot.press("enter")
@@ -204,7 +227,7 @@ async def test_tui_exit_summary_shows_unavailable_session_cost(tmp_path, monkeyp
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "hello"
         await pilot.press("enter")
@@ -247,7 +270,7 @@ async def test_tui_reuses_session_id_between_turns(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "first"
         await pilot.press("enter")
@@ -270,7 +293,7 @@ async def test_tui_prompt_newline_slash_and_file_suggestions(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         panel = app.query_one(PromptPanel)
 
@@ -296,26 +319,26 @@ async def test_tui_input_suggestion_ghost_text_accepts_tab_and_right_without_ove
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         panel = app.query_one(PromptPanel)
         ghost = app.query_one("#prompt-ghost", Label)
         options = app.query_one("#prompt-suggestions", OptionList)
 
         panel.set_input_suggestion("run tests")
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert ghost.display is True
         assert str(ghost.content) == "run tests"
 
         await pilot.press("tab")
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert prompt.text == "run tests"
         assert ghost.display is False
 
         prompt.clear()
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert ghost.display is True
         assert str(ghost.content) == "run tests"
@@ -323,16 +346,16 @@ async def test_tui_input_suggestion_ghost_text_accepts_tab_and_right_without_ove
         prompt.clear()
         panel.set_input_suggestion("commit changes")
         prompt.text = "/"
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert options.display is True
         assert ghost.display is False
 
         prompt.clear()
         panel.set_input_suggestion("commit changes")
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt.action_cursor_right()
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert prompt.text == "commit changes"
         app.exit()
@@ -343,7 +366,7 @@ async def test_tui_input_suggestion_returns_after_type_delete_cycle(tmp_path) ->
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         panel = app.query_one(PromptPanel)
         ghost = app.query_one("#prompt-ghost", Label)
@@ -351,20 +374,20 @@ async def test_tui_input_suggestion_returns_after_type_delete_cycle(tmp_path) ->
 
         panel.set_input_suggestion("run tests")
         prompt.text = "typed"
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert ghost.display is False
         assert panel.input_suggestion == "run tests"
 
         prompt.clear()
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert ghost.display is True
         assert str(ghost.content) == "run tests"
         assert options.display is False
 
         await pilot.press("tab")
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert prompt.text == "run tests"
         app.exit()
@@ -381,15 +404,15 @@ async def test_tui_enter_does_not_accept_input_suggestion(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         panel = app.query_one(PromptPanel)
         ghost = app.query_one("#prompt-ghost", Label)
 
         panel.set_input_suggestion("run tests")
-        await pilot.pause()
+        await pilot.pause(0.01)
         await pilot.press("enter")
-        await pilot.pause()
+        await pilot.pause(0.01)
 
         assert prompt.text == ""
         assert ghost.display is True
@@ -408,13 +431,13 @@ async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selectio
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         panel = app.query_one(PromptPanel)
         options = app.query_one("#prompt-suggestions", OptionList)
 
         prompt.text = "@"
-        await pilot.pause()
+        await pilot.pause(0.01)
         assert options.display is True
         assert options.highlighted == 0
 
@@ -426,7 +449,7 @@ async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selectio
         assert options.display is False
 
         prompt.text = "@"
-        await pilot.pause()
+        await pilot.pause(0.01)
         await pilot.press("down")
         await pilot.press("down")
         assert options.highlighted == 2
@@ -437,7 +460,7 @@ async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selectio
         assert "@ui/panel.py" in panel.suggestions
 
         prompt.text = "@"
-        await pilot.pause()
+        await pilot.pause(0.01)
         assert options.highlighted == 0
         await pilot.press("down")
         await pilot.press("down")
@@ -458,12 +481,12 @@ async def test_tui_slash_suggestions_tab_cycles_and_enter_confirms(tmp_path) -> 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         options = app.query_one("#prompt-suggestions", OptionList)
 
         prompt.text = "/re"
-        await pilot.pause()
+        await pilot.pause(0.01)
         assert options.display is True
         assert options.highlighted == 0
 
@@ -494,7 +517,7 @@ async def test_tui_skills_use_loads_skill_without_printing_body(tmp_path) -> Non
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/skills use demo"
         await pilot.press("enter")
@@ -524,7 +547,7 @@ async def test_tui_init_command_routes_generated_prompt_without_unsupported_mess
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/init prefer concise guidance"
         await pilot.press("enter")
@@ -544,7 +567,7 @@ async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> No
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
@@ -576,7 +599,7 @@ async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
@@ -596,7 +619,7 @@ async def test_tui_input_suggestion_command_toggles_config(tmp_path) -> None:
     app = DeepyTuiApp(settings=load_settings(config_path), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
 
         prompt.text = "/input-suggestion"
@@ -661,7 +684,7 @@ async def test_tui_local_command_runs_renders_and_persists_without_model_turn(tm
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "!echo hello"
         await pilot.press("enter")
@@ -691,7 +714,7 @@ async def test_tui_local_command_appends_separate_shell_blocks_for_later_command
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "!pwd"
         await pilot.press("enter")
@@ -720,7 +743,7 @@ async def test_tui_empty_local_command_shows_usage_without_session_or_model(tmp_
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "!"
         await pilot.press("enter")
@@ -748,7 +771,7 @@ async def test_tui_local_command_renders_windows_powershell_pipe_metadata(tmp_pa
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "!Write-Output 中文"
         await pilot.press("enter")
@@ -776,7 +799,7 @@ async def test_tui_local_command_accepts_windows_cmd_pipe_metadata(tmp_path, mon
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "!echo ok"
         await pilot.press("enter")
@@ -827,35 +850,34 @@ async def test_tui_skill_market_subcommands(tmp_path, monkeypatch) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
 
-        prompt.text = "/skills search pdf"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills search pdf",
+            lambda: any("demo" in block.body and "result pdf" in block.body for block in app.query(InfoBlock)),
+        )
         assert any("demo" in block.body and "result pdf" in block.body for block in app.query(InfoBlock))
 
-        prompt.text = "/skills install demo"
-        await pilot.press("enter")
-        await pilot.pause(0.1)
+        await _submit_prompt(app, pilot, "/skills install demo", lambda: isinstance(app.screen, ChoiceScreen))
         assert isinstance(app.screen, ChoiceScreen)
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        app.screen.dismiss("user")
+        await _wait_for(pilot, lambda: ("install", "user") in calls)
         assert ("install", "user") in calls
 
-        prompt.text = "/skills installed"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills installed",
+            lambda: any("Market-installed skills" in block.body for block in app.query(InfoBlock)),
+        )
         assert any("Market-installed skills" in block.body for block in app.query(InfoBlock))
 
-        prompt.text = "/skills update demo"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _submit_prompt(app, pilot, "/skills update demo", lambda: ("update", "demo") in calls)
         assert ("update", "demo") in calls
 
-        prompt.text = "/skills uninstall demo"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _submit_prompt(app, pilot, "/skills uninstall demo", lambda: ("uninstall", "demo") in calls)
         assert ("uninstall", "demo") in calls
         app.exit()
 
@@ -876,28 +898,23 @@ async def test_tui_skill_management_screen_installs_market_skill(tmp_path, monke
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "/skills"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "/skills", lambda: isinstance(app.screen, SkillManagementScreen))
 
         assert isinstance(app.screen, SkillManagementScreen)
         assert app.screen.view == "market"
-        await pilot.press("tab")
-        await pilot.pause(0.1)
+        app.screen.action_toggle_view()
         assert isinstance(app.screen, SkillManagementScreen)
         assert app.screen.view == "installed"
-        await pilot.press("tab")
-        await pilot.pause(0.1)
+        app.screen.action_toggle_view()
         assert isinstance(app.screen, SkillManagementScreen)
         assert app.screen.view == "market"
 
-        await pilot.press("enter")
-        await pilot.pause(0.1)
+        app.screen.action_primary()
+        await _wait_for(pilot, lambda: isinstance(app.screen, ChoiceScreen))
         assert isinstance(app.screen, ChoiceScreen)
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        app.screen.dismiss("user")
+        await _wait_for(pilot, lambda: calls == [("market-demo", "user")])
 
         assert calls == [("market-demo", "user")]
         assert any("Installed skill: market-demo" in block.body for block in app.query(InfoBlock))
@@ -916,7 +933,7 @@ async def test_tui_skill_management_blocks_builtin_uninstall_from_command(tmp_pa
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/skills uninstall skill-creator"
         await pilot.press("enter")
@@ -949,7 +966,7 @@ async def test_tui_skill_management_screen_uses_compact_market_rows(tmp_path, mo
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/skills"
         await pilot.press("enter")
@@ -986,7 +1003,7 @@ async def test_tui_skills_uninstall_removes_manual_project_skill(tmp_path, monke
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/skills uninstall manual"
         await pilot.press("enter")
@@ -1028,7 +1045,7 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
     )
 
     async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app.state = app.state.__class__(session_id="s1")
         app._update_status("Idle")
         await pilot.pause(0.1)
@@ -1051,7 +1068,7 @@ async def test_tui_status_bar_hides_mcp_when_no_servers(tmp_path, monkeypatch) -
     app = DeepyTuiApp(settings=Settings(path=tmp_path / "config.toml"), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app._update_status("Idle")
         await pilot.pause(0.1)
 
@@ -1108,7 +1125,7 @@ async def test_tui_load_skill_tool_output_is_summarized(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "load skill"
         await pilot.press("enter")
@@ -1165,7 +1182,7 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "change it"
         await pilot.press("enter")
@@ -1202,7 +1219,7 @@ async def test_tui_ignores_final_message_after_text_delta_to_avoid_duplicate_out
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "hello"
         await pilot.press("enter")
@@ -1221,7 +1238,7 @@ async def test_tui_uses_message_event_when_no_text_delta_was_streamed(tmp_path) 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "hello"
         await pilot.press("enter")
@@ -1249,7 +1266,7 @@ async def test_tui_interleaves_thinking_and_tool_calls_in_stream_order(tmp_path)
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "fetch"
         await pilot.press("enter")
@@ -1284,7 +1301,7 @@ async def test_tui_autoscrolls_when_live_block_grows(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(80, 12)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "think"
         await pilot.press("enter")
@@ -1317,7 +1334,7 @@ async def test_tui_preserves_scroll_position_and_new_output_indicator(tmp_path) 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(80, 12)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "fill transcript"
         await pilot.press("enter")
@@ -1356,7 +1373,7 @@ async def test_tui_submitting_prompt_from_history_scrolls_to_bottom(tmp_path) ->
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(80, 12)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "fill transcript"
         await pilot.press("enter")
@@ -1410,7 +1427,7 @@ async def test_tui_tool_output_is_compacted(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "fetch"
         await pilot.press("enter")
@@ -1433,7 +1450,7 @@ async def test_tui_stream_errors_render_error_block(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=failing_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "break"
         await pilot.press("enter")
@@ -1455,7 +1472,7 @@ async def test_tui_unknown_slash_command_is_not_sent_to_model(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/unknown"
         await pilot.press("enter")
@@ -1476,7 +1493,7 @@ async def test_tui_command_provider_discovers_and_searches_commands(tmp_path) ->
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app.invoke_tui_command = fake_invoke  # type: ignore[method-assign]
         provider = DeepyCommandProvider(app.screen)
 
@@ -1497,7 +1514,7 @@ async def test_tui_command_palette_closes_with_escape(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         await pilot.press("ctrl+p")
         await pilot.pause(0.2)
         assert isinstance(app.screen, CommandPalette)
@@ -1519,7 +1536,7 @@ async def test_tui_escape_still_requests_interrupt_while_busy(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=slow_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "long task"
         await pilot.press("enter")
@@ -1540,7 +1557,7 @@ async def test_tui_help_command_opens_info_screen(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/help"
         await pilot.press("enter")
@@ -1564,7 +1581,7 @@ async def test_tui_status_command_opens_status_screen(tmp_path, monkeypatch) -> 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/status"
         await pilot.press("enter")
@@ -1587,7 +1604,7 @@ async def test_tui_non_status_surfaces_do_not_fetch_balance(tmp_path, monkeypatc
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app._update_status("Idle")
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/help"
@@ -1605,7 +1622,7 @@ async def test_tui_theme_and_model_direct_commands_persist_settings(tmp_path) ->
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/theme light"
         await pilot.press("enter")
@@ -1626,7 +1643,7 @@ async def test_tui_new_command_resets_session_and_loaded_skills(tmp_path) -> Non
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app.state = app.state.__class__(session_id="old-session")
         app.controller.loaded_skill_names.append("demo")
         prompt = app.query_one("#prompt-input", PromptTextArea)
@@ -1658,7 +1675,7 @@ async def test_tui_compact_command_reports_result(tmp_path, monkeypatch) -> None
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         app.state = app.state.__class__(session_id="s1")
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/compact keep decisions"
@@ -1712,7 +1729,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/resume s1"
         await pilot.press("enter")
@@ -1737,7 +1754,7 @@ async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/sessions"
         await pilot.press("enter")
@@ -1784,15 +1801,12 @@ async def test_tui_question_answer_continues_same_session(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         assert app.query_one(QuestionBlock).body == "Which package manager?"
-        await pilot.press("enter")
-        await pilot.pause(0.3)
+        app.query_one(QuestionBlock).action_submit()
+        await _wait_for(pilot, lambda: len(calls) == 2)
 
         assert calls[0] == ("ask", None)
         assert calls[1][1] == "s1"
@@ -1869,11 +1883,8 @@ async def test_tui_ask_user_question_tool_block_does_not_duplicate_question(tmp_
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         tool_block = app.query_one(ToolBlock)
         assert tool_block.title == "AskUserQuestion ok"
@@ -1907,18 +1918,15 @@ async def test_tui_question_multiselect_custom_and_cancel_paths(tmp_path) -> Non
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         block = app.query_one(QuestionBlock)
         block.selected_values = frozenset({"tests", "__other__"})
         custom = block.query_one("#question-custom", TextArea)
         custom.text = "lint"
         block.action_submit()
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: len(prompts) >= 2)
 
         assert '"Select work"="tests, lint"' in prompts[-1]
         app.exit()
@@ -1939,13 +1947,13 @@ async def test_tui_question_multiselect_custom_and_cancel_paths(tmp_path) -> Non
 
     cancel_app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=cancel_run_once)
     async with cancel_app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = cancel_app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: cancel_app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(cancel_app, pilot, "ask", lambda: cancel_app.query_one(QuestionBlock))
         cancel_app.query_one(QuestionBlock).action_cancel()
-        await pilot.pause(0.1)
+        await _wait_for(
+            pilot,
+            lambda: any("declined to answer" in block.body for block in cancel_app.query(UserBlock)),
+        )
 
         assert any("declined to answer" in block.body for block in cancel_app.query(UserBlock))
         cancel_app.exit()
@@ -1975,17 +1983,20 @@ async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> Non
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         block = app.query_one(QuestionBlock)
         options = block.query_one("#question-options", OptionList)
         options.highlighted = 2
-        await pilot.press("enter")
-        await pilot.pause(0.1)
+        block.action_toggle_selected()
+        await _wait_for(
+            pilot,
+            lambda: (
+                block.query_one("#question-custom", TextArea).display
+                and block.query_one("#question-custom", TextArea).has_focus
+            ),
+        )
 
         custom_option_text = _option_prompt_text(options.get_option_at_index(2))
         assert custom_option_text.startswith("[x]")
@@ -1996,11 +2007,11 @@ async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> Non
 
         custom.text = "AI"
         custom.move_cursor((0, len(custom.text)))
-        await pilot.press("ctrl+j")
+        custom.action_newline()
         assert custom.text == "AI\n"
         custom.insert("coding")
-        await pilot.press("enter")
-        await pilot.pause(0.3)
+        custom.action_submit()
+        await _wait_for(pilot, lambda: len(prompts) == 2)
 
         assert '"Python goal?"="AI coding"' in prompts[-1]
         app.exit()
@@ -2025,11 +2036,8 @@ async def test_tui_question_single_select_toggle_updates_selected_marker(tmp_pat
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         block = app.query_one(QuestionBlock)
         options = block.query_one("#question-options", OptionList)
@@ -2065,26 +2073,23 @@ async def test_tui_question_single_select_marker_follows_highlight(tmp_path) -> 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "ask"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
 
         options = app.query_one("#question-options", OptionList)
         options.focus()
-        await pilot.pause()
+        await _wait_for(pilot, lambda: options.has_focus)
         assert options.has_focus
         assert "[x] Web" in _option_prompt_text(options.get_option_at_index(0))
         assert "[ ] Data" in _option_prompt_text(options.get_option_at_index(1))
 
-        await pilot.press("down")
-        await pilot.pause(0.1)
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: "[x] Data" in _option_prompt_text(options.get_option_at_index(1)))
         assert "[ ] Web" in _option_prompt_text(options.get_option_at_index(0))
         assert "[x] Data" in _option_prompt_text(options.get_option_at_index(1))
 
-        await pilot.press("enter")
-        await pilot.pause(0.3)
+        app.query_one(QuestionBlock).action_submit()
+        await _wait_for(pilot, lambda: len(calls) == 2)
         assert '"Python goal?"="Data"' in calls[-1]
         app.exit()
 
@@ -2116,7 +2121,7 @@ async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "read"
         await pilot.press("enter")
@@ -2126,7 +2131,7 @@ async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
         assert block.details.startswith("line 0")
         assert "line 29" in block.details
         block.action_toggle_expand()
-        await pilot.pause()
+        await pilot.pause(0.01)
         assert block.query_one(".tool-details").display is True
         app.exit()
 
@@ -2188,7 +2193,7 @@ async def test_tui_tool_surfaces_show_metadata_and_side_projection(tmp_path) -> 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 36)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "tools"
         await pilot.press("enter")
@@ -2217,28 +2222,31 @@ async def test_tui_prompt_history_navigation(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
         prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "first"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
-        prompt.text = "second"
-        await pilot.press("enter")
-        await pilot.pause(0.2)
+        app.controller.add_prompt_history("first")
+        app.controller.add_prompt_history("second")
         prompt.text = ""
-        await pilot.press("ctrl+up")
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "second")
         assert prompt.text == "second"
-        await pilot.press("ctrl+up")
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "first")
         assert prompt.text == "first"
-        await pilot.press("ctrl+down")
+        prompt.action_history_next()
+        await _wait_for(pilot, lambda: prompt.text == "second")
         assert prompt.text == "second"
-        await pilot.press("ctrl+down")
+        prompt.action_history_next()
+        await _wait_for(pilot, lambda: prompt.text == "")
         assert prompt.text == ""
-        await pilot.press("up")
+        prompt.action_cursor_up()
+        await _wait_for(pilot, lambda: prompt.text == "second")
         assert prompt.text == "second"
-        await pilot.press("up")
+        prompt.action_cursor_up()
+        await _wait_for(pilot, lambda: prompt.text == "first")
         assert prompt.text == "first"
-        await pilot.press("down")
+        prompt.action_cursor_down()
+        await _wait_for(pilot, lambda: prompt.text == "second")
         assert prompt.text == "second"
         app.exit()
 
@@ -2248,7 +2256,7 @@ async def test_tui_prompt_arrow_keys_still_move_inside_multiline_input(tmp_path)
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause()
+        await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "first\nsecond"
         prompt.move_cursor((1, 0))

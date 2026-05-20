@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from deepy.utils import json as json_utils
 
 from .builtin import ToolRuntime
+from .result import ToolResult
 
 if TYPE_CHECKING:
     from agents import Tool
@@ -19,16 +20,22 @@ def build_function_tools(
     from agents.tool import FunctionTool
 
     async def invoke_shell(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "shell")
+        if error is not None:
+            return error
         return runtime.shell(_string_arg(args, "command"), timeout_ms=120_000)
 
     async def invoke_ask_user_question(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "AskUserQuestion")
+        if error is not None:
+            return error
         questions = args.get("questions")
         return runtime.ask_user_question(questions if isinstance(questions, list) else [])
 
     async def invoke_search(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "Search")
+        if error is not None:
+            return error
         return await asyncio.to_thread(
             runtime.search,
             _string_arg(args, "query"),
@@ -44,7 +51,9 @@ def build_function_tools(
         )
 
     async def invoke_read_file(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "read_file")
+        if error is not None:
+            return error
         return runtime.read_file(
             _string_arg(args, "file_path"),
             start_line=_int_arg(args, "offset", 1),
@@ -53,7 +62,9 @@ def build_function_tools(
         )
 
     async def invoke_edit_text(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "edit_text")
+        if error is not None:
+            return error
         return runtime.edit_text(
             _optional_string_arg(args, "file_path"),
             _string_arg(args, "old_string"),
@@ -64,7 +75,9 @@ def build_function_tools(
         )
 
     async def invoke_write_file(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "write_file")
+        if error is not None:
+            return error
         return runtime.write_file(
             _string_arg(args, "file_path"),
             args.get("content"),
@@ -74,23 +87,33 @@ def build_function_tools(
         )
 
     async def invoke_apply_patch(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "apply_patch")
+        if error is not None:
+            return error
         return runtime.apply_patch(args.get("operations"))
 
     async def invoke_web_search(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "WebSearch")
+        if error is not None:
+            return error
         return runtime.web_search(_string_arg(args, "query"))
 
     async def invoke_web_fetch(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "WebFetch")
+        if error is not None:
+            return error
         return runtime.web_fetch(_string_arg(args, "url"))
 
     async def invoke_load_skill(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "load_skill")
+        if error is not None:
+            return error
         return runtime.load_skill(_string_arg(args, "name"))
 
     async def invoke_todo_write(_context: object, raw_input: str) -> str:
-        args = _tool_args(raw_input)
+        args, error = _tool_args(raw_input, "todo_write")
+        if error is not None:
+            return error
         return runtime.todo_write(args.get("todos") if "todos" in args else None)
 
     web_search_description = (
@@ -224,12 +247,40 @@ def build_function_tools(
     ]
 
 
-def _tool_args(raw_input: str) -> dict[str, Any]:
+def _tool_args(raw_input: str, tool_name: str) -> tuple[dict[str, Any], str | None]:
     try:
         parsed = json_utils.loads(raw_input or "{}")
-    except json_utils.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    except json_utils.JSONDecodeError as exc:
+        return {}, _invalid_tool_arguments_result(tool_name, exc)
+    if not isinstance(parsed, dict):
+        return {}, ToolResult.error_result(
+            tool_name,
+            "Invalid tool arguments JSON: expected a JSON object matching the tool schema.",
+            metadata={
+                "error_code": "invalid_arguments",
+                "recovery": "Pass exactly one JSON object as the tool arguments.",
+            },
+        ).to_json()
+    return parsed, None
+
+
+def _invalid_tool_arguments_result(tool_name: str, exc: json_utils.JSONDecodeError) -> str:
+    return ToolResult.error_result(
+        tool_name,
+        "Invalid tool arguments JSON: "
+        f"{exc.msg} at line {exc.lineno} column {exc.colno}.",
+        metadata={
+            "error_code": "invalid_arguments",
+            "parse_error": str(exc),
+            "line": exc.lineno,
+            "column": exc.colno,
+            "position": exc.pos,
+            "recovery": (
+                "Pass a valid JSON object matching the tool schema. "
+                'String values such as snapshot_id must be quoted, for example "snapshot_4".'
+            ),
+        },
+    ).to_json()
 
 
 def _string_arg(args: dict[str, Any], name: str) -> str:

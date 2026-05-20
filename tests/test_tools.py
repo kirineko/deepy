@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ast
 import gzip
 import json
@@ -119,6 +120,33 @@ def test_build_function_tools_registers_todo_write(tmp_path):
         "in_progress",
         "completed",
     ]
+
+
+def test_function_tool_reports_invalid_json_arguments(tmp_path):
+    target = tmp_path / "index.html"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tool = next(tool for tool in build_function_tools(runtime) if tool.name == "write_file")
+
+    payload = decode(
+        asyncio.run(
+            tool.on_invoke_tool(
+                None,
+                (
+                    '{"file_path":"index.html","content":"new\\n","overwrite":true,'
+                    '"snapshot_id":snapshot_4,"expected_hash":null}'
+                ),
+            )
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["name"] == "write_file"
+    assert "Invalid tool arguments JSON" in payload["error"]
+    assert "file_path is required" not in payload["error"]
+    assert payload["metadata"]["error_code"] == "invalid_arguments"
+    assert "snapshot_id must be quoted" in payload["metadata"]["recovery"]
+    assert target.read_text(encoding="utf-8") == "old\n"
 
 
 def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
