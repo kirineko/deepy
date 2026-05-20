@@ -284,17 +284,23 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         self.market = market
         self.view: Literal["installed", "market"] = view
         self.market_error = market_error
+        self._title_label: Label | None = None
+        self._help_text: Static | None = None
+        self._options: OptionList | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(self._title(), id="skill-title", classes="block-title")
-            yield Static(self._help(), id="skill-help", classes="screen-help")
-            yield OptionList(id="skill-options")
+            self._title_label = Label(self._title(), id="skill-title", classes="block-title")
+            self._help_text = Static(self._help(), id="skill-help", classes="screen-help")
+            self._options = OptionList(id="skill-options")
+            yield self._title_label
+            yield self._help_text
+            yield self._options
             yield Footer()
 
     def on_mount(self) -> None:
         self._refresh_options()
-        self.query_one("#skill-options", OptionList).focus()
+        self._skill_options().focus()
 
     @on(OptionList.OptionSelected, "#skill-options")
     def on_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -345,9 +351,11 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         self.dismiss(None)
 
     def _refresh_options(self) -> None:
-        self.query_one("#skill-title", Label).update(self._title())
-        self.query_one("#skill-help", Static).update(self._help())
-        options = self.query_one("#skill-options", OptionList)
+        title = self._skill_title()
+        help_text = self._skill_help()
+        options = self._skill_options()
+        title.update(self._title())
+        help_text.update(self._help())
         options.clear_options()
         entries = self._entries()
         if entries:
@@ -369,7 +377,7 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         return self.market if self.view == "market" else self.installed
 
     def _selected_entry(self) -> SkillScreenEntry | None:
-        options = self.query_one("#skill-options", OptionList)
+        options = self._skill_options()
         if options.option_count == 0 or options.highlighted is None:
             return None
         option_id = str(options.get_option_at_index(options.highlighted).id or "")
@@ -380,6 +388,21 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
             if entry.source == source and entry.name == name:
                 return entry
         return None
+
+    def _skill_title(self) -> Label:
+        if self._title_label is None:
+            raise RuntimeError("Skill title widget is not mounted.")
+        return self._title_label
+
+    def _skill_help(self) -> Static:
+        if self._help_text is None:
+            raise RuntimeError("Skill help widget is not mounted.")
+        return self._help_text
+
+    def _skill_options(self) -> OptionList:
+        if self._options is None:
+            raise RuntimeError("Skill option list is not mounted.")
+        return self._options
 
     def _title(self) -> str:
         count = len(self._entries())

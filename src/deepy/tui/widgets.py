@@ -587,11 +587,13 @@ class QuestionBlock(Vertical, can_focus=True):
         self.options = build_options(question)
         self.body = question.question
         self._refreshing_options = False
+        self._option_list: QuestionOptionList | None = None
+        self._custom_input: QuestionTextArea | None = None
 
     def compose(self) -> ComposeResult:
         yield Label("Question", classes="block-title")
         yield Static(self.question.question, classes="block-body")
-        yield QuestionOptionList(
+        self._option_list = QuestionOptionList(
             *[
                 Option(
                     _question_option_label(option, selected=False),
@@ -601,12 +603,13 @@ class QuestionBlock(Vertical, can_focus=True):
             ],
             id="question-options",
         )
-        custom = QuestionTextArea(id="question-custom")
-        custom.display = False
-        yield custom
+        self._custom_input = QuestionTextArea(id="question-custom")
+        self._custom_input.display = False
+        yield self._option_list
+        yield self._custom_input
 
     def on_mount(self) -> None:
-        self.query_one("#question-options", OptionList).focus()
+        self._question_options().focus()
         if not self.question.multi_select and self.options:
             self.selected_values = frozenset({self.options[0].value})
             self._refresh_options()
@@ -708,7 +711,7 @@ class QuestionBlock(Vertical, can_focus=True):
         return next((option for option in self.options if option.value == value), None)
 
     def _highlighted_option(self) -> AskUserQuestionOptionEntry | None:
-        option_list = self.query_one("#question-options", OptionList)
+        option_list = self._question_options()
         highlighted = option_list.highlighted_option
         if highlighted is None or highlighted.id is None:
             return None
@@ -720,15 +723,15 @@ class QuestionBlock(Vertical, can_focus=True):
         return self._option_by_value(next(iter(self.selected_values)))
 
     def _custom_text(self) -> str:
-        return self.query_one("#question-custom", TextArea).text.strip()
+        return self._question_custom().text.strip()
 
     def _focus_custom(self) -> None:
-        custom = self.query_one("#question-custom", TextArea)
+        custom = self._question_custom()
         custom.display = True
         custom.focus()
 
     def _refresh_options(self) -> None:
-        option_list = self.query_one("#question-options", OptionList)
+        option_list = self._question_options()
         highlighted_id = (
             str(option_list.highlighted_option.id)
             if option_list.highlighted_option is not None and option_list.highlighted_option.id is not None
@@ -758,7 +761,17 @@ class QuestionBlock(Vertical, can_focus=True):
                         break
         finally:
             self._refreshing_options = False
-        self.query_one("#question-custom", TextArea).display = self.custom_mode
+        self._question_custom().display = self.custom_mode
+
+    def _question_options(self) -> QuestionOptionList:
+        if self._option_list is None:
+            raise RuntimeError("Question option list is not mounted.")
+        return self._option_list
+
+    def _question_custom(self) -> QuestionTextArea:
+        if self._custom_input is None:
+            raise RuntimeError("Question custom input is not mounted.")
+        return self._custom_input
 
 
 def _tool_output_title(view: ToolOutputView) -> str:
