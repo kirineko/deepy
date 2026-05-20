@@ -143,7 +143,7 @@ def test_model_settings_map_xiaomi_mimo_switch_thinking_without_reasoning_effort
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
                 thinking=True,
-                reasoning_effort="high",
+                reasoning_effort="enabled",
             )
         )
     ).extra_body

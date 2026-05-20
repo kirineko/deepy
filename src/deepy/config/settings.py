@@ -27,7 +27,7 @@ DEFAULT_PROVIDER = "deepseek"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1"
 DEEPSEEK_REASONING_EFFORTS = {"high", "max"}
-SWITCH_ONLY_REASONING_EFFORTS = {"high", "none"}
+SWITCH_ONLY_REASONING_EFFORTS = {"enabled", "none"}
 OPENROUTER_REASONING_MODES = (
     "enabled",
     "disabled",
@@ -245,9 +245,11 @@ def normalize_reasoning_effort(
             return value
         return provider_info.default_thinking_mode
     if provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
-        if thinking is False or value == "none":
+        if thinking is False or value in {"none", "disabled"}:
             return "none"
-        return "high"
+        if thinking is True or value == "enabled":
+            return "enabled"
+        return provider_info.default_thinking_mode
     if value in DEEPSEEK_REASONING_EFFORTS:
         return value
     return provider_info.default_thinking_mode
@@ -271,7 +273,7 @@ def reasoning_effort_for_mode(mode: str, provider: str) -> str:
             return mode
         return provider_info_for(provider).default_thinking_mode
     if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
-        return "none" if mode == "disabled" else "high"
+        return "none" if mode == "disabled" else "enabled"
     return mode if mode in DEEPSEEK_REASONING_EFFORTS else "max"
 
 

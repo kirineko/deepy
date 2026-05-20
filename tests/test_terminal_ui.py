@@ -1439,6 +1439,32 @@ def test_model_slash_command_sets_openrouter_provider_model_and_thinking(tmp_pat
     assert 'reasoning_effort = "none"' in text
 
 
+def test_model_slash_command_sets_xiaomi_enabled_without_high_effort(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("model", "set xiaomi mimo-v2.5 enabled"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(api_key="sk-test")),
+    )
+
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "Saved provider: xiaomi · model: mimo-v2.5 · thinking: enabled" in console.export_text()
+    assert 'provider = "xiaomi"' in text
+    assert 'name = "mimo-v2.5"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "enabled"' in text
+    assert 'reasoning_effort = "high"' not in text
+
+
 def test_model_slash_command_rejects_invalid_values_without_changing_config(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
@@ -1827,7 +1853,7 @@ def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatc
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["3", "sk-mi-reset", "1", "", "1", "3"])
+    answers = iter(["3", "sk-mi-reset", "1", "", "2", "3"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -1850,6 +1876,8 @@ def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatc
     assert 'provider = "xiaomi"' in text
     assert 'api_key = "sk-mi-reset"' in text
     assert 'name = "mimo-v2.5-pro"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "enabled"' in text
 
 
 def test_reset_slash_command_accepts_openrouter_custom_model_and_effort(tmp_path, monkeypatch):
