@@ -16,7 +16,7 @@ from deepy.usage import TokenUsage
 def test_prepare_compaction_items_preserves_recent_messages_and_tool_group():
     items = [
         {"role": "user", "content": "old"},
-        {"type": "function_call", "call_id": "call-1", "name": "read", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call-1", "name": "read_file", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "call-1", "output": "result"},
         {"role": "assistant", "content": "seen"},
         {"role": "user", "content": "continue"},

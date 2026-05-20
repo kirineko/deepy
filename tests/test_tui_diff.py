@@ -15,7 +15,7 @@ from deepy.tui.diff import (
 from deepy.tui.widgets import DiffBlock
 
 
-def _tool_output(diff: str, *, name: str = "write", path: str = "src/app.py") -> str:
+def _tool_output(diff: str, *, name: str = "write_file", path: str = "src/app.py") -> str:
     return json.dumps(
         {
             "ok": True,
@@ -51,19 +51,46 @@ def test_tui_diff_model_renders_unified_preview() -> None:
     assert "+ new" in rendered
 
 
-def test_tui_diff_model_recognizes_modify_outputs() -> None:
+def test_tui_diff_model_recognizes_edit_text_outputs() -> None:
     output = _tool_output(
         "--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n",
-        name="modify",
+        name="edit_text",
     )
 
     view = diff_view_from_tool_output(output)
 
     assert view is not None
-    assert view.tool_name == "modify"
+    assert view.tool_name == "edit_text"
     assert view.path == "src/app.py"
     assert view.added == 1
     assert view.removed == 1
+
+
+def test_tui_diff_model_keeps_multi_file_patch_sections() -> None:
+    output = _tool_output(
+        "... index.html ...\n"
+        "--- a/index.html\n"
+        "+++ b/index.html\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+<main></main>\n"
+        "... styles.css ...\n"
+        "--- a/styles.css\n"
+        "+++ b/styles.css\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+body { margin: 0; }\n",
+        name="apply_patch",
+        path="2 files",
+    )
+
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    assert view.path == "2 files"
+    rendered = render_unified_diff_text(view)
+    assert "index.html" in rendered
+    assert "styles.css" in rendered
+    assert "<main></main>" in rendered
+    assert "body { margin: 0; }" in rendered
 
 
 def test_tui_diff_rich_rendering_uses_diff_colors_and_syntax() -> None:
@@ -117,6 +144,20 @@ def test_tui_diff_model_compacts_large_diffs() -> None:
     assert view.truncated is True
     assert len(view.lines) == 12
     assert render_unified_diff_text(view).endswith("... diff truncated ...")
+
+
+def test_tui_diff_model_does_not_compact_apply_patch_diffs() -> None:
+    diff = "--- a/file\n+++ b/file\n@@ -0,0 +1,150 @@\n" + "\n".join(
+        f"+line {index}" for index in range(150)
+    )
+    output = _tool_output(diff, name="apply_patch", path="file")
+
+    view = diff_view_from_tool_output(output, max_lines=12)
+
+    assert view is not None
+    assert view.truncated is False
+    assert len(view.lines) == 150
+    assert "line 149" in render_unified_diff_text(view)
 
 
 def test_tui_diff_tracks_hunks_and_block_navigation() -> None:

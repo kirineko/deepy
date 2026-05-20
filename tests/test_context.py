@@ -32,7 +32,7 @@ def test_token_estimate_counts_tool_call_arguments():
     with_arguments = estimate_tokens_for_item(
         {
             "type": "function_call",
-            "name": "write",
+            "name": "write_file",
             "call_id": "call-1",
             "arguments": '{"file_path":"big.py","content":"' + ("x" * 2000) + '"}',
         }
@@ -40,7 +40,7 @@ def test_token_estimate_counts_tool_call_arguments():
     without_arguments = estimate_tokens_for_item(
         {
             "type": "function_call",
-            "name": "write",
+            "name": "write_file",
             "call_id": "call-1",
             "arguments": "{}",
         }

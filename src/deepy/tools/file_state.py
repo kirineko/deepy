@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -10,9 +11,13 @@ SnapshotStatus = Literal["missing", "full", "partial", "deleted", "stale"]
 
 @dataclass
 class FileSnapshot:
+    id: str
     mtime_ns: int
     size: int
+    content_hash: str
     full_read: bool
+    encoding: str | None = None
+    line_endings: str | None = None
 
 
 @dataclass
@@ -29,16 +34,31 @@ class FileState:
     _snapshots: dict[Path, FileSnapshot] = field(default_factory=dict)
     _snippets: dict[str, FileSnippet] = field(default_factory=dict)
     _next_snippet_id: int = 0
+    _next_snapshot_id: int = 0
 
-    def mark_read(self, path: Path, *, full: bool = True) -> None:
+    def mark_read(
+        self,
+        path: Path,
+        *,
+        full: bool = True,
+        encoding: str | None = None,
+        line_endings: str | None = None,
+    ) -> FileSnapshot:
         resolved = path.resolve()
         stat = resolved.stat()
         existing = self._snapshots.get(resolved)
-        self._snapshots[resolved] = FileSnapshot(
+        self._next_snapshot_id += 1
+        snapshot = FileSnapshot(
+            id=f"snapshot_{self._next_snapshot_id}",
             mtime_ns=stat.st_mtime_ns,
             size=stat.st_size,
+            content_hash=_file_sha256(resolved),
             full_read=full or bool(existing and existing.full_read),
+            encoding=encoding,
+            line_endings=line_endings,
         )
+        self._snapshots[resolved] = snapshot
+        return snapshot
 
     def check_writable(
         self,
@@ -58,7 +78,11 @@ class FileState:
         if not resolved.exists():
             return False, "File changed since it was read: it no longer exists."
         stat = resolved.stat()
-        if stat.st_mtime_ns != snapshot.mtime_ns or stat.st_size != snapshot.size:
+        if (
+            stat.st_mtime_ns != snapshot.mtime_ns
+            or stat.st_size != snapshot.size
+            or _file_sha256(resolved) != snapshot.content_hash
+        ):
             return False, "File changed since it was read; read it again before editing."
         return True, None
 
@@ -70,13 +94,36 @@ class FileState:
         if not resolved.exists():
             return "deleted"
         stat = resolved.stat()
-        if stat.st_mtime_ns != snapshot.mtime_ns or stat.st_size != snapshot.size:
+        if (
+            stat.st_mtime_ns != snapshot.mtime_ns
+            or stat.st_size != snapshot.size
+            or _file_sha256(resolved) != snapshot.content_hash
+        ):
             return "stale"
         return "full" if snapshot.full_read else "partial"
 
-    def mark_written(self, path: Path) -> None:
+    def mark_written(
+        self,
+        path: Path,
+        *,
+        encoding: str | None = None,
+        line_endings: str | None = None,
+    ) -> FileSnapshot | None:
         if path.exists():
-            self.mark_read(path)
+            return self.mark_read(path, encoding=encoding, line_endings=line_endings)
+        return None
+
+    def get_snapshot(self, path: Path) -> FileSnapshot | None:
+        return self._snapshots.get(path.resolve())
+
+    def get_snapshot_path(self, snapshot_id: str) -> Path | None:
+        for path, snapshot in self._snapshots.items():
+            if snapshot.id == snapshot_id:
+                return path
+        return None
+
+    def discard_snapshot(self, path: Path) -> None:
+        self._snapshots.pop(path.resolve(), None)
 
     def create_snippet(
         self,
@@ -99,3 +146,11 @@ class FileState:
 
     def get_snippet(self, snippet_id: str) -> FileSnippet | None:
         return self._snippets.get(snippet_id)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

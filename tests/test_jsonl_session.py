@@ -580,7 +580,7 @@ async def test_jsonl_session_ignores_records_without_sdk_item(tmp_path):
                     {
                         "id": "call-1",
                         "type": "function",
-                        "function": {"name": "read", "arguments": "{}"},
+                        "function": {"name": "read_file", "arguments": "{}"},
                     }
                 ]
             },
@@ -699,7 +699,7 @@ async def test_jsonl_session_drops_empty_assistant_between_function_calls_and_ou
         {
             "arguments": '{"file_path":"README.md"}',
             "call_id": "call-read",
-            "name": "read",
+            "name": "read_file",
             "type": "function_call",
         },
         {
@@ -711,7 +711,7 @@ async def test_jsonl_session_drops_empty_assistant_between_function_calls_and_ou
         },
         {
             "call_id": "call-read",
-            "output": json.dumps({"ok": True, "name": "read", "output": "README"}),
+            "output": json.dumps({"ok": True, "name": "read_file", "output": "README"}),
             "type": "function_call_output",
         },
     ]
@@ -738,7 +738,7 @@ async def test_jsonl_session_sanitizes_loaded_cache_after_append(tmp_path):
         {
             "arguments": '{"file_path":"README.md"}',
             "call_id": "call-read",
-            "name": "read",
+            "name": "read_file",
             "type": "function_call",
         },
         {
@@ -750,7 +750,7 @@ async def test_jsonl_session_sanitizes_loaded_cache_after_append(tmp_path):
         },
         {
             "call_id": "call-read",
-            "output": json.dumps({"ok": True, "name": "read", "output": "README"}),
+            "output": json.dumps({"ok": True, "name": "read_file", "output": "README"}),
             "type": "function_call_output",
         },
     ]

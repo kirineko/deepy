@@ -5,8 +5,10 @@ from importlib import resources
 
 TOOL_DOC_FILES = (
     "shell.md",
-    "read.md",
-    "modify.md",
+    "read_file.md",
+    "edit_text.md",
+    "write_file.md",
+    "apply_patch.md",
     "AskUserQuestion.md",
     "WebSearch.md",
     "WebFetch.md",

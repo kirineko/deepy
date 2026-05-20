@@ -31,7 +31,7 @@ from deepy.ui.styles import LIGHT_PALETTE
 
 def test_format_tool_output_summary_uses_path_detail():
     output = (
-        '{"ok":true,"name":"read","output":"","error":null,'
+        '{"ok":true,"name":"read_file","output":"","error":null,'
         '"metadata":{"path":"/tmp/a"},"awaitUserResponse":false}'
     )
 
@@ -75,7 +75,7 @@ def test_parse_tool_output_preserves_pending_question_state():
 def test_format_tool_display_label_normalizes_protocol_names():
     assert format_tool_display_label("AskUserQuestion") == "[AskUserQuestion]"
     assert format_tool_display_label("WebFetch") == "[WebFetch]"
-    assert format_tool_display_label("edit") == "[Modify]"
+    assert format_tool_display_label("edit_text") == "[Edit]"
     assert format_tool_display_label("todo_write") == "[Todo]"
     assert format_tool_display_label("load_skill") == "[Load Skill]"
 
@@ -327,7 +327,7 @@ def test_tool_diff_preview_only_for_successful_edit():
     output = json.dumps(
         {
             "ok": True,
-            "name": "edit",
+            "name": "edit_text",
             "output": "Edited file",
             "error": None,
             "metadata": {"path": "file", "diff": diff},
@@ -343,7 +343,7 @@ def test_tool_diff_preview_supports_modify_outputs():
     output = json.dumps(
         {
             "ok": True,
-            "name": "modify",
+            "name": "edit_text",
             "output": "Modified file",
             "error": None,
             "metadata": {"path": "file", "diff": diff},
@@ -358,7 +358,7 @@ def test_tool_diff_preview_prefers_write_metadata_diff_preview():
     output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -377,13 +377,31 @@ def test_tool_diff_preview_prefers_write_metadata_diff_preview():
     ]
 
 
+def test_tool_diff_preview_does_not_limit_apply_patch_diff():
+    diff = "--- a/file\n+++ b/file\n@@ -0,0 +1,6 @@\n" + "\n".join(
+        f"+line {index}" for index in range(6)
+    )
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "apply_patch",
+            "output": "Applied patch",
+            "error": None,
+            "metadata": {"path": "file", "diff_preview": diff},
+            "awaitUserResponse": False,
+        }
+    )
+
+    assert tool_diff_preview(output, max_lines=3) == diff
+
+
 def test_tool_diff_preview_ignores_failed_or_unrelated_tools():
     write_failed = (
-        '{"ok":false,"name":"write","output":"","error":"denied",'
+        '{"ok":false,"name":"write_file","output":"","error":"denied",'
         '"metadata":{"diff":"--- a\\n+++ b\\n"},"awaitUserResponse":false}'
     )
     read_ok = (
-        '{"ok":true,"name":"read","output":"","error":null,'
+        '{"ok":true,"name":"read_file","output":"","error":null,'
         '"metadata":{"diff":"--- a\\n+++ b\\n"},"awaitUserResponse":false}'
     )
 
@@ -393,7 +411,7 @@ def test_tool_diff_preview_ignores_failed_or_unrelated_tools():
 
 def test_render_tool_output_includes_summary_and_diff():
     output = (
-        '{"ok":true,"name":"edit","output":"Edited file","error":null,'
+        '{"ok":true,"name":"edit_text","output":"Edited file","error":null,'
         '"metadata":{"path":"file","diff":"--- a/file\\n+++ b/file\\n@@\\n+new\\n"},'
         '"awaitUserResponse":false}'
     )
@@ -402,15 +420,15 @@ def test_render_tool_output_includes_summary_and_diff():
     console.print(render_tool_output(output))
 
     rendered = console.export_text()
-    assert "[Modify] ok - file" in rendered
-    assert "[Modify] file (+1 -0)" in rendered
+    assert "[Edit] ok - file" in rendered
+    assert "[Edit] file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+new" not in rendered
 
 
 def test_render_tool_output_shows_write_preview_with_diff_style():
     output = (
-        '{"ok":true,"name":"write","output":"Wrote file","error":null,'
+        '{"ok":true,"name":"write_file","output":"Wrote file","error":null,'
         '"metadata":{"path":"file","diff":"--- /dev/null\\n+++ b/file\\n@@ -0,0 +1,1 @@\\n+new\\n"},'
         '"awaitUserResponse":false}'
     )
@@ -491,7 +509,7 @@ def test_render_shell_output_block_ignores_non_shell_tools():
     output = json.dumps(
         {
             "ok": True,
-            "name": "read",
+            "name": "read_file",
             "output": "file content",
             "error": None,
             "metadata": {},
@@ -506,7 +524,7 @@ def test_render_tool_diff_preview_hides_headers_and_markers():
     output = json.dumps(
         {
             "ok": True,
-            "name": "edit",
+            "name": "edit_text",
             "output": "Edited file",
             "error": None,
             "metadata": {
@@ -521,7 +539,7 @@ def test_render_tool_diff_preview_hides_headers_and_markers():
     console.print(render_tool_diff_preview(output))
 
     rendered = console.export_text()
-    assert "[Modify] file (+1 -1)" in rendered
+    assert "[Edit] file (+1 -1)" in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -586,7 +604,7 @@ def test_render_write_preview_line_uses_shared_diff_background():
     output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -610,7 +628,7 @@ def test_render_write_preview_line_uses_light_theme_background():
     output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -632,7 +650,7 @@ def test_render_write_preview_line_uses_dark_theme_background():
     output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -654,7 +672,7 @@ def test_render_tool_diff_preview_highlights_programming_language_content():
     output = json.dumps(
         {
             "ok": True,
-            "name": "edit",
+            "name": "edit_text",
             "output": "Edited file",
             "error": None,
             "metadata": {
@@ -685,7 +703,7 @@ def test_render_tool_diff_preview_preserves_light_diff_background_with_syntax():
     output = json.dumps(
         {
             "ok": True,
-            "name": "edit",
+            "name": "edit_text",
             "output": "Edited file",
             "error": None,
             "metadata": {
@@ -716,7 +734,7 @@ def test_render_write_preview_does_not_truncate_large_writes():
     output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -769,7 +787,7 @@ def test_render_message_renders_tool_outputs():
         render_message(
             {
                 "role": "tool",
-                "content": '{"ok":true,"name":"read","output":"","metadata":{"path":"file"}}',
+                "content": '{"ok":true,"name":"read_file","output":"","metadata":{"path":"file"}}',
             }
         )
     )
@@ -838,7 +856,7 @@ def test_build_tool_params_snippet_formats_shell_command_and_description():
 def test_format_tool_call_summary_formats_read_arguments():
     assert (
         format_tool_call_summary(
-            "read",
+            "read_file",
             '{"file_path":"/repo/README.md"}',
             project_root="/repo",
         )
@@ -848,7 +866,7 @@ def test_format_tool_call_summary_formats_read_arguments():
 
 def test_format_tool_call_summary_formats_write_without_content_body():
     summary = format_tool_call_summary(
-        "write",
+        "write_file",
         json.dumps(
             {
                 "file_path": "/repo/src/lib.rs",
@@ -864,7 +882,7 @@ def test_format_tool_call_summary_formats_write_without_content_body():
 
 def test_format_tool_call_summary_does_not_count_trailing_newline_as_extra_line():
     summary = format_tool_call_summary(
-        "write",
+        "write_file",
         json.dumps(
             {
                 "file_path": "/repo/index.html",
@@ -877,9 +895,9 @@ def test_format_tool_call_summary_does_not_count_trailing_newline_as_extra_line(
     assert summary == "[Write] index.html (3 lines, 31 chars)"
 
 
-def test_format_tool_call_summary_formats_modify_create_without_content_body():
+def test_format_tool_call_summary_formats_write_file_create_without_content_body():
     summary = format_tool_call_summary(
-        "modify",
+        "write_file",
         json.dumps(
             {
                 "file_path": "/repo/src/lib.rs",
@@ -889,8 +907,135 @@ def test_format_tool_call_summary_formats_modify_create_without_content_body():
         project_root="/repo",
     )
 
-    assert summary == "[Modify] src/lib.rs (3 lines, 34 chars)"
+    assert summary == "[Write] src/lib.rs (3 lines, 34 chars)"
     assert "println" not in summary
+
+
+def test_format_tool_call_summary_formats_structured_patch_without_content_body():
+    summary = format_tool_call_summary(
+        "apply_patch",
+        json.dumps(
+            {
+                "operations": [
+                    {
+                        "type": "replace_block",
+                        "file_path": "/repo/src/lib.rs",
+                        "old_text": "old",
+                        "new_text": "new",
+                        "expected_occurrences": 1,
+                    }
+                ]
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "[Patch] 1 op, 1 file: src/lib.rs"
+    assert "old" not in summary
+    assert "new" not in summary
+
+
+def test_build_tool_params_snippet_formats_multi_file_structured_patch_concisely():
+    snippet = build_tool_params_snippet(
+        {
+            "name": "apply_patch",
+            "arguments": json.dumps(
+                {
+                    "operations": [
+                        {"type": "create_file", "file_path": "/repo/a.txt", "content": "a\n"},
+                        {
+                            "type": "replace_block",
+                            "file_path": "/repo/b.txt",
+                            "old_text": "b",
+                            "new_text": "B",
+                        },
+                        {"type": "delete_file", "file_path": "/repo/c.txt"},
+                        {
+                            "type": "move_file",
+                            "file_path": "/repo/d.txt",
+                            "destination_path": "/repo/e.txt",
+                        },
+                    ]
+                }
+            ),
+        },
+        project_root="/repo",
+    )
+
+    assert snippet == "4 ops, 5 files: a.txt, b.txt, c.txt, d.txt, e.txt"
+    assert "Add File" not in snippet
+
+
+def test_render_tool_diff_preview_shows_multiple_patch_file_sections():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "apply_patch",
+            "output": "Applied patch to 2 file(s).",
+            "error": None,
+            "metadata": {
+                "path": "2 files",
+                "changedFiles": ["/repo/index.html", "/repo/styles.css"],
+                "diff_preview": (
+                    "... /repo/index.html ...\n"
+                    "--- a//repo/index.html\n"
+                    "+++ b//repo/index.html\n"
+                    "@@ -0,0 +1,1 @@\n"
+                    "+<main></main>\n"
+                    "... /repo/styles.css ...\n"
+                    "--- a//repo/styles.css\n"
+                    "+++ b//repo/styles.css\n"
+                    "@@ -0,0 +1,1 @@\n"
+                    "+body { margin: 0; }\n"
+                ),
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    console = Console(record=True, width=120)
+
+    console.print(render_tool_diff_preview(output))
+
+    rendered = console.export_text()
+    assert "[Patch] /repo/index.html (+1 -0)" in rendered
+    assert "[Patch] /repo/styles.css (+1 -0)" in rendered
+    assert "/repo/index.html" in rendered
+    assert "/repo/styles.css" in rendered
+    assert "<main></main>" in rendered
+    assert "body { margin: 0; }" in rendered
+
+
+def test_render_tool_diff_preview_highlights_each_patch_file_by_own_language():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "apply_patch",
+            "output": "Applied patch to 2 file(s).",
+            "error": None,
+            "metadata": {
+                "path": "2 files",
+                "diff_preview": (
+                    "--- a/app.py\n"
+                    "+++ b/app.py\n"
+                    "@@ -0,0 +1,1 @@\n"
+                    "+def run(value):\n"
+                    "--- a/styles.css\n"
+                    "+++ b/styles.css\n"
+                    "@@ -0,0 +1,1 @@\n"
+                    "+body { margin: 0; }\n"
+                ),
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    rendered = render_tool_diff_preview(output, width=120)
+    assert rendered is not None
+    lines = list(rendered.renderables)
+
+    html_spans = str(lines[1].spans)
+    css_spans = str(lines[4].spans)
+    assert "#a6e22e" in html_spans
+    assert "#ff4689" in css_spans
 
 
 def test_format_tool_call_summary_hides_ask_user_question_arguments():
@@ -915,7 +1060,7 @@ def test_format_tool_call_summary_hides_ask_user_question_arguments():
 
 def test_format_tool_progress_summary_merges_call_and_output_status():
     output = (
-        '{"ok":true,"name":"read","output":"","error":null,'
+        '{"ok":true,"name":"read_file","output":"","error":null,'
         '"metadata":{"path":"/repo/README.md"},"awaitUserResponse":false}'
     )
 
@@ -937,7 +1082,7 @@ def test_format_tool_progress_summary_includes_failure_detail():
 def test_build_tool_params_snippet_shortens_read_path_under_project_root():
     assert (
         build_tool_params_snippet(
-            {"name": "read", "arguments": '{"path":"/repo/src/app.py"}'},
+            {"name": "read_file", "arguments": '{"file_path":"/repo/src/app.py"}'},
             project_root="/repo",
         )
         == "src/app.py"
@@ -956,4 +1101,4 @@ def test_build_tool_result_snippet_extracts_output_and_truncates():
 def test_is_invisible_execution_detects_failed_shell_payload():
     assert is_invisible_execution(json.dumps({"ok": False, "name": "shell"})) is True
     assert is_invisible_execution(json.dumps({"ok": True, "name": "shell"})) is False
-    assert is_invisible_execution(json.dumps({"ok": False, "name": "read"})) is False
+    assert is_invisible_execution(json.dumps({"ok": False, "name": "read_file"})) is False

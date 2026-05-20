@@ -28,7 +28,7 @@ def _message(content: object, *, visible: bool = True) -> dict[str, object]:
 def test_find_pending_ask_user_question_returns_latest_pending_tool_message():
     pending = find_pending_ask_user_question(
         [
-            _message({"ok": True, "name": "read"}),
+            _message({"ok": True, "name": "read_file"}),
             _message(
                 {
                     "ok": True,

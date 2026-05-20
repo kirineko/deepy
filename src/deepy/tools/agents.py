@@ -26,25 +26,39 @@ def build_function_tools(
         questions = args.get("questions")
         return runtime.ask_user_question(questions if isinstance(questions, list) else [])
 
-    async def invoke_read(_context: object, raw_input: str) -> str:
+    async def invoke_read_file(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
-        return runtime.read(
+        return runtime.read_file(
             _string_arg(args, "file_path"),
             start_line=_int_arg(args, "offset", 1),
             limit=_optional_int_arg(args, "limit"),
             pages=_optional_string_arg(args, "pages"),
         )
 
-    async def invoke_modify(_context: object, raw_input: str) -> str:
+    async def invoke_edit_text(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
-        return runtime.modify(
+        return runtime.edit_text(
             _optional_string_arg(args, "file_path"),
-            content=args.get("content"),
-            old=_nullable_string_arg(args, "old_string"),
-            new=_nullable_string_arg(args, "new_string"),
+            _string_arg(args, "old_string"),
+            _string_arg(args, "new_string"),
             replace_all=_bool_arg(args, "replace_all", False),
             snippet_id=_optional_string_arg(args, "snippet_id"),
+            expected_occurrences=_optional_int_arg(args, "expected_occurrences"),
         )
+
+    async def invoke_write_file(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return runtime.write_file(
+            _string_arg(args, "file_path"),
+            args.get("content"),
+            overwrite=_bool_arg(args, "overwrite", False),
+            snapshot_id=_optional_string_arg(args, "snapshot_id"),
+            expected_hash=_optional_string_arg(args, "expected_hash"),
+        )
+
+    async def invoke_apply_patch(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return runtime.apply_patch(args.get("operations"))
 
     async def invoke_web_search(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
@@ -101,22 +115,47 @@ def build_function_tools(
             strict_json_schema=False,
         ),
         FunctionTool(
-            name="read",
-            description="Read files from the filesystem (text, images, PDFs, notebooks).",
-            params_json_schema=READ_SCHEMA,
-            on_invoke_tool=invoke_read,
-            strict_json_schema=False,
+            name="read_file",
+            description=(
+                "Read a file or directory and record managed text snapshots for later edits. "
+                "Use this before whole-file replacement or when you need context."
+            ),
+            params_json_schema=READ_FILE_SCHEMA,
+            on_invoke_tool=invoke_read_file,
+            strict_json_schema=True,
         ),
         FunctionTool(
-            name="modify",
+            name="edit_text",
             description=(
-                "Create new files or edit existing files. Use content only for files that do not "
-                "exist. For existing files, use old_string/new_string; read first when you need "
-                "to inspect context."
+                "Preferred tool for small single-file exact/string edits. Use file_path "
+                "with old_string/new_string and expected_occurrences when possible; use "
+                "snippet_id only to intentionally scope a partial-read range."
             ),
-            params_json_schema=MODIFY_SCHEMA,
-            on_invoke_tool=invoke_modify,
-            strict_json_schema=False,
+            params_json_schema=EDIT_TEXT_SCHEMA,
+            on_invoke_tool=invoke_edit_text,
+            strict_json_schema=True,
+        ),
+        FunctionTool(
+            name="write_file",
+            description=(
+                "Create a new text file or explicitly replace a whole file. Existing-file "
+                "replacement requires overwrite intent plus snapshot_id or expected_hash."
+            ),
+            params_json_schema=WRITE_FILE_SCHEMA,
+            on_invoke_tool=invoke_write_file,
+            strict_json_schema=True,
+        ),
+        FunctionTool(
+            name="apply_patch",
+            description=(
+                "Batch structured file operations. Best for multiple edits in one file, "
+                "multi-file edits, create/delete/move, or larger block replacements. "
+                "Provide an operations array using create_file, replace_file, delete_file, "
+                "move_file, replace_block, insert_before, insert_after, or replace_all."
+            ),
+            params_json_schema=APPLY_PATCH_SCHEMA,
+            on_invoke_tool=invoke_apply_patch,
+            strict_json_schema=True,
         ),
         FunctionTool(
             name="WebSearch",
@@ -172,12 +211,12 @@ def _string_arg(args: dict[str, Any], name: str) -> str:
 
 def _optional_string_arg(args: dict[str, Any], name: str) -> str | None:
     value = args.get(name)
-    return value if isinstance(value, str) and value else None
-
-
-def _nullable_string_arg(args: dict[str, Any], name: str) -> str | None:
-    value = args.get(name)
-    return value if isinstance(value, str) else None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.casefold() in {"null", "none", "undefined"}:
+        return None
+    return value
 
 
 def _int_arg(args: dict[str, Any], name: str, default: int) -> int:
@@ -264,111 +303,186 @@ ASK_USER_QUESTION_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-READ_SCHEMA: dict[str, Any] = {
+READ_FILE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "UNIX-style path to file",
+            "description": "Path to file or directory under the current project",
         },
         "offset": {
-            "type": "number",
-            "description": "Line number to start reading from",
+            "type": ["number", "null"],
+            "description": "Line number to start reading from; null means start at line 1",
         },
         "limit": {
-            "type": "number",
-            "description": "Number of lines to read",
+            "type": ["number", "null"],
+            "description": "Number of lines to read; null means the default limit",
         },
         "pages": {
-            "type": "string",
-            "description": (
-                'Page range for PDF files (e.g., "1-5", "3", "10-20"). Only applicable to PDF files.'
-            ),
+            "type": ["string", "null"],
+            "description": "Page range for PDF files; null for non-PDF reads",
         },
     },
-    "required": ["file_path"],
+    "required": ["file_path", "offset", "limit", "pages"],
     "additionalProperties": False,
 }
 
-MODIFY_SCHEMA: dict[str, Any] = {
+EDIT_TEXT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "file_path": {
+            "type": ["string", "null"],
+            "description": "Path to file. Use null when snippet_id scopes the edit.",
+        },
+        "snippet_id": {
+            "type": ["string", "null"],
+            "description": "Snippet id returned by read_file to scope the edit.",
+        },
+        "old_string": {
+            "type": "string",
+            "description": "Exact existing text to replace.",
+        },
+        "new_string": {
+            "type": "string",
+            "description": "Replacement text. Must change file content.",
+        },
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace all occurrences of old_string.",
+        },
+        "expected_occurrences": {
+            "type": ["number", "null"],
+            "description": "Expected number of matches; null skips this safety check.",
+        },
+    },
+    "required": [
+        "file_path",
+        "snippet_id",
+        "old_string",
+        "new_string",
+        "replace_all",
+        "expected_occurrences",
+    ],
+    "additionalProperties": False,
+}
+
+WRITE_FILE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "Absolute path to file. Optional when snippet_id scopes an existing edit.",
-        },
-        "snippet_id": {
-            "type": "string",
-            "description": (
-                "Snippet id returned by the Read or Modify tool to scope the search range after "
-                "a partial read."
-            ),
+            "description": "Path to the file under the current project.",
         },
         "content": {
             "type": "string",
-            "description": (
-                "Complete content for a new file only. Do not use for existing files; read the file "
-                "and use old_string/new_string instead."
-            ),
+            "description": "Complete file content.",
         },
-        "old_string": {
-            "type": "string",
-            "description": "Exact existing text to replace inside the file or snippet scope",
-        },
-        "new_string": {
-            "type": "string",
-            "description": "Replacement text for old_string",
-        },
-        "replace_all": {
+        "overwrite": {
             "type": "boolean",
-            "description": "Replace all occurrences of old_string (default false)",
-            "default": False,
+            "description": "Explicit intent to replace an existing file.",
         },
-        "expected_occurrences": {
-            "type": "number",
-            "description": (
-                "Expected number of matches, especially useful as a safety check with replace_all"
-            ),
+        "snapshot_id": {
+            "type": ["string", "null"],
+            "description": "Snapshot id returned by read_file for existing-file replacement.",
+        },
+        "expected_hash": {
+            "type": ["string", "null"],
+            "description": "Content hash returned by read_file for existing-file replacement.",
         },
     },
-    "required": [],
+    "required": ["file_path", "content", "overwrite", "snapshot_id", "expected_hash"],
     "additionalProperties": False,
 }
 
-EDIT_SCHEMA: dict[str, Any] = {
+APPLY_PATCH_OPERATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "type": {
+            "type": "string",
+            "enum": [
+                "create_file",
+                "replace_file",
+                "delete_file",
+                "move_file",
+                "replace_block",
+                "insert_before",
+                "insert_after",
+                "replace_all",
+            ],
+            "description": "Structured file operation type.",
+        },
         "file_path": {
             "type": "string",
-            "description": "Absolute path to file. Optional when snippet_id is provided.",
+            "description": "Path to the source or target file under the current project.",
         },
-        "snippet_id": {
-            "type": "string",
-            "description": (
-                "Snippet id returned by the Read or Edit tool to scope the search range after a partial read."
-            ),
+        "destination_path": {
+            "type": ["string", "null"],
+            "description": "Destination path for move_file; null for other operations.",
         },
-        "old_string": {
-            "type": "string",
-            "description": "Exact text to replace inside the file or snippet scope",
+        "content": {
+            "type": ["string", "null"],
+            "description": "File content for create_file/replace_file or inserted content for insert operations.",
         },
-        "new_string": {
-            "type": "string",
-            "description": "Replacement text (must differ from old_string)",
+        "old_text": {
+            "type": ["string", "null"],
+            "description": "Exact text to replace for replace_block or replace_all.",
         },
-        "replace_all": {
-            "type": "boolean",
-            "description": "Replace all occurences of old_string (default false)",
-            "default": False,
+        "new_text": {
+            "type": ["string", "null"],
+            "description": "Replacement text for replace_block or replace_all.",
+        },
+        "anchor": {
+            "type": ["string", "null"],
+            "description": "Exact anchor text for insert_before or insert_after.",
         },
         "expected_occurrences": {
-            "type": "number",
-            "description": (
-                "Expected number of matches, especially useful as a safety check with replace_all"
-            ),
+            "type": ["integer", "null"],
+            "description": "Expected match count for exact text or anchor operations.",
+        },
+        "replace_all": {
+            "type": ["boolean", "null"],
+            "description": "Whether to apply a block or insertion operation to every matching occurrence.",
+        },
+        "overwrite": {
+            "type": ["boolean", "null"],
+            "description": "Explicit overwrite intent for replace_file.",
+        },
+        "snapshot_id": {
+            "type": ["string", "null"],
+            "description": "Snapshot id returned by read_file for replace_file.",
+        },
+        "expected_hash": {
+            "type": ["string", "null"],
+            "description": "Content hash returned by read_file for replace_file.",
         },
     },
-    "required": ["old_string", "new_string"],
+    "required": [
+        "type",
+        "file_path",
+        "destination_path",
+        "content",
+        "old_text",
+        "new_text",
+        "anchor",
+        "expected_occurrences",
+        "replace_all",
+        "overwrite",
+        "snapshot_id",
+        "expected_hash",
+    ],
+    "additionalProperties": False,
+}
+
+APPLY_PATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "operations": {
+            "type": "array",
+            "description": "Structured file operations to preflight and commit as one logical patch.",
+            "items": APPLY_PATCH_OPERATION_SCHEMA,
+        },
+    },
+    "required": ["operations"],
     "additionalProperties": False,
 }
 

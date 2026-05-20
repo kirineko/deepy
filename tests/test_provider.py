@@ -88,7 +88,7 @@ async def test_deepy_model_sanitizes_replay_before_chat_completion_fetch(monkeyp
     call = {
         "arguments": '{"file_path":"README.md"}',
         "call_id": "call-read",
-        "name": "read",
+        "name": "read_file",
         "type": "function_call",
     }
     empty_message = {

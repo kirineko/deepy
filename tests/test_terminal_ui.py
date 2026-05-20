@@ -420,13 +420,13 @@ def test_resume_slash_command_prints_selected_session_history(tmp_path):
                 {
                     "type": "function_call",
                     "call_id": "call-1",
-                    "name": "read",
+                    "name": "read_file",
                     "arguments": '{"file_path":"README.md"}',
                 },
                 {
                     "type": "function_call_output",
                     "call_id": "call-1",
-                    "output": '{"ok":true,"name":"read","output":"","metadata":{"path":"README.md"}}',
+                    "output": '{"ok":true,"name":"read_file","output":"","metadata":{"path":"README.md"}}',
                 },
                 {
                     "role": "assistant",
@@ -557,7 +557,7 @@ def test_print_stream_event_merges_tool_call_and_output():
         console,
         DeepyStreamEvent(
             kind="tool_call",
-            name="read",
+            name="read_file",
             payload={"call_id": "call-1", "arguments": '{"file_path":"/repo/README.md"}'},
         ),
         project_root="/repo",
@@ -568,7 +568,7 @@ def test_print_stream_event_merges_tool_call_and_output():
         DeepyStreamEvent(
             kind="tool_output",
             payload={"call_id": "call-1"},
-            text='{"ok":true,"name":"read","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
+            text='{"ok":true,"name":"read_file","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
         ),
         pending_tool_calls=pending,
     )
@@ -648,7 +648,7 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     console = Console(record=True, width=120)
     output = {
         "ok": True,
-        "name": "edit",
+        "name": "edit_text",
         "output": "Edited file",
         "error": None,
         "metadata": {
@@ -664,7 +664,7 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     )
 
     rendered = console.export_text()
-    assert "[Modify]  ok" in rendered
+    assert "[Edit]  ok" in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -679,7 +679,7 @@ def test_print_stream_event_renders_write_preview_after_status():
     console = Console(record=True, width=120)
     output = {
         "ok": True,
-        "name": "write",
+        "name": "write_file",
         "output": "Wrote file",
         "error": None,
         "metadata": {
@@ -707,7 +707,7 @@ def test_print_stream_event_passes_console_width_to_diff_preview(monkeypatch):
     captured: dict[str, int | None] = {}
     output = {
         "ok": True,
-        "name": "edit",
+        "name": "edit_text",
         "output": "Edited file",
         "error": None,
         "metadata": {
@@ -740,7 +740,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
         console,
         DeepyStreamEvent(
             kind="tool_call",
-            name="write",
+            name="write_file",
             payload={
                 "call_id": "call-1",
                 "arguments": json_utils.dumps(
@@ -762,7 +762,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
             text=json_utils.dumps(
                 {
                     "ok": True,
-                    "name": "write",
+                    "name": "write_file",
                     "output": "Wrote file",
                     "error": None,
                     "metadata": {
@@ -1806,10 +1806,10 @@ def test_print_usage_footer_shows_turn_duration():
 
 
 def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
-    rendered = _working_status_text(time.monotonic(), "Running read README.md").plain
+    rendered = _working_status_text(time.monotonic(), "Running read_file README.md").plain
 
     assert "Working (0s · esc to interrupt)" in rendered
-    assert "Running read README.md" in rendered
+    assert "Running read_file README.md" in rendered
 
 
 def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path):
@@ -1823,12 +1823,12 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
         active_work="thinking",
     )
 
-    rendered = _working_status_text(time.monotonic(), "running read README.md", footer=footer).plain
+    rendered = _working_status_text(time.monotonic(), "running read_file README.md", footer=footer).plain
 
     assert rendered[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     assert "time 0s" in rendered
     assert "esc to interrupt" in rendered
-    assert "running read README.md" in rendered
+    assert "running read_file README.md" in rendered
     assert "model deepseek-v4-pro[max]" not in rendered
     assert f"cwd {tmp_path}" not in rendered
     assert "ctx unknown/1K" not in rendered

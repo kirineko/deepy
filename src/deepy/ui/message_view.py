@@ -25,7 +25,7 @@ MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
-DIFF_PREVIEW_TOOLS = {"edit", "modify", "write"}
+DIFF_PREVIEW_TOOLS = {"edit_text", "write_file", "apply_patch"}
 SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
 SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_text", "text"}
 SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
@@ -33,11 +33,11 @@ TOOL_DISPLAY_LABELS = {
     "AskUserQuestion": "AskUserQuestion",
     "WebFetch": "WebFetch",
     "WebSearch": "WebSearch",
-    "edit": "Modify",
+    "apply_patch": "Patch",
+    "edit_text": "Edit",
     "mcp": "MCP",
-    "modify": "Modify",
-    "write": "Write",
-    "read": "Read",
+    "write_file": "Write",
+    "read_file": "Read",
     "shell": "Shell",
     "todo_write": "Todo",
     "load_skill": "Load Skill",
@@ -65,6 +65,7 @@ class DiffPreview:
     added: int
     removed: int
     lines: list[DiffPreviewLine]
+    syntax_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,8 @@ def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | 
     diff = _tool_diff_text(view)
     if not diff:
         return None
+    if view.name.lower() in {"write_file", "apply_patch"}:
+        return diff
     return _limit_lines(diff, max_lines=max_lines)
 
 
@@ -200,9 +203,28 @@ def render_tool_diff_preview(
     raw_diff = _tool_diff_text(view)
     if not raw_diff:
         return None
-    diff = raw_diff if view.name.lower() == "write" else _limit_lines(raw_diff, max_lines=max_lines)
+    diff = (
+        raw_diff
+        if view.name.lower() in {"write_file", "apply_patch"}
+        else _limit_lines(raw_diff, max_lines=max_lines)
+    )
     if not diff:
         return None
+    if view.name.lower() == "apply_patch":
+        sections = split_diff_preview_sections(diff)
+        if not sections:
+            return None
+        renderables = []
+        for index, section in enumerate(sections):
+            if index:
+                renderables.append(Text(""))
+            syntax = _diff_preview_syntax(section, palette)
+            renderables.append(render_diff_preview_header(section, tool_name=view.name, palette=palette))
+            renderables.extend(
+                render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
+                for line in section.lines
+            )
+        return Group(*renderables)
     preview = parse_diff_preview_view(diff, path=view.path)
     if not preview.lines:
         return None
@@ -223,7 +245,40 @@ def parse_diff_preview_view(diff_preview: str, *, path: str | None = None) -> Di
         added=sum(1 for line in lines if line.kind == "added"),
         removed=sum(1 for line in lines if line.kind == "removed"),
         lines=lines,
+        syntax_path=_diff_path(diff_preview),
     )
+
+
+def split_diff_preview_sections(diff_preview: str) -> list[DiffPreview]:
+    sections: list[DiffPreview] = []
+    for chunk in _split_unified_diff_by_file(diff_preview):
+        preview = parse_diff_preview_view(chunk)
+        if preview.lines:
+            sections.append(preview)
+    return sections
+
+
+def _split_unified_diff_by_file(diff_preview: str) -> list[str]:
+    lines = diff_preview.splitlines()
+    if not lines:
+        return []
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if line.startswith("--- ") and current and any(
+            existing.startswith("--- ") for existing in current
+        ):
+            next_chunk_prefix: list[str] = []
+            if current and current[-1].startswith("... "):
+                next_chunk_prefix = [current.pop()]
+            if current:
+                chunks.append(current)
+            current = [*next_chunk_prefix, line]
+            continue
+        current.append(line)
+    if current:
+        chunks.append(current)
+    return ["\n".join(chunk) for chunk in chunks if chunk]
 
 
 def render_diff_preview_header(
@@ -297,7 +352,8 @@ def _diff_preview_syntax(preview: DiffPreview, palette: UiPalette) -> Syntax | N
 
 
 def _guess_diff_preview_lexer(preview: DiffPreview) -> str | None:
-    if not preview.path:
+    path = preview.syntax_path or preview.path
+    if not path:
         return None
     sample_lines: list[str] = []
     sample_size = 0
@@ -312,7 +368,7 @@ def _guess_diff_preview_lexer(preview: DiffPreview) -> str | None:
     if not sample.strip():
         return None
     try:
-        lexer = Syntax.guess_lexer(preview.path, sample)
+        lexer = Syntax.guess_lexer(path, sample)
     except Exception:
         return None
     return lexer if lexer and lexer != "default" else None
@@ -731,8 +787,10 @@ def _format_tool_params_snippet(
             return f"{count} {label}"
         return "read current list"
 
-    if tool_name in {"write", "modify"} and "content" in args:
+    if tool_name == "write_file" and "content" in args:
         return _format_write_params_snippet(args, project_root=project_root)
+    if tool_name == "apply_patch":
+        return _format_patch_params_snippet(args, project_root=project_root)
 
     if tool_name == "shell":
         command = args.get("command")
@@ -748,7 +806,7 @@ def _format_tool_params_snippet(
         return ""
     value = args[first_key]
     text = value if isinstance(value, str) else json_utils.dumps(value)
-    if tool_name == "read":
+    if tool_name == "read_file":
         return _shorten_project_path(text, project_root=project_root)
     return text
 
@@ -760,6 +818,30 @@ def _format_write_params_snippet(args: dict[str, Any], *, project_root: str | No
     if not isinstance(content, str):
         return path_text
     return f"{path_text} ({_text_size_summary(content)})"
+
+
+def _format_patch_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
+    operations = args.get("operations")
+    if isinstance(operations, list):
+        paths: list[str] = []
+        operation_count = 0
+        for operation in operations:
+            if not isinstance(operation, dict):
+                continue
+            operation_count += 1
+            for key in ("file_path", "destination_path"):
+                path = operation.get(key)
+                if isinstance(path, str) and path and path not in paths:
+                    paths.append(path)
+        if not paths:
+            label = "operation" if operation_count == 1 else "operations"
+            return f"{operation_count} {label}" if operation_count else "operations"
+        labels = [_shorten_project_path(path, project_root=project_root) for path in paths]
+        file_label = "file" if len(paths) == 1 else "files"
+        operation_label = "op" if operation_count == 1 else "ops"
+        return f"{operation_count} {operation_label}, {len(paths)} {file_label}: {', '.join(labels)}"
+
+    return "operations"
 
 
 def _text_size_summary(text: str) -> str:

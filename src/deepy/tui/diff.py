@@ -12,6 +12,7 @@ from deepy.ui.message_view import (
     parse_tool_output,
     render_diff_preview_header,
     render_diff_preview_line,
+    split_diff_preview_sections,
 )
 from deepy.ui.message_view import _diff_preview_syntax as diff_preview_syntax
 from deepy.ui.styles import DARK_PALETTE, LIGHT_PALETTE, UiPalette
@@ -29,6 +30,7 @@ class TuiDiffView:
     lines: list[DiffPreviewLine]
     truncated: bool = False
     hunks: tuple[str, ...] = ()
+    sections: tuple[DiffPreview, ...] = ()
 
 
 def diff_view_from_tool_output(
@@ -37,14 +39,17 @@ def diff_view_from_tool_output(
     max_lines: int = MAX_RENDERED_DIFF_LINES,
 ) -> TuiDiffView | None:
     view = parse_tool_output(output)
-    if view.ok is not True or view.name.lower() not in {"write", "modify", "edit"}:
+    if view.ok is not True or view.name.lower() not in {"write_file", "edit_text", "apply_patch"}:
         return None
     raw = view.diff_preview or view.diff
     if not raw:
         return None
-    preview = parse_diff_preview_view(raw, path=view.path)
+    sections: tuple[DiffPreview, ...] = ()
+    if view.name.lower() == "apply_patch":
+        sections = tuple(split_diff_preview_sections(raw))
+    preview = _aggregate_diff_sections(sections, fallback=parse_diff_preview_view(raw, path=view.path))
     lines = preview.lines
-    truncated = len(lines) > max_lines
+    truncated = view.name.lower() != "apply_patch" and len(lines) > max_lines
     if truncated:
         lines = lines[:max_lines]
     return TuiDiffView(
@@ -55,20 +60,36 @@ def diff_view_from_tool_output(
         lines=lines,
         truncated=truncated,
         hunks=tuple(line for line in raw.splitlines() if line.startswith("@@")),
+        sections=sections,
     )
 
 
 def render_unified_diff_text(view: TuiDiffView) -> str:
-    header_path = view.path or "file"
-    lines = [f"{header_path} (+{view.added} -{view.removed})"]
-    for line in view.lines:
+    if view.sections:
+        lines: list[str] = []
+        for index, section in enumerate(view.sections):
+            if index:
+                lines.append("")
+            lines.extend(_render_diff_preview_text_lines(section))
+        return "\n".join(lines)
+    return "\n".join(_render_diff_preview_text_lines(_view_as_preview(view), truncated=view.truncated))
+
+
+def _render_diff_preview_text_lines(
+    preview: DiffPreview,
+    *,
+    truncated: bool = False,
+) -> list[str]:
+    header_path = preview.path or "file"
+    lines = [f"{header_path} (+{preview.added} -{preview.removed})"]
+    for line in preview.lines:
         old_lineno = _line_number(line.old_lineno)
         new_lineno = _line_number(line.new_lineno)
         marker = line.marker or " "
         lines.append(f"{old_lineno} {new_lineno} {marker} {line.content}")
-    if view.truncated:
+    if truncated:
         lines.append("... diff truncated ...")
-    return "\n".join(lines)
+    return lines
 
 
 def render_unified_diff_rich(
@@ -78,12 +99,22 @@ def render_unified_diff_rich(
     width: int | None = None,
 ) -> Group:
     palette = _palette_for_theme(theme)
-    preview = DiffPreview(
-        path=view.path,
-        added=view.added,
-        removed=view.removed,
-        lines=view.lines,
-    )
+    if view.sections:
+        renderables = []
+        for index, preview in enumerate(view.sections):
+            if index:
+                renderables.append(Text(""))
+            syntax = diff_preview_syntax(preview, palette)
+            renderables.append(render_diff_preview_header(preview, tool_name=view.tool_name, palette=palette))
+            renderables.extend(
+                _fit_diff_line(
+                    render_diff_preview_line(line, palette=palette, width=width, syntax=syntax),
+                    width=width,
+                )
+                for line in preview.lines
+            )
+        return Group(*renderables)
+    preview = _view_as_preview(view)
     syntax = diff_preview_syntax(preview, palette)
     renderables = [
         render_diff_preview_header(preview, tool_name=view.tool_name, palette=palette),
@@ -98,6 +129,27 @@ def render_unified_diff_rich(
     if view.truncated:
         renderables.append(Text("... diff truncated ...", style=palette.diff_context))
     return Group(*renderables)
+
+
+def _aggregate_diff_sections(sections: tuple[DiffPreview, ...], *, fallback: DiffPreview) -> DiffPreview:
+    if not sections:
+        return fallback
+    lines = [line for section in sections for line in section.lines]
+    return DiffPreview(
+        path=f"{len(sections)} files" if len(sections) > 1 else sections[0].path,
+        added=sum(section.added for section in sections),
+        removed=sum(section.removed for section in sections),
+        lines=lines,
+    )
+
+
+def _view_as_preview(view: TuiDiffView) -> DiffPreview:
+    return DiffPreview(
+        path=view.path,
+        added=view.added,
+        removed=view.removed,
+        lines=view.lines,
+    )
 
 
 def _line_number(value: int | None) -> str:

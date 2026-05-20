@@ -40,11 +40,11 @@ def write_encoded_stdout_command(text: str, encoding: str) -> str:
 
 
 def test_tool_result_shape_is_stable():
-    payload = decode(ToolResult.ok_result("read", "hello").to_json())
+    payload = decode(ToolResult.ok_result("read_file", "hello").to_json())
 
     assert payload == {
         "ok": True,
-        "name": "read",
+        "name": "read_file",
         "output": "hello",
         "error": None,
         "metadata": {},
@@ -129,7 +129,7 @@ def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     assert denied["ok"] is False
     assert "read before" in denied["error"]
 
-    read_payload = decode(runtime.read("a.txt"))
+    read_payload = decode(runtime.read_file("a.txt"))
     assert read_payload["ok"] is True
     assert "1: one" in read_payload["output"]
 
@@ -152,7 +152,7 @@ def test_read_directory_lists_entries(tmp_path):
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("."))
+    payload = decode(runtime.read_file("."))
 
     assert payload["ok"] is True
     assert payload["metadata"]["kind"] == "directory"
@@ -179,7 +179,7 @@ def test_read_directory_respects_gitignore(tmp_path):
     (tmp_path / "reference").mkdir()
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("."))
+    payload = decode(runtime.read_file("."))
 
     assert payload["ok"] is True
     assert "visible.txt" in payload["output"]
@@ -196,7 +196,7 @@ def test_read_resolves_unique_relative_suffix(tmp_path):
     target_dir.joinpath("settings.py").write_text("value = 1\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("settings.py"))
+    payload = decode(runtime.read_file("settings.py"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["path"] == str(target_dir / "settings.py")
@@ -213,7 +213,7 @@ def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path):
     generated_dir.joinpath("settings.py").write_text("value = 2\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("settings.py"))
+    payload = decode(runtime.read_file("settings.py"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["path"] == str(source_dir / "settings.py")
@@ -229,7 +229,7 @@ def test_read_rejects_ambiguous_relative_suffix(tmp_path):
     second.joinpath("settings.py").write_text("two\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("settings.py"))
+    payload = decode(runtime.read_file("settings.py"))
 
     assert payload["ok"] is False
     assert "ambiguous" in payload["error"]
@@ -268,7 +268,7 @@ def test_read_notebook_returns_textual_cells_and_outputs(tmp_path):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("demo.ipynb"))
+    payload = decode(runtime.read_file("demo.ipynb"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["kind"] == "notebook"
@@ -285,7 +285,7 @@ def test_read_invalid_notebook_returns_parse_error(tmp_path):
     notebook.write_text("{not json", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("broken.ipynb"))
+    payload = decode(runtime.read_file("broken.ipynb"))
 
     assert payload["ok"] is False
     assert "Failed to parse notebook JSON" in payload["error"]
@@ -300,7 +300,7 @@ def test_read_image_returns_follow_up_message(tmp_path):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("pixel.png"))
+    payload = decode(runtime.read_file("pixel.png"))
 
     assert payload["ok"] is True
     assert payload["output"] == "File loaded."
@@ -325,7 +325,7 @@ def test_read_pdf_returns_base64_with_metadata(tmp_path):
     _write_fake_pdf(pdf, 2)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("small.pdf"))
+    payload = decode(runtime.read_file("small.pdf"))
 
     assert payload["ok"] is True
     assert payload["output"].startswith("data:application/pdf;base64,")
@@ -340,7 +340,7 @@ def test_read_large_pdf_requires_page_range(tmp_path):
     _write_fake_pdf(pdf, 11)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("large.pdf"))
+    payload = decode(runtime.read_file("large.pdf"))
 
     assert payload["ok"] is False
     assert 'provide "pages" to read a range' in payload["error"]
@@ -352,7 +352,7 @@ def test_read_pdf_accepts_page_range_metadata(tmp_path):
     _write_fake_pdf(pdf, 11)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("large.pdf", pages="2-3"))
+    payload = decode(runtime.read_file("large.pdf", pages="2-3"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["pageCount"] == 11
@@ -364,11 +364,11 @@ def test_read_pdf_rejects_invalid_page_range(tmp_path):
     _write_fake_pdf(pdf, 2)
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    too_many = decode(runtime.read("small.pdf", pages="1-21"))
+    too_many = decode(runtime.read_file("small.pdf", pages="1-21"))
     assert too_many["ok"] is False
     assert "exceeds 20 pages" in too_many["error"]
 
-    out_of_bounds = decode(runtime.read("small.pdf", pages="3"))
+    out_of_bounds = decode(runtime.read_file("small.pdf", pages="3"))
     assert out_of_bounds["ok"] is False
     assert "exceeds total page count" in out_of_bounds["error"]
 
@@ -381,7 +381,7 @@ def test_read_limits_large_files_by_default(tmp_path):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("large.txt"))
+    payload = decode(runtime.read_file("large.txt"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["lineCount"] == DEFAULT_LINE_LIMIT
@@ -401,7 +401,7 @@ def test_read_truncates_long_lines(tmp_path):
     target.write_text("x" * (MAX_LINE_LENGTH + 5), encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("long.txt"))
+    payload = decode(runtime.read_file("long.txt"))
 
     assert payload["ok"] is True
     assert "... [truncated]" in payload["output"]
@@ -414,16 +414,18 @@ def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("a.txt", start_line=2, limit=1))
+    payload = decode(runtime.read_file("a.txt", start_line=2, limit=1))
     denied = decode(runtime.edit("a.txt", "two", "TWO"))
-    denied_modify = decode(runtime.modify("a.txt", old="two", new="TWO"))
+    denied_edit_text = decode(
+        runtime.edit_text("a.txt", "two", "TWO", auto_read_if_missing_snapshot=False)
+    )
 
     assert payload["ok"] is True
     assert payload["metadata"]["trackedForWrite"] is False
     assert denied["ok"] is False
     assert "read before" in denied["error"]
-    assert denied_modify["ok"] is False
-    assert "read before" in denied_modify["error"]
+    assert denied_edit_text["ok"] is False
+    assert "read before" in denied_edit_text["error"]
 
 
 def test_partial_read_returns_snippet_metadata(tmp_path):
@@ -431,7 +433,7 @@ def test_partial_read_returns_snippet_metadata(tmp_path):
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("a.txt", start_line=2, limit=1))
+    payload = decode(runtime.read_file("a.txt", start_line=2, limit=1))
 
     assert payload["ok"] is True
     assert payload["metadata"]["trackedForWrite"] is False
@@ -449,7 +451,7 @@ def test_edit_can_scope_replacement_by_snippet_id(tmp_path):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    read_payload = decode(runtime.read("sample.txt", start_line=4, limit=2))
+    read_payload = decode(runtime.read_file("sample.txt", start_line=4, limit=2))
     snippet_id = read_payload["metadata"]["snippet"]["id"]
     edit_payload = decode(runtime.edit(None, "target = 1", "target = 2", snippet_id=snippet_id))
 
@@ -473,12 +475,94 @@ def test_edit_rejects_unknown_snippet_id(tmp_path):
     assert "Unknown snippet_id" in payload["error"]
 
 
+def test_edit_text_treats_string_null_snippet_id_as_absent(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.edit_text("a.txt", "old", "new", snippet_id="null"))
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["autoReadBeforeEdit"] is True
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_edit_text_can_recover_snapshot_id_passed_as_snippet_id(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    read_payload = decode(runtime.read_file("a.txt"))
+
+    payload = decode(
+        runtime.edit_text(
+            None,
+            "old",
+            "new",
+            snippet_id=read_payload["metadata"]["snapshot_id"],
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["inferredFromSnapshotId"] == read_payload["metadata"]["snapshot_id"]
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_edit_text_auto_promotes_partial_read_to_full_file_edit(tmp_path):
+    target = tmp_path / "styles.css"
+    target.write_text(
+        ".navbar {\n  display: flex;\n}\n\n.lang-toggle {\n  color: #5a67d8;\n}\n",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read_file("styles.css", start_line=1, limit=3))
+    payload = decode(
+        runtime.edit_text(
+            "styles.css",
+            ".lang-toggle {\n  color: #5a67d8;\n}",
+            ".lang-toggle {\n  color: #fff;\n}",
+        )
+    )
+
+    assert read_payload["metadata"]["trackedForWrite"] is False
+    assert payload["ok"] is True
+    assert payload["metadata"]["autoReadBeforeEdit"] is True
+    assert payload["metadata"]["autoReadReason"] == "partial"
+    assert payload["metadata"]["read_scope_type"] == "full"
+    assert target.read_text(encoding="utf-8").endswith(".lang-toggle {\n  color: #fff;\n}\n")
+
+
+def test_edit_text_falls_back_to_full_file_when_snippet_scope_misses(tmp_path):
+    target = tmp_path / "styles.css"
+    target.write_text(
+        ".navbar {\n  display: flex;\n}\n\n.lang-toggle {\n  color: #5a67d8;\n}\n",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read_file("styles.css", start_line=1, limit=3))
+    snippet_id = read_payload["metadata"]["snippet"]["id"]
+    payload = decode(
+        runtime.edit_text(
+            "styles.css",
+            ".lang-toggle {\n  color: #5a67d8;\n}",
+            ".lang-toggle {\n  color: #fff;\n}",
+            snippet_id=snippet_id,
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["read_scope_type"] == "full"
+    assert payload["metadata"]["fallbackFromSnippetId"] == snippet_id
+    assert target.read_text(encoding="utf-8").endswith(".lang-toggle {\n  color: #fff;\n}\n")
+
+
 def test_edit_returns_candidate_snippets_when_old_text_is_not_unique(tmp_path):
     target = tmp_path / "duplicate.txt"
     target.write_text("city\ncity\nsalary\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("duplicate.txt"))
+    decode(runtime.read_file("duplicate.txt"))
     payload = decode(runtime.edit("duplicate.txt", "city", "location"))
 
     assert payload["ok"] is False
@@ -499,7 +583,7 @@ def test_edit_candidate_snippet_can_scope_follow_up_edit(tmp_path):
     target.write_text("city\ncity\nsalary\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("duplicate.txt"))
+    decode(runtime.read_file("duplicate.txt"))
     duplicate = decode(runtime.edit("duplicate.txt", "city", "location"))
     snippet_id = duplicate["metadata"]["candidates"][1]["snippet_id"]
     edited = decode(runtime.edit("duplicate.txt", "city", "location", snippet_id=snippet_id))
@@ -514,7 +598,7 @@ def test_edit_uses_loose_escape_match_when_quotes_are_overescaped(tmp_path):
     target.write_text('print("hello")\n', encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("quotes.py"))
+    decode(runtime.read_file("quotes.py"))
     payload = decode(runtime.edit("quotes.py", 'print(\\"hello\\")', 'print("hi")'))
 
     assert payload["ok"] is True
@@ -548,7 +632,7 @@ def test_edit_uses_llm_escape_correction_when_configured(tmp_path, monkeypatch):
 
     monkeypatch.setattr("deepy.tools.builtin._edit_correction_chat", fake_correction_chat)
 
-    decode(runtime.read("query.py"))
+    decode(runtime.read_file("query.py"))
     payload = decode(
         runtime.edit(
             "query.py",
@@ -568,7 +652,7 @@ def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path):
     target.write_text("alpha\nbeta = 1\ngamma\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("near.txt"))
+    decode(runtime.read_file("near.txt"))
     payload = decode(runtime.edit("near.txt", "bet = 1", "beta = 2"))
 
     assert payload["ok"] is False
@@ -587,7 +671,7 @@ def test_edit_detects_mtime_change_after_read(tmp_path):
     target.write_text("one\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("a.txt"))
+    decode(runtime.read_file("a.txt"))
     target.write_text("changed\n", encoding="utf-8")
     os.utime(target, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns + 1_000_000))
 
@@ -597,16 +681,16 @@ def test_edit_detects_mtime_change_after_read(tmp_path):
     assert "changed since it was read" in payload["error"]
 
 
-def test_modify_preserves_stale_protection_after_read(tmp_path):
+def test_edit_text_preserves_stale_protection_after_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("a.txt"))
+    decode(runtime.read_file("a.txt"))
     target.write_text("changed\n", encoding="utf-8")
     os.utime(target, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns + 1_000_000))
 
-    payload = decode(runtime.modify("a.txt", old="changed", new="updated"))
+    payload = decode(runtime.edit_text("a.txt", "changed", "updated"))
 
     assert payload["ok"] is False
     assert "changed since it was read" in payload["error"]
@@ -628,27 +712,734 @@ def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     assert "read before" in denied["error"]
 
 
-def test_modify_creates_new_files_and_edits_existing_files(tmp_path):
+def test_write_file_creates_new_files_and_edit_text_edits_existing_files(tmp_path):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    created = decode(runtime.modify("new.txt", content="hello\n"))
+    created = decode(runtime.write_file("new.txt", "hello\n"))
     assert created["ok"] is True
     assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
 
-    denied = decode(runtime.modify("existing.txt", content="changed\n"))
+    denied = decode(runtime.write_file("existing.txt", "changed\n"))
     assert denied["ok"] is False
-    assert "old_string/new_string" in denied["error"]
+    assert "overwrite" in denied["error"]
 
-    edited = decode(runtime.modify("existing.txt", old="old", new="new"))
+    edited = decode(runtime.edit_text("existing.txt", "old", "new"))
 
     assert edited["ok"] is True
-    assert edited["metadata"]["autoReadBeforeModify"] is True
+    assert edited["metadata"]["autoReadBeforeEdit"] is True
     assert "-old" in edited["metadata"]["diff"]
     assert "+new" in edited["metadata"]["diff"]
     assert edited["metadata"]["diff_preview"] == edited["metadata"]["diff"]
     assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_read_file_returns_snapshot_hash_and_edit_text_enforces_expected_count(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\nold\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    read_payload = decode(runtime.read_file("existing.txt"))
+
+    assert read_payload["ok"] is True
+    assert read_payload["name"] == "read_file"
+    assert read_payload["metadata"]["snapshot_id"].startswith("snapshot_")
+    assert len(read_payload["metadata"]["content_hash"]) == 64
+
+    mismatch = decode(
+        runtime.edit_text(
+            "existing.txt",
+            "old",
+            "new",
+            replace_all=True,
+            expected_occurrences=1,
+        )
+    )
+    assert mismatch["ok"] is False
+    assert mismatch["metadata"]["error_code"] == "expected_count_mismatch"
+    assert mismatch["metadata"]["expectedOccurrences"] == 1
+    assert mismatch["metadata"]["actualOccurrences"] == 2
+
+    edited = decode(
+        runtime.edit_text(
+            "existing.txt",
+            "old",
+            "new",
+            replace_all=True,
+            expected_occurrences=2,
+        )
+    )
+
+    assert edited["ok"] is True
+    assert edited["name"] == "edit_text"
+    assert edited["metadata"]["occurrences"] == 2
+    assert target.read_text(encoding="utf-8") == "new\nnew\n"
+
+
+def test_write_file_requires_overwrite_intent_and_snapshot_for_existing_file(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    created = decode(runtime.write_file("new.txt", "hello\n"))
+    assert created["ok"] is True
+    assert created["name"] == "write_file"
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
+
+    denied = decode(runtime.write_file("existing.txt", "changed\n"))
+    assert denied["ok"] is False
+    assert denied["metadata"]["error_code"] == "invalid_arguments"
+
+    read_payload = decode(runtime.read_file("existing.txt"))
+    replaced = decode(
+        runtime.write_file(
+            "existing.txt",
+            "changed\n",
+            overwrite=True,
+            snapshot_id=read_payload["metadata"]["snapshot_id"],
+        )
+    )
+
+    assert replaced["ok"] is True
+    assert target.read_text(encoding="utf-8") == "changed\n"
+
+
+def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\nold\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.edit_text(
+            "existing.txt",
+            "old",
+            "new",
+            replace_all=True,
+            expected_occurrences=1,
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["name"] == "edit_text"
+    assert payload["metadata"]["error_code"] == "expected_count_mismatch"
+    assert target.read_text(encoding="utf-8") == "old\nold\n"
+
+
+def test_edit_text_rejects_noop_with_structured_error(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read_file("existing.txt"))
+    payload = decode(runtime.edit_text("existing.txt", "old", "old"))
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "no_op"
+
+
+def test_mutation_rejects_workspace_escape_and_symlink_escape(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    outside = decode(runtime.write_file("../outside.txt", "no\n"))
+    assert outside["ok"] is False
+    assert outside["metadata"]["error_code"] == "path_policy"
+
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external"
+    external_dir.mkdir()
+    link = tmp_path / "escape"
+    link.symlink_to(external_dir, target_is_directory=True)
+
+    escaped = decode(runtime.write_file("escape/file.txt", "no\n"))
+    assert escaped["ok"] is False
+    assert escaped["metadata"]["error_code"] in {"path_policy", "symlink_policy"}
+
+
+def test_sensitive_file_policy_requires_approval_without_writing(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.write_file(".env", "TOKEN=secret\n"))
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "approval_required"
+    assert payload["metadata"]["policyDecision"] == "requires_approval"
+    assert not (tmp_path / ".env").exists()
+
+
+def test_apply_patch_add_update_delete_and_move(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    moved = tmp_path / "move_me.txt"
+    moved.write_text("move\n", encoding="utf-8")
+    delete = tmp_path / "delete_me.txt"
+    delete.write_text("delete\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    decode(runtime.read_file("existing.txt"))
+    decode(runtime.read_file("move_me.txt"))
+    decode(runtime.read_file("delete_me.txt"))
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "create_file",
+                    "file_path": "created.txt",
+                    "content": "created\n",
+                },
+                {
+                    "type": "replace_block",
+                    "file_path": "existing.txt",
+                    "old_text": "old\n",
+                    "new_text": "new\n",
+                    "expected_occurrences": 1,
+                },
+                {
+                    "type": "move_file",
+                    "file_path": "move_me.txt",
+                    "destination_path": "moved.txt",
+                },
+                {
+                    "type": "delete_file",
+                    "file_path": "delete_me.txt",
+                },
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["name"] == "apply_patch"
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created\n"
+    assert target.read_text(encoding="utf-8") == "new\n"
+    assert not moved.exists()
+    assert (tmp_path / "moved.txt").read_text(encoding="utf-8") == "move\n"
+    assert not delete.exists()
+    assert str(tmp_path / "created.txt") in payload["metadata"]["changedFiles"]
+    delete_op = next(
+        item for item in payload["metadata"]["operations"] if item["operation"] == "delete_file"
+    )
+    assert delete_op["backupCreated"] is True
+    assert (tmp_path / ".deepy" / "backups").is_dir()
+    assert "-old" in payload["metadata"]["diff"]
+    assert "+new" in payload["metadata"]["diff"]
+
+
+def test_apply_patch_returns_full_multi_file_diff_preview(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "create_file",
+                    "file_path": "index.html",
+                    "content": "".join(f"<p>index {index}</p>\n" for index in range(50)),
+                },
+                {
+                    "type": "create_file",
+                    "file_path": "styles.css",
+                    "content": "".join(
+                        f".item-{index} {{ color: red; }}\n" for index in range(50)
+                    ),
+                },
+                {
+                    "type": "create_file",
+                    "file_path": "main.js",
+                    "content": "".join(f"console.log({index});\n" for index in range(50)),
+                },
+                {
+                    "type": "create_file",
+                    "file_path": "README.md",
+                    "content": "".join(f"line {index}\n" for index in range(50)),
+                },
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["path"] == "4 files"
+    assert len(payload["metadata"]["changedFiles"]) == 4
+    assert "index 49" in payload["metadata"]["diff"]
+    assert "line 49" in payload["metadata"]["diff"]
+    preview = payload["metadata"]["diff_preview"]
+    assert preview == payload["metadata"]["diff"]
+    assert "index 49" in preview
+    assert "line 49" in preview
+    assert "truncated" not in preview
+
+
+def test_apply_patch_preflight_failure_leaves_files_unchanged(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    decode(runtime.read_file("existing.txt"))
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "create_file",
+                    "file_path": "created.txt",
+                    "content": "created\n",
+                },
+                {
+                    "type": "replace_block",
+                    "file_path": "existing.txt",
+                    "old_text": "missing\n",
+                    "new_text": "new\n",
+                    "expected_occurrences": 1,
+                },
+            ]
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "patch_apply_error"
+    assert payload["metadata"]["preflightFailed"] is True
+    assert target.read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "created.txt").exists()
+
+
+def test_apply_patch_rejects_patch_string_payload(tmp_path):
+    target = tmp_path / "src" / "app.rs"
+    target.parent.mkdir()
+    target.write_text("fn old() {}\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            """```text
+*** Begin Patch
+*** Update File: a/src/app.rs
+--- a/src/app.rs
++++ b/src/app.rs
+@@
+-fn old() {}
++fn new() {}
+*** End Patch
+```"""
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "patch_parse_error"
+    assert payload["metadata"]["expectedProtocol"] == "structured_operations"
+    assert target.read_text(encoding="utf-8") == "fn old() {}\n"
+
+
+def test_apply_patch_create_file_uses_literal_structured_path(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "create_file",
+                    "file_path": "src/new.rs",
+                    "content": "fn main() {}\n",
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert (tmp_path / "src" / "new.rs").read_text(encoding="utf-8") == "fn main() {}\n"
+
+
+def test_apply_patch_replace_block_matches_eof_without_trailing_newline(tmp_path):
+    target = tmp_path / "README.md"
+    target.write_text("title", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": "README.md",
+                    "old_text": "title\n",
+                    "new_text": "heading\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_text(encoding="utf-8") == "heading"
+
+
+def test_apply_patch_replace_block_handles_yaml_list_text(tmp_path):
+    target = tmp_path / "items.yml"
+    target.write_text("- old\n- keep\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": "items.yml",
+                    "old_text": "- old\n- keep\n",
+                    "new_text": "- new\n- keep\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_text(encoding="utf-8") == "- new\n- keep\n"
+
+
+def test_apply_patch_accepts_unprefixed_replacement_pair_hunks(tmp_path):
+    target = tmp_path / "src" / "main.rs"
+    target.parent.mkdir()
+    target.write_text(
+        """fn main() {
+    let test_cases = vec![
+        ("III", 3),
+        ("IV", 4),
+        ("IX", 9),
+        ("LVIII", 58),
+    ];
+
+    for (roman, expected) in &test_cases {
+        println!("{roman} {expected}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic() {
+        assert_eq!(1, 1);
+    }
+
+    #[test]
+    fn test_extra() {
+        assert_eq!(2, 2);
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": str(target),
+                    "old_text": """    let test_cases = vec![
+        ("III", 3),
+        ("IV", 4),
+        ("IX", 9),
+        ("LVIII", 58),
+    ];
+""",
+                    "new_text": """    let test_cases = vec![
+        ("III", 3),
+        ("IV", 4),
+    ];
+""",
+                    "expected_occurrences": 1,
+                },
+                {
+                    "type": "replace_block",
+                    "file_path": str(target),
+                    "old_text": """    #[test]
+    fn test_basic() {
+        assert_eq!(1, 1);
+    }
+
+    #[test]
+    fn test_extra() {
+        assert_eq!(2, 2);
+    }
+""",
+                    "new_text": """    #[test]
+    fn test_examples() {
+        assert_eq!(1, 1);
+    }
+""",
+                    "expected_occurrences": 1,
+                },
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    updated = target.read_text(encoding="utf-8")
+    assert '        ("IX", 9),' not in updated
+    assert "fn test_basic()" not in updated
+    assert "fn test_extra()" not in updated
+    assert "fn test_examples()" in updated
+    assert payload["metadata"]["changedFiles"] == [str(target)]
+
+
+def test_apply_patch_accepts_css_replacement_blocks_with_selector_prefixes(tmp_path):
+    target = tmp_path / "styles.css"
+    target.write_text(
+        """:root {
+--accent: #3b82f6;
+}
+
+.about-text p {
+    margin-bottom: 1rem;
+    color: #555;
+}
+
+.about-stats {
+    display: grid;
+    gap: 1rem;
+}
+""",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": "styles.css",
+                    "old_text": """:root {
+--accent: #3b82f6;
+}
+
+.about-text p {
+    margin-bottom: 1rem;
+    color: #555;
+}
+
+.about-stats {
+    display: grid;
+    gap: 1rem;
+}
+""",
+                    "new_text": """:root {
+--accent: #10b981;
+}
+
+.about-text p {
+    margin-bottom: 1rem;
+    color: #444;
+}
+
+.about-skills {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+}
+""",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    updated = target.read_text(encoding="utf-8")
+    assert "--accent: #10b981" in updated
+    assert ".about-skills" in updated
+    assert ".dot" in updated
+    assert ".about-stats" not in updated
+
+
+def test_apply_patch_insert_after_anchor(tmp_path):
+    target = tmp_path / "index.html"
+    target.write_text(
+        """<section id="about">
+
+  <p>Old bio</p>
+</section>
+""",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "insert_after",
+                    "file_path": "index.html",
+                    "anchor": "  <p>Old bio</p>\n",
+                    "content": "  <p>New bio</p>\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_text(encoding="utf-8") == """<section id="about">
+
+  <p>Old bio</p>
+  <p>New bio</p>
+</section>
+"""
+
+
+def test_apply_patch_replace_all_returns_actual_count(tmp_path):
+    target = tmp_path / "index.html"
+    target.write_text(
+        """<p>Old bio</p>
+<p>Old bio</p>
+""",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_all",
+                    "file_path": "index.html",
+                    "old_text": "Old bio",
+                    "new_text": "New bio",
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["operations"][0]["actualOccurrences"] == 2
+    assert target.read_text(encoding="utf-8") == """<p>New bio</p>
+<p>New bio</p>
+"""
+
+
+def test_apply_patch_insert_before_anchor(tmp_path):
+    target = tmp_path / "styles.css"
+    target.write_text(".about {\n  display: grid;\n}\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "insert_before",
+                    "file_path": "styles.css",
+                    "anchor": ".about {\n",
+                    "content": ".about-tags {\n  display: flex;\n}\n\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_text(encoding="utf-8").startswith(
+        ".about-tags {\n  display: flex;\n}\n\n.about {\n"
+    )
+
+
+def test_apply_patch_replace_file_requires_freshness_token(tmp_path):
+    target = tmp_path / "README.md"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    rejected = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_file",
+                    "file_path": "README.md",
+                    "content": "new\n",
+                    "overwrite": True,
+                }
+            ]
+        )
+    )
+    assert rejected["ok"] is False
+    assert rejected["metadata"]["failures"][0]["error_code"] == "stale_snapshot"
+
+    read_payload = decode(runtime.read_file("README.md"))
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_file",
+                    "file_path": "README.md",
+                    "content": "new\n",
+                    "overwrite": True,
+                    "snapshot_id": read_payload["metadata"]["snapshot_id"],
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_apply_patch_rejects_invalid_structured_operation_fields(tmp_path):
+    target = tmp_path / "README.md"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "delete_file",
+                    "file_path": "README.md",
+                    "content": "unexpected",
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "patch_parse_error"
+    assert payload["metadata"]["failures"][0]["invalidFields"] == ["content"]
+    assert target.exists()
+
+
+def test_apply_patch_expected_occurrences_mismatch_leaves_file_unchanged(tmp_path):
+    target = tmp_path / "README.md"
+    target.write_text("same\nsame\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": "README.md",
+                    "old_text": "same\n",
+                    "new_text": "changed\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "patch_apply_error"
+    assert payload["metadata"]["failures"][0]["error_code"] == "expected_count_mismatch"
+    assert target.read_text(encoding="utf-8") == "same\nsame\n"
+
+
+def test_bat_and_cmd_new_files_default_to_crlf_without_bom(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    bat = decode(runtime.write_file("script.bat", "echo hello\n"))
+    cmd = decode(runtime.write_file("script.cmd", "echo hello\n"))
+
+    assert bat["ok"] is True
+    assert cmd["ok"] is True
+    assert (tmp_path / "script.bat").read_bytes() == b"echo hello\r\n"
+    assert (tmp_path / "script.cmd").read_bytes() == b"echo hello\r\n"
 
 
 def test_write_preserves_existing_crlf_line_endings(tmp_path):
@@ -656,7 +1447,7 @@ def test_write_preserves_existing_crlf_line_endings(tmp_path):
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("windows.txt"))
+    decode(runtime.read_file("windows.txt"))
     payload = decode(runtime.write("windows.txt", "one\ntwo\n"))
 
     assert payload["ok"] is True
@@ -669,7 +1460,7 @@ def test_write_does_not_double_translate_existing_crlf_bytes(tmp_path):
     target.write_bytes(b"alpha\r\nbeta\r\n")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    decode(runtime.read("windows.txt"))
+    decode(runtime.read_file("windows.txt"))
     payload = decode(runtime.write("windows.txt", "one\ntwo\n"))
 
     assert payload["ok"] is True
@@ -682,7 +1473,7 @@ def test_write_preserves_existing_utf16le_encoding(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-16")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    read_payload = decode(runtime.read("utf16.txt"))
+    read_payload = decode(runtime.read_file("utf16.txt"))
     payload = decode(runtime.write("utf16.txt", "one\ntwo\n"))
 
     assert read_payload["metadata"]["encoding"] == "utf16le"
@@ -697,7 +1488,7 @@ def test_write_preserves_existing_utf8_sig_encoding(tmp_path):
     target.write_bytes("城市=北京\n".encode("utf-8-sig"))
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    decode(runtime.read("utf8_sig.py"))
+    decode(runtime.read_file("utf8_sig.py"))
     payload = decode(runtime.write("utf8_sig.py", "城市=上海\n"))
 
     assert payload["ok"] is True
@@ -706,12 +1497,62 @@ def test_write_preserves_existing_utf8_sig_encoding(tmp_path):
     assert target.read_bytes().decode("utf-8-sig") == "城市=上海\n"
 
 
+def test_write_file_preserves_existing_windows_encodings(tmp_path):
+    utf16 = tmp_path / "utf16.txt"
+    utf16.write_text("alpha\nbeta\n", encoding="utf-16")
+    utf8_sig = tmp_path / "utf8_sig.py"
+    utf8_sig.write_bytes("城市=北京\n".encode("utf-8-sig"))
+    gb18030 = tmp_path / "gb18030.txt"
+    gb18030.write_bytes("城市=北京\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    utf16_read = decode(runtime.read_file("utf16.txt"))
+    utf16_payload = decode(
+        runtime.write_file(
+            "utf16.txt",
+            "one\ntwo\n",
+            overwrite=True,
+            snapshot_id=utf16_read["metadata"]["snapshot_id"],
+        )
+    )
+    utf8_sig_read = decode(runtime.read_file("utf8_sig.py"))
+    utf8_sig_payload = decode(
+        runtime.write_file(
+            "utf8_sig.py",
+            "城市=上海\n",
+            overwrite=True,
+            expected_hash=utf8_sig_read["metadata"]["content_hash"],
+        )
+    )
+    gb18030_read = decode(runtime.read_file("gb18030.txt"))
+    gb18030_payload = decode(
+        runtime.write_file(
+            "gb18030.txt",
+            "城市=上海\n",
+            overwrite=True,
+            snapshot_id=gb18030_read["metadata"]["snapshot_id"],
+        )
+    )
+
+    assert utf16_payload["ok"] is True
+    assert utf16_payload["metadata"]["encoding"] == "utf16le"
+    assert utf16.read_bytes().startswith(b"\xff\xfe")
+    assert utf16.read_text(encoding="utf-16") == "one\ntwo\n"
+    assert utf8_sig_payload["ok"] is True
+    assert utf8_sig_payload["metadata"]["encoding"] == "utf8-sig"
+    assert utf8_sig.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert utf8_sig.read_bytes().decode("utf-8-sig") == "城市=上海\n"
+    assert gb18030_payload["ok"] is True
+    assert gb18030_payload["metadata"]["encoding"] == "gb18030"
+    assert gb18030.read_bytes().decode("gb18030") == "城市=上海\n"
+
+
 def test_read_decodes_gbk_compatible_text(tmp_path):
     target = tmp_path / "gbk.txt"
     target.write_bytes("城市=北京\n".encode("gb18030"))
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("gbk.txt"))
+    payload = decode(runtime.read_file("gbk.txt"))
 
     assert payload["ok"] is True
     assert "1: 城市=北京" in payload["output"]
@@ -723,7 +1564,7 @@ def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
     target.write_text("城市=北京\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    payload = decode(runtime.read("utf8.txt"))
+    payload = decode(runtime.read_file("utf8.txt"))
 
     assert payload["ok"] is True
     assert "1: 城市=北京" in payload["output"]
@@ -733,7 +1574,7 @@ def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
 def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    payload = decode(runtime.modify("notes.py", content="# 中文注释\nprint('ok')\n"))
+    payload = decode(runtime.write_file("notes.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "notes.py"
 
     assert payload["ok"] is True
@@ -745,7 +1586,7 @@ def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
 def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    payload = decode(runtime.modify("script.py", content="# 中文注释\nprint('ok')\n"))
+    payload = decode(runtime.write_file("script.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "script.py"
     source = target.read_text(encoding="utf-8")
 
@@ -758,7 +1599,7 @@ def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path):
 def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    payload = decode(runtime.modify("notes.py", content="# comment\nprint('ok')\n"))
+    payload = decode(runtime.write_file("notes.py", "# comment\nprint('ok')\n"))
     target = tmp_path / "notes.py"
 
     assert payload["ok"] is True
@@ -770,7 +1611,7 @@ def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
 def test_posix_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="darwin")
 
-    payload = decode(runtime.modify("notes.py", content="# 中文注释\nprint('ok')\n"))
+    payload = decode(runtime.write_file("notes.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "notes.py"
 
     assert payload["ok"] is True
@@ -804,14 +1645,14 @@ def test_write_rejects_non_string_content_for_non_json_files(tmp_path):
     assert payload["error"] == "content must be a string."
 
 
-def test_modify_content_after_out_of_band_delete_preserves_stale_protection(tmp_path):
+def test_write_file_after_out_of_band_delete_preserves_stale_protection(tmp_path):
     target = tmp_path / "notes.py"
     target.write_text("print('old')\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
 
-    decode(runtime.read("notes.py"))
+    decode(runtime.read_file("notes.py"))
     target.unlink()
-    payload = decode(runtime.modify("notes.py", content="print('new')\n"))
+    payload = decode(runtime.write_file("notes.py", "print('new')\n"))
 
     assert payload["ok"] is False
     assert payload["error"] == "File changed since it was read: it no longer exists."
@@ -827,7 +1668,7 @@ def test_edit_preserves_existing_crlf_line_endings(tmp_path):
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("windows.txt"))
+    decode(runtime.read_file("windows.txt"))
     payload = decode(runtime.edit("windows.txt", "beta", "gamma"))
 
     assert payload["ok"] is True
@@ -844,12 +1685,12 @@ def test_edit_matches_crlf_file_with_lf_old_string(tmp_path):
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("unicode_demo.py"))
+    decode(runtime.read_file("unicode_demo.py"))
     payload = decode(
-        runtime.modify(
+        runtime.edit_text(
             "unicode_demo.py",
-            old="def demo():\n    title = '中文和Unicode字符演示程序'",
-            new="def demo():\n    title = 'Unicode Character Demo Program'",
+            "def demo():\n    title = '中文和Unicode字符演示程序'",
+            "def demo():\n    title = 'Unicode Character Demo Program'",
         )
     )
 
@@ -866,7 +1707,7 @@ def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-16")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("utf16.txt"))
+    decode(runtime.read_file("utf16.txt"))
     payload = decode(runtime.edit("utf16.txt", "beta", "gamma"))
 
     assert payload["ok"] is True
@@ -880,8 +1721,8 @@ def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path):
     target.write_bytes("城市=北京\n".encode("gb18030"))
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("gbk.txt"))
-    payload = decode(runtime.modify("gbk.txt", old="北京", new="上海"))
+    decode(runtime.read_file("gbk.txt"))
+    payload = decode(runtime.edit_text("gbk.txt", "北京", "上海"))
 
     assert payload["ok"] is True
     assert payload["metadata"]["encoding"] == "gb18030"
@@ -893,12 +1734,12 @@ def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path):
     target.write_bytes("标题=中文\r\n城市=北京\r\n".encode("gb18030"))
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("gbk_crlf.txt"))
+    decode(runtime.read_file("gbk_crlf.txt"))
     payload = decode(
-        runtime.modify(
+        runtime.edit_text(
             "gbk_crlf.txt",
-            old="标题=中文\n城市=北京",
-            new="Title=Chinese\nCity=Beijing",
+            "标题=中文\n城市=北京",
+            "Title=Chinese\nCity=Beijing",
         )
     )
 
@@ -909,18 +1750,42 @@ def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path):
     assert target.read_bytes().decode("gb18030") == "Title=Chinese\r\nCity=Beijing\r\n"
 
 
+def test_apply_patch_preserves_existing_encoding_and_crlf_line_endings(tmp_path):
+    target = tmp_path / "gb18030_crlf.txt"
+    target.write_bytes("标题=中文\r\n城市=北京\r\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    payload = decode(
+        runtime.apply_patch(
+            [
+                {
+                    "type": "replace_block",
+                    "file_path": "gb18030_crlf.txt",
+                    "old_text": "城市=北京\n",
+                    "new_text": "城市=上海\n",
+                    "expected_occurrences": 1,
+                }
+            ]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert target.read_bytes().decode("gb18030") == "标题=中文\r\n城市=上海\r\n"
+    assert not target.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
 def test_edit_matches_crlf_file_with_lf_old_string_in_snippet_scope(tmp_path):
     target = tmp_path / "sample.txt"
     target.write_bytes(b"alpha\r\ntarget = 1\r\nomega\r\nbeta\r\ntarget = 1\r\ndone\r\n")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    read_payload = decode(runtime.read("sample.txt", start_line=4, limit=2))
+    read_payload = decode(runtime.read_file("sample.txt", start_line=4, limit=2))
     snippet_id = read_payload["metadata"]["snippet"]["id"]
     payload = decode(
-        runtime.modify(
+        runtime.edit_text(
             None,
-            old="beta\ntarget = 1",
-            new="beta\ntarget = 2",
+            "beta\ntarget = 1",
+            "beta\ntarget = 2",
             snippet_id=snippet_id,
         )
     )
@@ -936,8 +1801,8 @@ def test_edit_line_ending_tolerant_absent_text_still_reports_closest_match(tmp_p
     target.write_bytes(b"alpha\r\nbeta = 1\r\ngamma\r\n")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    decode(runtime.read("near.txt"))
-    payload = decode(runtime.modify("near.txt", old="bet = 1\nextra", new="beta = 2\nextra"))
+    decode(runtime.read_file("near.txt"))
+    payload = decode(runtime.edit_text("near.txt", "bet = 1\nextra", "beta = 2\nextra"))
 
     assert payload["ok"] is False
     assert payload["error"] == "old_string not found in file."
@@ -1245,8 +2110,10 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert [tool.name for tool in tools] == [
         "shell",
         "AskUserQuestion",
-        "read",
-        "modify",
+        "read_file",
+        "edit_text",
+        "write_file",
+        "apply_patch",
         "WebSearch",
         "WebFetch",
         "load_skill",
@@ -1263,11 +2130,19 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "偏好" in ask_tool.description
     assert "for Chinese requests, ask in Chinese" in ask_tool.description
     assert "low-impact details" in ask_tool.description
-    modify_tool = tools[3]
-    assert modify_tool.name == "modify"
-    assert "old_string/new_string" in modify_tool.description
-    assert "read first when you need to inspect context" in modify_tool.description
-    assert "read first and use old_string/new_string" not in modify_tool.description
+    read_tool = tools[2]
+    assert read_tool.name == "read_file"
+    assert "managed text snapshots" in read_tool.description
+    edit_tool = tools[3]
+    assert edit_tool.name == "edit_text"
+    assert "Preferred tool for small single-file exact/string edits" in edit_tool.description
+    write_tool = tools[4]
+    assert write_tool.name == "write_file"
+    assert "snapshot_id or expected_hash" in write_tool.description
+    patch_tool = tools[5]
+    assert patch_tool.name == "apply_patch"
+    assert "multiple edits in one file" in patch_tool.description
+    assert "operations array" in patch_tool.description
     skill_tool = tools[-2]
     assert skill_tool.name == "load_skill"
     todo_tool = tools[-1]
@@ -1284,22 +2159,43 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
     assert list(tools["shell"].params_json_schema["properties"]) == ["command", "description"]
     assert tools["AskUserQuestion"].params_json_schema["required"] == ["questions"]
     assert list(tools["AskUserQuestion"].params_json_schema["properties"]) == ["questions"]
-    assert tools["read"].params_json_schema["required"] == ["file_path"]
-    assert list(tools["read"].params_json_schema["properties"]) == [
+    assert tools["read_file"].params_json_schema["required"] == [
         "file_path",
         "offset",
         "limit",
         "pages",
     ]
-    assert tools["modify"].params_json_schema["required"] == []
-    assert list(tools["modify"].params_json_schema["properties"]) == [
+    assert tools["edit_text"].params_json_schema["required"] == [
         "file_path",
         "snippet_id",
-        "content",
         "old_string",
         "new_string",
         "replace_all",
         "expected_occurrences",
+    ]
+    assert tools["write_file"].params_json_schema["required"] == [
+        "file_path",
+        "content",
+        "overwrite",
+        "snapshot_id",
+        "expected_hash",
+    ]
+    assert tools["apply_patch"].params_json_schema["required"] == ["operations"]
+    operation_schema = tools["apply_patch"].params_json_schema["properties"]["operations"]["items"]
+    assert "patch" not in tools["apply_patch"].params_json_schema["properties"]
+    assert operation_schema["required"] == [
+        "type",
+        "file_path",
+        "destination_path",
+        "content",
+        "old_text",
+        "new_text",
+        "anchor",
+        "expected_occurrences",
+        "replace_all",
+        "overwrite",
+        "snapshot_id",
+        "expected_hash",
     ]
     assert tools["WebSearch"].params_json_schema["required"] == ["query"]
     assert list(tools["WebSearch"].params_json_schema["properties"]) == ["query"]

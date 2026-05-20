@@ -56,7 +56,7 @@ def test_sanitize_model_input_drops_empty_assistant_between_tool_call_and_output
     call = {
         "arguments": '{"file_path":"README.md"}',
         "call_id": "call-read",
-        "name": "read",
+        "name": "read_file",
         "type": "function_call",
     }
     empty_message = {
@@ -89,7 +89,7 @@ def test_sanitize_model_input_keeps_non_empty_assistant_preamble():
     call = {
         "arguments": '{"file_path":"README.md"}',
         "call_id": "call-read",
-        "name": "read",
+        "name": "read_file",
         "type": "function_call",
     }
     output = {

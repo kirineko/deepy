@@ -20,6 +20,7 @@ from difflib import unified_diff
 from fnmatch import fnmatch
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import cast
 
 from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, Settings, mask_secret
 from deepy.todos import TodoItem, normalize_todo_items, todo_counts, todo_items_to_payload
@@ -63,6 +64,8 @@ PDF_LARGE_PAGE_THRESHOLD = 10
 PDF_MAX_PAGE_RANGE = 20
 MAX_CANDIDATE_COUNT = 5
 MIN_FUZZY_SCORE = 0.45
+ATOMIC_RENAME_RETRIES = 5
+ATOMIC_RENAME_BACKOFF_SECONDS = 0.02
 IGNORED_DIRECTORY_ENTRIES = {
     ".git",
     ".mypy_cache",
@@ -75,6 +78,82 @@ IGNORED_DIRECTORY_ENTRIES = {
     "node_modules",
     "wheels",
 }
+UNSUPPORTED_TEXT_MUTATION_SUFFIXES = {
+    ".7z",
+    ".avif",
+    ".db",
+    ".gif",
+    ".gz",
+    ".ico",
+    ".ipynb",
+    ".jpeg",
+    ".jpg",
+    ".mov",
+    ".mp4",
+    ".pdf",
+    ".png",
+    ".sqlite",
+    ".tar",
+    ".webp",
+    ".zip",
+}
+SENSITIVE_MUTATION_NAMES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".netrc",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
+
+
+class MutationErrorCode:
+    PATH_POLICY = "path_policy"
+    SYMLINK_POLICY = "symlink_policy"
+    SENSITIVE_POLICY = "sensitive_policy"
+    APPROVAL_REQUIRED = "approval_required"
+    GUARDRAIL_BLOCK = "guardrail_block"
+    UNSUPPORTED_TARGET = "unsupported_target"
+    STALE_SNAPSHOT = "stale_snapshot"
+    MATCH_NOT_FOUND = "match_not_found"
+    AMBIGUOUS_MATCH = "ambiguous_match"
+    EXPECTED_COUNT_MISMATCH = "expected_count_mismatch"
+    NO_OP = "no_op"
+    PATCH_PARSE = "patch_parse_error"
+    PATCH_APPLY = "patch_apply_error"
+    ATOMIC_WRITE = "atomic_write_error"
+    BACKUP = "backup_error"
+    PARTIAL_COMMIT = "partial_commit"
+    INVALID_ARGUMENTS = "invalid_arguments"
+
+
+@dataclass(frozen=True)
+class MutationPolicyDecision:
+    decision: str = "allow"
+    reason: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def result_metadata(self) -> dict[str, object]:
+        metadata: dict[str, object] = {"policyDecision": self.decision}
+        if self.reason:
+            metadata["policyReason"] = self.reason
+        metadata.update(self.metadata)
+        return metadata
+
+
+@dataclass(frozen=True)
+class AtomicWriteResult:
+    fallback_used: bool = False
+    retries: int = 0
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "atomicWrite": True,
+            "atomicFallbackUsed": self.fallback_used,
+            "atomicRenameRetries": self.retries,
+        }
 
 
 def _resolve_in_cwd(cwd: Path, path: str) -> Path:
@@ -82,6 +161,160 @@ def _resolve_in_cwd(cwd: Path, path: str) -> Path:
     if not candidate.is_absolute():
         candidate = cwd / candidate
     return candidate.resolve()
+
+
+def _resolve_mutation_target(cwd: Path, path: str) -> tuple[Path | None, str | None, dict[str, object]]:
+    if not path:
+        return None, "file_path is required.", {"error_code": MutationErrorCode.INVALID_ARGUMENTS}
+    raw = Path(path).expanduser()
+    candidate = raw if raw.is_absolute() else cwd / raw
+    try:
+        target = candidate.resolve(strict=False)
+        root = cwd.resolve(strict=False)
+    except OSError as exc:
+        return (
+            None,
+            f"Could not resolve path: {exc}",
+            {"error_code": MutationErrorCode.PATH_POLICY, "path": str(candidate)},
+        )
+    if not _is_relative_to(target, root):
+        return (
+            None,
+            "File mutation target must stay within the current project.",
+            {
+                "error_code": MutationErrorCode.PATH_POLICY,
+                "path": str(target),
+                "policyDecision": "deny",
+            },
+        )
+    if _path_has_symlink_escape(candidate, root):
+        return (
+            None,
+            "File mutation target follows a symlink outside the current project.",
+            {
+                "error_code": MutationErrorCode.SYMLINK_POLICY,
+                "path": str(target),
+                "policyDecision": "deny",
+                "symlinkPolicy": "deny_escape",
+            },
+        )
+    return target, None, {}
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _path_has_symlink_escape(path: Path, root: Path) -> bool:
+    try:
+        relative = path.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return True
+    current = root
+    parts = relative.parts
+    for part in parts:
+        current = current / part
+        try:
+            if current.is_symlink() and not _is_relative_to(current.resolve(strict=True), root):
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _mutation_policy_decision(cwd: Path, target: Path) -> MutationPolicyDecision:
+    root = cwd.resolve()
+    if _is_sensitive_mutation_target(target):
+        return MutationPolicyDecision(
+            decision="requires_approval",
+            reason="Target matches sensitive-file policy.",
+            metadata={"policyKind": "sensitive_file", "path": str(target)},
+        )
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        return MutationPolicyDecision(
+            decision="deny",
+            reason="Target is outside the current project.",
+            metadata={"policyKind": "workspace_boundary", "path": str(target)},
+        )
+    if relative.parts and relative.parts[0] == ".git":
+        return MutationPolicyDecision(
+            decision="deny",
+            reason="Mutating .git internals is blocked.",
+            metadata={"policyKind": "sensitive_directory", "path": str(target)},
+        )
+    gitignore = _load_gitignore_matcher(root)
+    if gitignore.ignores(str(relative).replace("\\", "/"), target.is_dir()):
+        return MutationPolicyDecision(
+            decision="warn",
+            reason="Target matches .gitignore.",
+            metadata={"policyKind": "ignore", "path": str(target)},
+        )
+    return MutationPolicyDecision(metadata={"path": str(target)})
+
+
+def _is_sensitive_mutation_target(target: Path) -> bool:
+    lowered = {part.lower() for part in target.parts}
+    return any(name in lowered for name in SENSITIVE_MUTATION_NAMES)
+
+
+def _policy_error_result(name: str, decision: MutationPolicyDecision) -> str | None:
+    if decision.decision == "deny":
+        return ToolResult.error_result(
+            name,
+            decision.reason or "Mutation denied by policy.",
+            metadata={
+                "error_code": MutationErrorCode.GUARDRAIL_BLOCK,
+                **decision.result_metadata(),
+            },
+        ).to_json()
+    if decision.decision == "requires_approval":
+        return ToolResult.error_result(
+            name,
+            decision.reason or "Mutation requires approval.",
+            metadata={
+                "error_code": MutationErrorCode.APPROVAL_REQUIRED,
+                **decision.result_metadata(),
+            },
+        ).to_json()
+    return None
+
+
+def _unsupported_text_mutation_reason(path: Path) -> str | None:
+    if path.exists():
+        if not path.is_file():
+            return "Target is not a regular text file."
+        try:
+            sample = path.read_bytes()[:8192]
+        except OSError as exc:
+            return f"Could not read target bytes: {exc}"
+        detected_encoding = _detect_text_encoding(sample)
+        if b"\x00" in sample and detected_encoding != "utf16le":
+            return "Target appears to be binary and cannot be mutated as text."
+    if path.suffix.lower() in UNSUPPORTED_TEXT_MUTATION_SUFFIXES:
+        return "Target type is not supported by text mutation tools."
+    return None
+
+
+def _mutation_error_metadata(
+    code: str,
+    *,
+    path: Path | None = None,
+    recovery: str | None = None,
+    **extra: object,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {"error_code": code}
+    if path is not None:
+        metadata["path"] = str(path)
+    if recovery:
+        metadata["recovery"] = recovery
+    metadata.update(extra)
+    return metadata
 
 
 def _resolve_read_target(cwd: Path, path: str) -> tuple[Path | None, str | None]:
@@ -166,6 +399,33 @@ class TextFileMetadata:
     content: str
     encoding: str
     line_endings: str
+
+
+@dataclass(frozen=True)
+class PatchOperation:
+    kind: str
+    path: str
+    content: str | None = None
+    hunks: tuple[tuple[str, str], ...] = ()
+    move_to: str | None = None
+    expected_occurrences: int | None = None
+    replace_all: bool = False
+    overwrite: bool = False
+    snapshot_id: str | None = None
+    expected_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class PlannedPatchOperation:
+    operation: PatchOperation
+    target: Path
+    new_target: Path | None
+    old_content: str
+    new_content: str | None
+    encoding: str
+    line_endings: str
+    policy: MutationPolicyDecision
+    occurrences: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1179,14 +1439,15 @@ class ToolRuntime:
         if error is None and normalized is not None:
             self.todo_items = normalized
 
-    def read(
+    def _read_file_result(
         self,
         path: str,
         start_line: int = 1,
         limit: int | None = None,
         pages: str | None = None,
+        *,
+        name: str = "read_file",
     ) -> str:
-        name = "read"
         target, error = _resolve_read_target(self.cwd, path)
         if error is not None:
             return ToolResult.error_result(name, error).to_json()
@@ -1223,7 +1484,7 @@ class ToolRuntime:
             ).to_json()
 
         if target.suffix.lower() == ".pdf":
-            return _read_pdf(target, pages)
+            return _read_pdf(target, pages, name=name)
 
         mime = _image_mime_type(target.suffix.lower())
         if mime is not None:
@@ -1251,7 +1512,13 @@ class ToolRuntime:
             f"{idx + start + 1}: {line}" for idx, line in enumerate(formatted_lines)
         )
         if full_file_read:
-            self.file_state.mark_read(target)
+            snapshot = self.file_state.mark_read(
+                target,
+                encoding=text_metadata.encoding,
+                line_endings=text_metadata.line_endings,
+            )
+        else:
+            snapshot = None
         snippet_metadata = None
         if not full_file_read and selected:
             snippet = self.file_state.create_snippet(
@@ -1260,7 +1527,12 @@ class ToolRuntime:
                 end_line=start + len(selected),
                 text="\n".join(selected),
             )
-            self.file_state.mark_read(target, full=False)
+            snapshot = self.file_state.mark_read(
+                target,
+                full=False,
+                encoding=text_metadata.encoding,
+                line_endings=text_metadata.line_endings,
+            )
             snippet_metadata = _snippet_metadata(snippet)
         metadata: dict[str, object] = {
             "path": str(target),
@@ -1272,7 +1544,17 @@ class ToolRuntime:
             "truncated": truncated,
             "trackedForWrite": full_file_read,
             "encoding": text_metadata.encoding,
+            "line_endings": text_metadata.line_endings,
         }
+        if snapshot is not None:
+            metadata.update(
+                {
+                    "snapshot_id": snapshot.id,
+                    "content_hash": snapshot.content_hash,
+                    "mtime_ns": snapshot.mtime_ns,
+                    "size": snapshot.size,
+                }
+            )
         if snippet_metadata is not None:
             metadata["snippet"] = snippet_metadata
         return ToolResult.ok_result(
@@ -1281,64 +1563,91 @@ class ToolRuntime:
             metadata=metadata,
         ).to_json()
 
-    def modify(
+    def read_file(
         self,
-        path: str | None,
-        *,
-        content: object | None = None,
-        old: str | None = None,
-        new: str | None = None,
-        replace_all: bool = False,
-        snippet_id: str | None = None,
+        path: str,
+        start_line: int = 1,
+        limit: int | None = None,
+        pages: str | None = None,
     ) -> str:
-        has_content = content is not None
-        has_replacement = old is not None or new is not None
-        if has_content and has_replacement:
-            return ToolResult.error_result(
-                "modify",
-                "Use either content for a new file or old_string/new_string for an existing file, not both.",
-            ).to_json()
-        if has_content:
-            if not path:
-                return ToolResult.error_result(
-                    "modify", "file_path is required for new files."
-                ).to_json()
-            target = _resolve_in_cwd(self.cwd, path)
-            if target.exists():
-                return ToolResult.error_result(
-                    "modify",
-                    "File already exists. Read it and use old_string/new_string with modify instead of content.",
-                    metadata={"path": str(target)},
-                ).to_json()
-            return self.write(path, content)
-        if old is None or new is None:
-            return ToolResult.error_result(
-                "modify",
-                "Provide content for a new file, or both old_string and new_string for an existing file.",
-            ).to_json()
-        return self.edit(
-            path,
-            old,
-            new,
-            replace_all=replace_all,
-            snippet_id=snippet_id,
-            auto_read_if_missing_snapshot=True,
-        )
+        return self._read_file_result(path, start_line=start_line, limit=limit, pages=pages)
 
-    def write(self, path: str, content: object) -> str:
-        name = "write"
-        target = _resolve_in_cwd(self.cwd, path)
+    def write(
+        self,
+        path: str,
+        content: object,
+        *,
+        overwrite: bool = True,
+        snapshot_id: str | None = None,
+        expected_hash: str | None = None,
+        name: str = "write",
+    ) -> str:
+        target, error, metadata = _resolve_mutation_target(self.cwd, path)
+        if error is not None or target is None:
+            return ToolResult.error_result(name, error or "Invalid file path.", metadata=metadata).to_json()
+        if target.exists():
+            if not overwrite:
+                return ToolResult.error_result(
+                    name,
+                    "File already exists; explicit overwrite intent is required.",
+                    metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS, path=target),
+                ).to_json()
+            snapshot = self.file_state.get_snapshot(target)
+            if snapshot_id is not None and (snapshot is None or snapshot.id != snapshot_id):
+                return ToolResult.error_result(
+                    name,
+                    "Snapshot id does not match the current managed snapshot.",
+                    metadata=_mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedSnapshotId=snapshot_id,
+                        actualSnapshotId=snapshot.id if snapshot else None,
+                    ),
+                ).to_json()
+            if expected_hash is not None and (snapshot is None or snapshot.content_hash != expected_hash):
+                return ToolResult.error_result(
+                    name,
+                    "Content hash does not match the current managed snapshot.",
+                    metadata=_mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedHash=expected_hash,
+                        actualHash=snapshot.content_hash if snapshot else None,
+                    ),
+                ).to_json()
+        policy = _mutation_policy_decision(self.cwd, target)
+        policy_error = _policy_error_result(name, policy)
+        if policy_error is not None:
+            return policy_error
+        unsupported_reason = _unsupported_text_mutation_reason(target)
+        if unsupported_reason is not None:
+            return ToolResult.error_result(
+                name,
+                unsupported_reason,
+                metadata=_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
+            ).to_json()
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             metadata = _stale_write_recovery_metadata(target, error)
             return ToolResult.error_result(
                 name,
                 error or "File is not writable.",
-                metadata=metadata,
+                metadata={
+                    **_mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        recovery="Re-read the file before retrying.",
+                    ),
+                    **metadata,
+                },
             ).to_json()
         text_content, repair_metadata, content_error = _coerce_write_content(target, content)
         if content_error is not None:
-            return ToolResult.error_result(name, content_error).to_json()
+            return ToolResult.error_result(
+                name,
+                content_error,
+                metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS, path=target),
+            ).to_json()
         existing_metadata = _read_text_metadata(target) if target.exists() else None
         old_content = existing_metadata.content if existing_metadata is not None else ""
         encoding = (
@@ -1346,11 +1655,30 @@ class ToolRuntime:
             if existing_metadata is not None
             else _default_new_text_encoding()
         )
-        line_endings = _detect_line_endings(old_content or text_content)
+        line_endings = (
+            existing_metadata.line_endings
+            if existing_metadata is not None
+            else _new_file_line_endings(target, text_content)
+        )
         normalized_content = _normalize_line_endings(text_content, line_endings)
+        if old_content == normalized_content and target.exists():
+            return ToolResult.error_result(
+                name,
+                "Mutation would not change file content.",
+                metadata=_mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
+            ).to_json()
         target.parent.mkdir(parents=True, exist_ok=True)
-        _write_text_with_encoding(target, normalized_content, encoding)
-        self.file_state.mark_written(target)
+        atomic_result = _atomic_write_text_with_encoding(
+            target,
+            normalized_content,
+            encoding,
+            platform_name=self.platform_name,
+        )
+        snapshot = self.file_state.mark_written(
+            target,
+            encoding=encoding,
+            line_endings=line_endings,
+        )
         diff = _unified_diff(old_content, normalized_content, path=str(target))
         return ToolResult.ok_result(
             name,
@@ -1359,11 +1687,62 @@ class ToolRuntime:
                 "path": str(target),
                 "encoding": encoding,
                 "line_endings": line_endings,
+                "changedFiles": [str(target)],
+                "policyDecision": policy.decision,
+                **policy.result_metadata(),
+                **atomic_result.metadata(),
                 **repair_metadata,
                 "diff": diff,
                 "diff_preview": diff,
+                **(
+                    {
+                        "snapshot_id": snapshot.id,
+                        "content_hash": snapshot.content_hash,
+                    }
+                    if snapshot is not None
+                    else {}
+                ),
             },
         ).to_json()
+
+    def write_file(
+        self,
+        path: str,
+        content: object,
+        *,
+        overwrite: bool = False,
+        snapshot_id: str | None = None,
+        expected_hash: str | None = None,
+    ) -> str:
+        target, _, _ = _resolve_mutation_target(self.cwd, path)
+        if target is not None and target.exists() and not overwrite:
+            return ToolResult.error_result(
+                "write_file",
+                "Existing file replacement requires overwrite=true and a fresh snapshot id or content hash.",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.INVALID_ARGUMENTS,
+                    path=target,
+                    recovery="Read the file first, then retry write_file with overwrite intent and snapshot metadata.",
+                ),
+            ).to_json()
+        if target is not None and target.exists() and not snapshot_id and not expected_hash:
+            return ToolResult.error_result(
+                "write_file",
+                "Existing file replacement requires a snapshot_id or expected_hash.",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.STALE_SNAPSHOT,
+                    path=target,
+                    recovery="Read the file first and pass the returned snapshot_id or content_hash.",
+                ),
+            ).to_json()
+        return self.write(
+            path,
+            content,
+            overwrite=overwrite,
+            snapshot_id=snapshot_id,
+            expected_hash=expected_hash,
+            name="write_file",
+        )
 
     def edit(
         self,
@@ -1373,51 +1752,134 @@ class ToolRuntime:
         replace_all: bool = False,
         snippet_id: str | None = None,
         auto_read_if_missing_snapshot: bool = False,
+        expected_occurrences: int | None = None,
+        *,
+        name: str = "edit",
     ) -> str:
-        name = "edit"
+        snippet_id = _normalize_optional_tool_identifier(snippet_id)
+        path = _normalize_optional_tool_identifier(path)
         if not old:
-            return ToolResult.error_result(name, "old text must not be empty.").to_json()
+            return ToolResult.error_result(
+                name,
+                "old text must not be empty.",
+                metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS),
+            ).to_json()
         snippet = None
+        inferred_snapshot_id = None
         if snippet_id:
             snippet = self.file_state.get_snippet(snippet_id)
             if snippet is None:
-                return ToolResult.error_result(name, f"Unknown snippet_id: {snippet_id}").to_json()
-            target = snippet.path
-            if path:
-                requested_target = _resolve_in_cwd(self.cwd, path)
-                if requested_target != target:
+                snapshot_path = self.file_state.get_snapshot_path(snippet_id)
+                if snapshot_path is not None:
+                    target = snapshot_path
+                    inferred_snapshot_id = snippet_id
+                    snippet_id = None
+                elif path:
+                    snippet_id = None
+                else:
                     return ToolResult.error_result(
                         name,
-                        "snippet_id does not belong to the provided file path.",
+                        f"Unknown snippet_id: {snippet_id}. Pass file_path for a full-file exact edit, or pass a snippet_id returned from a partial read_file result.",
+                        metadata=_mutation_error_metadata(
+                            MutationErrorCode.INVALID_ARGUMENTS,
+                            recovery="Use file_path for ordinary exact edits. snapshot_id is only for write_file replacement.",
+                        ),
                     ).to_json()
-        else:
+            if snippet is None and snippet_id is None and path:
+                target, error, metadata = _resolve_mutation_target(self.cwd, path)
+                if error is not None or target is None:
+                    return ToolResult.error_result(name, error or "Invalid file path.", metadata=metadata).to_json()
+            elif snippet is None:
+                pass
+            else:
+                target = snippet.path
+                if path:
+                    requested_target, error, metadata = _resolve_mutation_target(self.cwd, path)
+                    if error is not None or requested_target is None:
+                        return ToolResult.error_result(
+                            name, error or "Invalid file path.", metadata=metadata
+                        ).to_json()
+                    if requested_target != target:
+                        return ToolResult.error_result(
+                            name,
+                            "snippet_id does not belong to the provided file_path.",
+                            metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS),
+                        ).to_json()
+        if snippet is None and not snippet_id and inferred_snapshot_id is None:
             if not path:
                 return ToolResult.error_result(
                     name,
-                    "path is required unless snippet_id is provided.",
+                    "file_path is required unless snippet_id is provided.",
+                    metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS),
                 ).to_json()
-            target = _resolve_in_cwd(self.cwd, path)
+            target, error, metadata = _resolve_mutation_target(self.cwd, path)
+            if error is not None or target is None:
+                return ToolResult.error_result(name, error or "Invalid file path.", metadata=metadata).to_json()
+        elif snippet is not None:
+            target = snippet.path
+            if path:
+                requested_target, error, metadata = _resolve_mutation_target(self.cwd, path)
+                if error is not None or requested_target is None:
+                    return ToolResult.error_result(name, error or "Invalid file path.", metadata=metadata).to_json()
+                if requested_target != target:
+                    return ToolResult.error_result(
+                        name,
+                        "snippet_id does not belong to the provided file_path.",
+                        metadata=_mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS),
+                    ).to_json()
         if not target.exists():
-            return ToolResult.error_result(name, f"File does not exist: {target}").to_json()
-        auto_read_before_modify = False
+            return ToolResult.error_result(
+                name,
+                f"File does not exist: {target}",
+                metadata=_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
+            ).to_json()
+        policy = _mutation_policy_decision(self.cwd, target)
+        policy_error = _policy_error_result(name, policy)
+        if policy_error is not None:
+            return policy_error
+        unsupported_reason = _unsupported_text_mutation_reason(target)
+        if unsupported_reason is not None:
+            return ToolResult.error_result(
+                name,
+                unsupported_reason,
+                metadata=_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
+            ).to_json()
+        auto_read_before_edit = False
+        auto_read_reason: str | None = None
         if (
             auto_read_if_missing_snapshot
             and snippet is None
-            and self.file_state.snapshot_status(target) == "missing"
         ):
-            self.file_state.mark_read(target)
-            auto_read_before_modify = True
+            snapshot_status = self.file_state.snapshot_status(target)
+            if snapshot_status in {"missing", "partial"}:
+                text_metadata = _read_text_metadata(target)
+                self.file_state.mark_read(
+                    target,
+                    encoding=text_metadata.encoding,
+                    line_endings=text_metadata.line_endings,
+                )
+                auto_read_before_edit = True
+                auto_read_reason = snapshot_status
         ok, error = self.file_state.check_writable(
             target,
             require_read=True,
             allow_partial=snippet is not None,
         )
         if not ok:
-            return ToolResult.error_result(name, error or "File is not writable.").to_json()
+            return ToolResult.error_result(
+                name,
+                error or "File is not writable.",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.STALE_SNAPSHOT,
+                    path=target,
+                    recovery="Re-read the file before retrying.",
+                ),
+            ).to_json()
         text_metadata = _read_text_metadata(target)
         text = text_metadata.content
         line_endings = text_metadata.line_endings
         scope = _edit_scope(text, snippet)
+        fallback_from_snippet_id: str | None = None
         match_result = _find_edit_occurrences(text, old, scope, line_endings)
         matches = match_result.matches if match_result is not None else []
         matched_via = match_result.matched_via if match_result is not None else "exact"
@@ -1448,6 +1910,26 @@ class ToolRuntime:
                 if not matches:
                     matches = [loose_matches[0][0]]
                     matched_via = loose_matches[0][3]
+        if not matches and snippet is not None and path:
+            full_scope = (0, len(text))
+            match_result = _find_edit_occurrences(
+                text,
+                old,
+                full_scope,
+                line_endings,
+                matched_via="full_file_after_snippet_miss",
+            )
+            if match_result is not None:
+                matches = match_result.matches
+                matched_via = match_result.matched_via
+                scope = full_scope
+                fallback_from_snippet_id = snippet.id
+                snippet = None
+                self.file_state.mark_read(
+                    target,
+                    encoding=text_metadata.encoding,
+                    line_endings=text_metadata.line_endings,
+                )
         if not matches:
             closest_match = _find_closest_match(text, old, scope)
             metadata = {"scope": _format_scope_metadata(target, snippet, scope, text)}
@@ -1460,14 +1942,30 @@ class ToolRuntime:
             return ToolResult.error_result(
                 name,
                 "old_string not found in file.",
-                metadata=metadata,
+                metadata={
+                    **_mutation_error_metadata(MutationErrorCode.MATCH_NOT_FOUND, path=target),
+                    **metadata,
+                },
             ).to_json()
         occurrences = len(matches)
+        if expected_occurrences is not None and occurrences != expected_occurrences:
+            return ToolResult.error_result(
+                name,
+                "old_string match count did not equal expected_occurrences.",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.EXPECTED_COUNT_MISMATCH,
+                    path=target,
+                    expectedOccurrences=expected_occurrences,
+                    actualOccurrences=occurrences,
+                    scope=_format_scope_metadata(target, snippet, scope, text),
+                ),
+            ).to_json()
         if occurrences > 1 and not replace_all:
             return ToolResult.error_result(
                 name,
                 "old_string is not unique; use snippet_id, replace_all, or provide more context.",
                 metadata={
+                    **_mutation_error_metadata(MutationErrorCode.AMBIGUOUS_MATCH, path=target),
                     "occurrences": occurrences,
                     "match_count": occurrences,
                     "scope": _format_scope_metadata(target, snippet, scope, text),
@@ -1481,8 +1979,23 @@ class ToolRuntime:
             ).to_json()
         normalized_new = _normalize_line_endings(replacement_new, line_endings)
         updated = _apply_replacements(text, matches, normalized_new, replace_all)
-        _write_text_with_encoding(target, updated, text_metadata.encoding)
-        self.file_state.mark_written(target)
+        if updated == text:
+            return ToolResult.error_result(
+                name,
+                "Mutation would not change file content.",
+                metadata=_mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
+            ).to_json()
+        atomic_result = _atomic_write_text_with_encoding(
+            target,
+            updated,
+            text_metadata.encoding,
+            platform_name=self.platform_name,
+        )
+        snapshot = self.file_state.mark_written(
+            target,
+            encoding=text_metadata.encoding,
+            line_endings=line_endings,
+        )
         diff = _unified_diff(text, updated, path=str(target))
         metadata: dict[str, object] = {
             "path": str(target),
@@ -1492,14 +2005,511 @@ class ToolRuntime:
             "encoding": text_metadata.encoding,
             "line_endings": line_endings,
             "read_scope_type": "snippet" if snippet is not None else "full",
+            "changedFiles": [str(target)],
+            "policyDecision": policy.decision,
+            **policy.result_metadata(),
+            **atomic_result.metadata(),
             "diff": diff,
             "diff_preview": diff,
         }
-        if auto_read_before_modify:
-            metadata["autoReadBeforeModify"] = True
+        if snapshot is not None:
+            metadata["snapshot_id"] = snapshot.id
+            metadata["content_hash"] = snapshot.content_hash
+        if auto_read_before_edit:
+            metadata["autoReadBeforeEdit"] = True
+        if auto_read_reason is not None:
+            metadata["autoReadReason"] = auto_read_reason
+        if inferred_snapshot_id is not None:
+            metadata["inferredFromSnapshotId"] = inferred_snapshot_id
+        if fallback_from_snippet_id is not None:
+            metadata["fallbackFromSnippetId"] = fallback_from_snippet_id
         if snippet is not None:
             metadata["scope"] = _format_scope_metadata(target, snippet, scope, text)
         return ToolResult.ok_result(name, f"Edited {target}", metadata=metadata).to_json()
+
+    def edit_text(
+        self,
+        path: str | None,
+        old: str,
+        new: str,
+        replace_all: bool = False,
+        snippet_id: str | None = None,
+        expected_occurrences: int | None = None,
+        *,
+        auto_read_if_missing_snapshot: bool = True,
+        name: str = "edit_text",
+    ) -> str:
+        return self.edit(
+            path,
+            old,
+            new,
+            replace_all=replace_all,
+            snippet_id=snippet_id,
+            auto_read_if_missing_snapshot=auto_read_if_missing_snapshot,
+            expected_occurrences=expected_occurrences,
+            name=name,
+        )
+
+    def apply_patch(self, operations: object) -> str:
+        name = "apply_patch"
+        parsed_operations, parse_error, parse_metadata = _parse_structured_patch_operations(operations)
+        if parse_error is not None:
+            return ToolResult.error_result(
+                name,
+                parse_error,
+                metadata={
+                    **_mutation_error_metadata(MutationErrorCode.PATCH_PARSE),
+                    **parse_metadata,
+                },
+            ).to_json()
+        if not parsed_operations:
+            return ToolResult.error_result(
+                name,
+                "Structured patch does not contain any operations.",
+                metadata=_mutation_error_metadata(MutationErrorCode.PATCH_PARSE),
+            ).to_json()
+
+        planned: list[PlannedPatchOperation] = []
+        failures: list[dict[str, object]] = []
+        staged_content: dict[Path, TextFileMetadata | None] = {}
+        for index, operation in enumerate(parsed_operations):
+            plan, error, metadata = self._plan_patch_operation(
+                operation,
+                staged_content=staged_content,
+            )
+            if error is not None:
+                failures.append(
+                    {
+                        "index": index,
+                        "path": operation.path,
+                        "operation": operation.kind,
+                        "error": error,
+                        **metadata,
+                    }
+                )
+            elif plan is not None:
+                planned.append(plan)
+                destination = plan.new_target or plan.target
+                if plan.new_content is None:
+                    staged_content[plan.target.resolve()] = None
+                    staged_content[destination.resolve()] = None
+                else:
+                    staged_content[destination.resolve()] = TextFileMetadata(
+                        content=plan.new_content,
+                        encoding=plan.encoding,
+                        line_endings=plan.line_endings,
+                    )
+        if failures:
+            return ToolResult.error_result(
+                name,
+                "Structured patch preflight failed; no file changes were committed.",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.PATCH_APPLY,
+                    failures=failures,
+                    preflightFailed=True,
+                    operationCount=len(parsed_operations),
+                ),
+            ).to_json()
+
+        committed: list[dict[str, object]] = []
+        diffs: list[str] = []
+        changed_files: list[str] = []
+        try:
+            for plan in planned:
+                operation = plan.operation
+                target = plan.target
+                if operation.kind == "delete_file":
+                    backup_metadata = _create_mutation_backup(self.cwd, target)
+                    target.unlink()
+                    self.file_state.discard_snapshot(target)
+                    committed.append(
+                        {
+                            "operation": operation.kind,
+                            "path": str(target),
+                            **backup_metadata,
+                        }
+                    )
+                    changed_files.append(str(target))
+                    diffs.append(_unified_diff(plan.old_content, "", path=str(target)))
+                    continue
+                if operation.kind == "move_file" and plan.new_target is not None:
+                    backup_metadata = _create_mutation_backup(self.cwd, target)
+                    plan.new_target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(target, plan.new_target)
+                    self.file_state.discard_snapshot(target)
+                    snapshot = self.file_state.mark_written(
+                        plan.new_target,
+                        encoding=plan.encoding,
+                        line_endings=plan.line_endings,
+                    )
+                    committed.append(
+                        {
+                            "operation": operation.kind,
+                            "path": str(target),
+                            "destination": str(plan.new_target),
+                            "snapshot_id": snapshot.id if snapshot else None,
+                            **backup_metadata,
+                        }
+                    )
+                    changed_files.extend([str(target), str(plan.new_target)])
+                    diffs.append(_unified_diff(plan.old_content, plan.new_content or "", path=str(plan.new_target)))
+                    continue
+                if plan.new_content is None:
+                    continue
+                destination = plan.new_target or target
+                atomic_result = _atomic_write_text_with_encoding(
+                    destination,
+                    plan.new_content,
+                    plan.encoding,
+                    platform_name=self.platform_name,
+                )
+                if destination != target and target.exists():
+                    target.unlink()
+                    self.file_state.discard_snapshot(target)
+                snapshot = self.file_state.mark_written(
+                    destination,
+                    encoding=plan.encoding,
+                    line_endings=plan.line_endings,
+                )
+                committed.append(
+                    {
+                        "operation": operation.kind,
+                        "path": str(target),
+                        "destination": str(destination),
+                        "snapshot_id": snapshot.id if snapshot else None,
+                        **(
+                            {"actualOccurrences": plan.occurrences}
+                            if plan.occurrences is not None
+                            else {}
+                        ),
+                        **atomic_result.metadata(),
+                    }
+                )
+                changed_files.append(str(destination))
+                diffs.append(_unified_diff(plan.old_content, plan.new_content, path=str(destination)))
+        except OSError as exc:
+            return ToolResult.error_result(
+                name,
+                f"Patch commit failed after partial changes: {exc}",
+                metadata=_mutation_error_metadata(
+                    MutationErrorCode.PARTIAL_COMMIT,
+                    committedOperations=committed,
+                    failedError=str(exc),
+                ),
+            ).to_json()
+
+        diff_items = [item for item in diffs if item]
+        diff = "\n".join(diff_items)
+        unique_changed_files = list(dict.fromkeys(changed_files))
+        return ToolResult.ok_result(
+            name,
+            f"Applied patch to {len(unique_changed_files)} file(s).",
+            metadata={
+                "path": _patch_changed_path_summary(unique_changed_files),
+                "changedFiles": unique_changed_files,
+                "operationCount": len(parsed_operations),
+                "changedFileCount": len(unique_changed_files),
+                "operations": committed,
+                "policyDecision": "allow",
+                "diff": diff,
+                "diff_preview": diff,
+            },
+        ).to_json()
+
+    def _plan_patch_operation(
+        self,
+        operation: PatchOperation,
+        *,
+        staged_content: dict[Path, TextFileMetadata | None] | None = None,
+    ) -> tuple[PlannedPatchOperation | None, str | None, dict[str, object]]:
+        target, error, metadata = _resolve_mutation_target(
+            self.cwd,
+            _normalize_patch_operation_path(
+                self.cwd,
+                operation.path,
+                expect_existing=operation.kind != "create_file",
+            ),
+        )
+        if error is not None or target is None:
+            return None, error or "Invalid file path.", metadata
+        target_key = target.resolve()
+        has_staged_target = staged_content is not None and target_key in staged_content
+        staged_metadata = staged_content[target_key] if has_staged_target and staged_content is not None else None
+        new_target = None
+        if operation.move_to is not None:
+            new_target, error, metadata = _resolve_mutation_target(
+                self.cwd,
+                _normalize_patch_operation_path(
+                    self.cwd,
+                    operation.move_to,
+                    expect_existing=False,
+                ),
+            )
+            if error is not None or new_target is None:
+                return None, error or "Invalid move destination.", metadata
+        policy = _mutation_policy_decision(self.cwd, target)
+        policy_error = _policy_error_result("apply_patch", policy)
+        if policy_error is not None:
+            parsed = json_utils.loads(policy_error)
+            return None, parsed.get("error") or "Mutation rejected by policy.", parsed.get("metadata", {})
+        if new_target is not None:
+            destination_policy = _mutation_policy_decision(self.cwd, new_target)
+            policy_error = _policy_error_result("apply_patch", destination_policy)
+            if policy_error is not None:
+                parsed = json_utils.loads(policy_error)
+                return None, parsed.get("error") or "Move destination rejected by policy.", parsed.get("metadata", {})
+        if operation.kind == "create_file":
+            if target.exists() or staged_metadata is not None:
+                return (
+                    None,
+                    "create_file target already exists.",
+                    _mutation_error_metadata(MutationErrorCode.PATCH_APPLY, path=target),
+                )
+            unsupported_reason = _unsupported_text_mutation_reason(target)
+            if unsupported_reason is not None:
+                return (
+                    None,
+                    unsupported_reason,
+                    _mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
+                )
+            content = operation.content or ""
+            line_endings = _new_file_line_endings(target, content)
+            new_content = _normalize_line_endings(content, line_endings)
+            return (
+                PlannedPatchOperation(
+                    operation=operation,
+                    target=target,
+                    new_target=None,
+                    old_content="",
+                    new_content=new_content,
+                    encoding=_default_new_text_encoding(),
+                    line_endings=line_endings,
+                    policy=policy,
+                ),
+                None,
+                {},
+            )
+        if not target.exists():
+            if staged_metadata is None:
+                return (
+                    None,
+                    f"Patch target does not exist: {target}",
+                    _mutation_error_metadata(MutationErrorCode.PATCH_APPLY, path=target),
+                )
+        unsupported_reason = _unsupported_text_mutation_reason(target)
+        if unsupported_reason is not None:
+            return (
+                None,
+                unsupported_reason,
+                _mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
+            )
+        if staged_metadata is None:
+            ok, stale_error = self.file_state.check_writable(target, require_read=False)
+            if not ok:
+                return (
+                    None,
+                    stale_error or "Patch target is stale.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        recovery="Re-read the file before retrying.",
+                    ),
+                )
+            metadata = _read_text_metadata(target)
+        else:
+            metadata = staged_metadata
+        if operation.kind == "delete_file":
+            return (
+                PlannedPatchOperation(
+                    operation=operation,
+                    target=target,
+                    new_target=None,
+                    old_content=metadata.content,
+                    new_content=None,
+                    encoding=metadata.encoding,
+                    line_endings=metadata.line_endings,
+                    policy=policy,
+                ),
+                None,
+                {},
+            )
+        if operation.kind == "move_file":
+            if new_target is None:
+                return (
+                    None,
+                    "move_file requires destination_path.",
+                    _mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS, path=target),
+                )
+            if new_target.exists():
+                return (
+                    None,
+                    "move_file destination already exists.",
+                    _mutation_error_metadata(MutationErrorCode.PATCH_APPLY, path=new_target),
+                )
+            return (
+                PlannedPatchOperation(
+                    operation=operation,
+                    target=target,
+                    new_target=new_target,
+                    old_content=metadata.content,
+                    new_content=metadata.content,
+                    encoding=metadata.encoding,
+                    line_endings=metadata.line_endings,
+                    policy=policy,
+                ),
+                None,
+                {},
+            )
+        if operation.kind == "replace_file":
+            if not operation.overwrite:
+                return (
+                    None,
+                    "replace_file requires overwrite=true.",
+                    _mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS, path=target),
+                )
+            if not operation.snapshot_id and not operation.expected_hash:
+                return (
+                    None,
+                    "replace_file requires snapshot_id or expected_hash.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        recovery="Read the file first and pass the returned snapshot_id or content_hash.",
+                    ),
+                )
+            snapshot = self.file_state.get_snapshot(target)
+            if operation.snapshot_id is not None and (snapshot is None or snapshot.id != operation.snapshot_id):
+                return (
+                    None,
+                    "Snapshot id does not match the current managed snapshot.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedSnapshotId=operation.snapshot_id,
+                        actualSnapshotId=snapshot.id if snapshot else None,
+                    ),
+                )
+            if operation.expected_hash is not None and (
+                snapshot is None or snapshot.content_hash != operation.expected_hash
+            ):
+                return (
+                    None,
+                    "Content hash does not match the current managed snapshot.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedHash=operation.expected_hash,
+                        actualHash=snapshot.content_hash if snapshot else None,
+                    ),
+                )
+            ok, stale_error = self.file_state.check_writable(target, require_read=True)
+            if not ok:
+                return (
+                    None,
+                    stale_error or "Patch target is stale.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        recovery="Re-read the file before retrying.",
+                    ),
+                )
+            new_content = _normalize_line_endings(operation.content or "", metadata.line_endings)
+            if new_content == metadata.content:
+                return (
+                    None,
+                    "Patch would not change file content.",
+                    _mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
+                )
+            return (
+                PlannedPatchOperation(
+                    operation=operation,
+                    target=target,
+                    new_target=None,
+                    old_content=metadata.content,
+                    new_content=new_content,
+                    encoding=metadata.encoding,
+                    line_endings=metadata.line_endings,
+                    policy=policy,
+                ),
+                None,
+                {},
+            )
+        new_content = metadata.content
+        total_occurrences = 0
+        for old_block, new_block in operation.hunks:
+            normalized_old = _normalize_line_endings(old_block, metadata.line_endings)
+            normalized_new = _normalize_line_endings(new_block, metadata.line_endings)
+            matched_old, matched_new, count = _select_patch_replacement_variant(
+                new_content,
+                normalized_old,
+                normalized_new,
+            )
+            if count == 0:
+                closest = _find_closest_match(new_content, normalized_old, (0, len(new_content)))
+                closest_metadata = (
+                    {"closest_match": _build_closest_match_metadata(self.file_state, target, closest)}
+                    if closest is not None
+                    else {}
+                )
+                return (
+                    None,
+                    "Patch context not found in file.",
+                    {
+                        **_mutation_error_metadata(MutationErrorCode.MATCH_NOT_FOUND, path=target),
+                        **closest_metadata,
+                    },
+                )
+            if (
+                operation.expected_occurrences is not None
+                and count != operation.expected_occurrences
+            ):
+                return (
+                    None,
+                    "Patch match count did not equal expected_occurrences.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.EXPECTED_COUNT_MISMATCH,
+                        path=target,
+                        expectedOccurrences=operation.expected_occurrences,
+                        actualOccurrences=count,
+                    ),
+                )
+            if count > 1 and not operation.replace_all:
+                return (
+                    None,
+                    "Patch context is ambiguous.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.AMBIGUOUS_MATCH,
+                        path=target,
+                        actualOccurrences=count,
+                    ),
+                )
+            total_occurrences += count if operation.replace_all else 1
+            new_content = new_content.replace(
+                matched_old,
+                matched_new,
+                count if operation.replace_all else 1,
+            )
+        if new_content == metadata.content:
+            return (
+                None,
+                "Patch would not change file content.",
+                _mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
+            )
+        return (
+            PlannedPatchOperation(
+                operation=operation,
+                target=target,
+                new_target=new_target,
+                old_content=metadata.content,
+                new_content=new_content,
+                encoding=metadata.encoding,
+                line_endings=metadata.line_endings,
+                policy=policy,
+                occurrences=total_occurrences or None,
+            ),
+            None,
+            {},
+        )
 
     def shell(self, command: str, timeout_ms: int = 120_000) -> str:
         name = "shell"
@@ -1935,6 +2945,12 @@ def _unified_diff(old: str, new: str, *, path: str) -> str:
     )
 
 
+def _patch_changed_path_summary(paths: list[str]) -> str:
+    if len(paths) == 1:
+        return paths[0]
+    return f"{len(paths)} files"
+
+
 def _read_text_preserving_newlines(path: Path) -> str:
     return _read_text_metadata(path).content
 
@@ -1985,6 +3001,64 @@ def _write_text_with_encoding(path: Path, content: str, encoding: str) -> None:
     path.write_bytes(content.encode(_python_text_encoding(encoding)))
 
 
+def _atomic_write_text_with_encoding(
+    path: Path,
+    content: str,
+    encoding: str,
+    *,
+    platform_name: str,
+) -> AtomicWriteResult:
+    data = content.encode(_python_text_encoding(encoding))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode if path.exists() else None
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temp_path = Path(temp_name)
+    retries = 0
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        if mode is not None:
+            try:
+                os.chmod(temp_path, mode)
+            except OSError:
+                pass
+        max_retries = ATOMIC_RENAME_RETRIES if platform_name.startswith("win") else 0
+        while True:
+            try:
+                os.replace(temp_path, path)
+                return AtomicWriteResult(fallback_used=False, retries=retries)
+            except PermissionError:
+                if retries >= max_retries:
+                    raise
+                retries += 1
+                time.sleep(ATOMIC_RENAME_BACKOFF_SECONDS * retries)
+    except OSError:
+        try:
+            _write_text_with_encoding(path, content, encoding)
+            return AtomicWriteResult(fallback_used=True, retries=retries)
+        finally:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+
+
+def _create_mutation_backup(cwd: Path, path: Path) -> dict[str, object]:
+    if not path.exists() or not path.is_file():
+        return {"backupCreated": False}
+    backup_dir = cwd / ".deepy" / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    relative_name = str(path.relative_to(cwd.resolve())).replace("/", "__").replace("\\", "__")
+    backup_path = backup_dir / f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}-{relative_name}"
+    shutil.copy2(path, backup_path)
+    return {"backupCreated": True, "backupPath": str(backup_path)}
+
+
 def _stale_write_recovery_metadata(path: Path, error: str | None) -> dict[str, object]:
     if error != "File changed since it was read: it no longer exists.":
         return {}
@@ -2012,6 +3086,321 @@ def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, o
         except TypeError as exc:
             return "", {}, f"JSON content is not serializable: {exc}"
     return "", {}, "content must be a string."
+
+
+def _normalize_optional_tool_identifier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.casefold() in {"null", "none", "undefined"}:
+        return None
+    return value
+
+
+STRUCTURED_PATCH_OPERATION_FIELDS = {
+    "type",
+    "file_path",
+    "destination_path",
+    "content",
+    "old_text",
+    "new_text",
+    "anchor",
+    "expected_occurrences",
+    "replace_all",
+    "overwrite",
+    "snapshot_id",
+    "expected_hash",
+}
+
+
+def _parse_structured_patch_operations(
+    value: object,
+) -> tuple[list[PatchOperation], str | None, dict[str, object]]:
+    if isinstance(value, str):
+        return (
+            [],
+            "apply_patch now requires structured operations, not a patch string.",
+            {
+                "recovery": "Call apply_patch with an operations array of create_file, replace_block, insert_after, replace_all, delete_file, move_file, or replace_file objects.",
+                "expectedProtocol": "structured_operations",
+            },
+        )
+    if isinstance(value, dict):
+        container = cast(dict[str, object], value)
+        raw_operations = container.get("operations")
+    else:
+        raw_operations = value
+    if not isinstance(raw_operations, list):
+        return (
+            [],
+            "apply_patch requires an operations array.",
+            {
+                "recovery": "Pass {'operations': [...]} or the operations array from the tool schema.",
+                "expectedProtocol": "structured_operations",
+            },
+        )
+
+    operations: list[PatchOperation] = []
+    failures: list[dict[str, object]] = []
+    for index, item in enumerate(raw_operations):
+        operation, error, metadata = _parse_structured_patch_operation(item)
+        if error is not None:
+            failures.append({"index": index, "error": error, **metadata})
+        elif operation is not None:
+            operations.append(operation)
+    if failures:
+        return [], "Invalid structured patch operation.", {"failures": failures}
+    return operations, None, {}
+
+
+def _parse_structured_patch_operation(
+    value: object,
+) -> tuple[PatchOperation | None, str | None, dict[str, object]]:
+    if not isinstance(value, dict):
+        return None, "Each operation must be an object.", {}
+    value = cast(dict[str, object], value)
+    unknown = sorted(set(value) - STRUCTURED_PATCH_OPERATION_FIELDS)
+    if unknown:
+        return None, "Operation contains unsupported fields.", {"unsupportedFields": unknown}
+    kind = value.get("type")
+    if not isinstance(kind, str) or not kind:
+        return None, "Operation type is required.", {}
+    file_path = value.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None, "file_path is required.", {"operation": kind}
+    unexpected = _unexpected_structured_patch_fields(kind, value)
+    if unexpected:
+        return (
+            None,
+            "Operation contains fields that are not valid for its type.",
+            {"operation": kind, "path": file_path, "invalidFields": unexpected},
+        )
+
+    expected_occurrences, error = _optional_positive_int(value.get("expected_occurrences"))
+    if error is not None:
+        return None, error, {"operation": kind, "path": file_path}
+    replace_all = value.get("replace_all")
+    replace_all_bool = bool(replace_all) if isinstance(replace_all, bool) else False
+    overwrite = value.get("overwrite")
+    overwrite_bool = bool(overwrite) if isinstance(overwrite, bool) else False
+    snapshot_id = _optional_string_value(value.get("snapshot_id"))
+    expected_hash = _optional_string_value(value.get("expected_hash"))
+
+    if kind == "create_file":
+        content = value.get("content")
+        if not isinstance(content, str):
+            return None, "create_file requires string content.", {"operation": kind, "path": file_path}
+        return (
+            PatchOperation(kind=kind, path=file_path, content=content),
+            None,
+            {},
+        )
+    if kind == "replace_file":
+        content = value.get("content")
+        if not isinstance(content, str):
+            return None, "replace_file requires string content.", {"operation": kind, "path": file_path}
+        return (
+            PatchOperation(
+                kind=kind,
+                path=file_path,
+                content=content,
+                overwrite=overwrite_bool,
+                snapshot_id=snapshot_id,
+                expected_hash=expected_hash,
+            ),
+            None,
+            {},
+        )
+    if kind == "delete_file":
+        return PatchOperation(kind=kind, path=file_path), None, {}
+    if kind == "move_file":
+        destination = value.get("destination_path")
+        if not isinstance(destination, str) or not destination.strip():
+            return None, "move_file requires destination_path.", {"operation": kind, "path": file_path}
+        return PatchOperation(kind=kind, path=file_path, move_to=destination), None, {}
+    if kind in {"replace_block", "replace_all"}:
+        old_text = value.get("old_text")
+        new_text = value.get("new_text")
+        if not isinstance(old_text, str) or old_text == "":
+            return None, f"{kind} requires non-empty old_text.", {"operation": kind, "path": file_path}
+        if not isinstance(new_text, str):
+            return None, f"{kind} requires string new_text.", {"operation": kind, "path": file_path}
+        if old_text == new_text:
+            return None, "Operation would not change file content.", {
+                **_mutation_error_metadata(MutationErrorCode.NO_OP),
+                "operation": kind,
+                "path": file_path,
+            }
+        return (
+            PatchOperation(
+                kind=kind,
+                path=file_path,
+                hunks=((old_text, new_text),),
+                expected_occurrences=expected_occurrences if expected_occurrences is not None else (None if kind == "replace_all" else 1),
+                replace_all=kind == "replace_all" or replace_all_bool,
+            ),
+            None,
+            {},
+        )
+    if kind in {"insert_before", "insert_after"}:
+        anchor = value.get("anchor")
+        content = value.get("content")
+        if not isinstance(anchor, str) or anchor == "":
+            return None, f"{kind} requires non-empty anchor.", {"operation": kind, "path": file_path}
+        if not isinstance(content, str) or content == "":
+            return None, f"{kind} requires non-empty content.", {"operation": kind, "path": file_path}
+        old_text = anchor
+        new_text = content + anchor if kind == "insert_before" else anchor + content
+        return (
+            PatchOperation(
+                kind=kind,
+                path=file_path,
+                hunks=((old_text, new_text),),
+                expected_occurrences=expected_occurrences if expected_occurrences is not None else 1,
+                replace_all=replace_all_bool,
+            ),
+            None,
+            {},
+        )
+    return None, "Unsupported apply_patch operation type.", {"operation": kind, "path": file_path}
+
+
+def _unexpected_structured_patch_fields(kind: str, value: dict[str, object]) -> list[str]:
+    allowed_by_kind = {
+        "create_file": {"type", "file_path", "content"},
+        "replace_file": {
+            "type",
+            "file_path",
+            "content",
+            "overwrite",
+            "snapshot_id",
+            "expected_hash",
+        },
+        "delete_file": {"type", "file_path"},
+        "move_file": {"type", "file_path", "destination_path"},
+        "replace_block": {
+            "type",
+            "file_path",
+            "old_text",
+            "new_text",
+            "expected_occurrences",
+            "replace_all",
+        },
+        "insert_before": {
+            "type",
+            "file_path",
+            "anchor",
+            "content",
+            "expected_occurrences",
+            "replace_all",
+        },
+        "insert_after": {
+            "type",
+            "file_path",
+            "anchor",
+            "content",
+            "expected_occurrences",
+            "replace_all",
+        },
+        "replace_all": {
+            "type",
+            "file_path",
+            "old_text",
+            "new_text",
+            "expected_occurrences",
+            "replace_all",
+        },
+    }
+    allowed = allowed_by_kind.get(kind)
+    if allowed is None:
+        return []
+    return sorted(
+        field
+        for field, field_value in value.items()
+        if field not in allowed and _structured_patch_field_is_set(field_value)
+    )
+
+
+def _structured_patch_field_is_set(value: object) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, str) and value == "":
+        return False
+    return True
+
+
+def _optional_positive_int(value: object) -> tuple[int | None, str | None]:
+    if value is None:
+        return None, None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None, "expected_occurrences must be an integer or null."
+    if value < 1:
+        return None, "expected_occurrences must be greater than zero."
+    return value, None
+
+
+def _optional_string_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _normalize_patch_operation_path(cwd: Path, path: str, *, expect_existing: bool) -> str:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return path
+    parts = candidate.parts
+    if not parts or parts[0] not in {"a", "b"}:
+        return path
+    stripped = Path(*parts[1:]) if len(parts) > 1 else Path()
+    if not str(stripped):
+        return path
+    if expect_existing and (cwd / stripped).exists():
+        return str(stripped)
+    if not expect_existing and not (cwd / candidate).exists():
+        return str(stripped)
+    return path
+
+
+def _new_file_line_endings(path: Path, content: str) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".bat", ".cmd"}:
+        return "CRLF"
+    return _detect_line_endings(content)
+
+
+def _select_patch_replacement_variant(
+    text: str,
+    old: str,
+    new: str,
+) -> tuple[str, str, int]:
+    variants: list[tuple[str, str]] = [(old, new)]
+    if old.endswith("\n"):
+        variants.append((old[:-1], new[:-1] if new.endswith("\n") else new))
+    if old.startswith("\n"):
+        variants.append((old[1:], new[1:] if new.startswith("\n") else new))
+    if old.startswith("\n") and old.endswith("\n"):
+        trimmed_new = new
+        if trimmed_new.startswith("\n"):
+            trimmed_new = trimmed_new[1:]
+        if trimmed_new.endswith("\n"):
+            trimmed_new = trimmed_new[:-1]
+        variants.append((old[1:-1], trimmed_new))
+
+    seen: set[str] = set()
+    best = (old, new, 0)
+    for candidate_old, candidate_new in variants:
+        if not candidate_old or candidate_old in seen:
+            continue
+        seen.add(candidate_old)
+        count = text.count(candidate_old)
+        if count == 1:
+            return candidate_old, candidate_new, count
+        if count > best[2]:
+            best = (candidate_old, candidate_new, count)
+    return best
 
 
 def _format_notebook(path: Path) -> tuple[str, str | None]:
@@ -2101,35 +3490,35 @@ class PageRange:
         return f"{self.start}-{self.end}"
 
 
-def _read_pdf(path: Path, pages: str | None) -> str:
+def _read_pdf(path: Path, pages: str | None, *, name: str) -> str:
     data = path.read_bytes()
     page_count = _count_pdf_pages(data)
     page_range, range_error = _parse_page_range(pages)
     if range_error is not None:
-        return ToolResult.error_result("read", range_error, metadata={"path": str(path)}).to_json()
+        return ToolResult.error_result(name, range_error, metadata={"path": str(path)}).to_json()
 
     if page_range is None and page_count is not None and page_count > PDF_LARGE_PAGE_THRESHOLD:
         return ToolResult.error_result(
-            "read",
+            name,
             f'PDF has {page_count} pages; provide "pages" to read a range.',
             metadata={"path": str(path), "pageCount": page_count},
         ).to_json()
     if page_range is not None and page_range.count > PDF_MAX_PAGE_RANGE:
         return ToolResult.error_result(
-            "read",
+            name,
             f"PDF page range exceeds {PDF_MAX_PAGE_RANGE} pages.",
             metadata={"path": str(path), "pageCount": page_count},
         ).to_json()
     if page_range is not None and page_count is not None and page_range.end > page_count:
         return ToolResult.error_result(
-            "read",
+            name,
             f"PDF page range exceeds total page count ({page_count}).",
             metadata={"path": str(path), "pageCount": page_count},
         ).to_json()
 
     encoded = base64.b64encode(data).decode("ascii")
     return ToolResult.ok_result(
-        "read",
+        name,
         f"data:application/pdf;base64,{encoded}",
         metadata={
             "path": str(path),

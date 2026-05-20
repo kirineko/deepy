@@ -1126,7 +1126,7 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
     tool_output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -1144,8 +1144,8 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write",
-                payload={"call_id": "call-1", "arguments": '{"path":"src/app.py"}'},
+                name="write_file",
+                payload={"call_id": "call-1", "arguments": '{"file_path":"src/app.py"}'},
             )
         )
         emit_event(
@@ -1675,7 +1675,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
     write_output = json.dumps(
         {
             "ok": True,
-            "name": "write",
+            "name": "write_file",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -1701,7 +1701,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
             {
                 "type": "function_call",
                 "call_id": "write-1",
-                "name": "write",
+                "name": "write_file",
                 "arguments": '{"path":"selection_sort.py"}',
             },
             {"type": "function_call_output", "call_id": "write-1", "output": write_output},
@@ -2095,7 +2095,7 @@ async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
     tool_output = json.dumps(
         {
             "ok": True,
-            "name": "read",
+            "name": "read_file",
             "output": long_output,
             "error": None,
             "metadata": {"path": "src/app.py"},

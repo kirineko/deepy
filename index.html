@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.11 是为 DeepSeek 设计的终端编程 Agent，新增退出 summary 的 session 费用统计，并修复稳定 UI 在 WebSearch 等工具调用时的底部运行状态栏显示稳定性。"
+      content="Deepy 0.2.12 是为 DeepSeek 设计的终端编程 Agent，重构 apply_patch 为结构化文件操作协议，提升多文件编辑、diff 展示和语法高亮体验。"
     >
-    <title>Deepy 0.2.11 - DeepSeek 终端编程 Agent</title>
+    <title>Deepy 0.2.12 - DeepSeek 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -34,11 +34,11 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.11</p>
+          <p class="release-kicker">Deepy 0.2.12</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            为 DeepSeek 设计的终端编程 Agent。0.2.11 在退出 summary 中加入 DeepSeek session 费用统计，
-            并修复稳定 UI 中 WebSearch 等工具运行时底部状态栏的显示错位。
+            为 DeepSeek 设计的终端编程 Agent。0.2.12 将 apply_patch 升级为结构化文件操作协议，
+            让多文件编辑更稳定，diff 展示更完整，并按文件分别提供语法高亮。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
@@ -46,10 +46,10 @@
             <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.11 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.12 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.11</dd>
+            <dd>0.2.12</dd>
           </div>
           <div>
             <dt>TUI</dt>
@@ -68,29 +68,29 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.11 的重点</h2>
+          <h2 id="capabilities-title">0.2.12 的重点</h2>
           <p>
-            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时让退出 summary 能显示本次
-            session 的 DeepSeek 余额差额，并稳定 WebSearch 等工具运行时的底部状态栏。
+            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时把复杂文件编辑从
+            patch 字符串 DSL 升级为结构化 operations，降低模型调用失败率。
           </p>
         </div>
         <div class="capability-grid">
           <article>
-            <h3>`/status` 用量统计</h3>
+            <h3>结构化 `apply_patch`</h3>
             <p>
-              在交互式会话里直接查看当前 session、项目累计 token、cache hit、上下文窗口和模型配置。
+              模型通过 create、update、delete、move、replace、insert 等 operations 表达复杂文件修改，不再依赖手写 diff DSL。
             </p>
           </article>
           <article>
-            <h3>DeepSeek 余额</h3>
+            <h3>多文件 diff 审阅</h3>
             <p>
-              `/status` 继续显示当前账户余额；进入可计费会话后，退出 summary 会基于起止余额快照显示 session 费用。
+              `apply_patch` 会完整展示所有文件的 diff，不再压缩大 patch；每个文件独立渲染，语法高亮更准确。
             </p>
           </article>
           <article>
-            <h3>统一退出总结</h3>
+            <h3>文件工具边界更清晰</h3>
             <p>
-              稳定 UI 和 TUI 的 `/exit`、`/quit`、Ctrl+D 都输出 session summary，包含消息数、模型用量和可计算的 session 费用。
+              模型侧保留 read、edit、write、patch 四类入口，底层统一经过路径策略、编码保留、快照检查和原子写入。
             </p>
           </article>
           <article>
@@ -118,7 +118,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.11 已覆盖主要日常路径：对话、状态检查和退出总结。
+            TUI 仍是 opt-in 实验入口，但 0.2.12 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -192,7 +192,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.11 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.12 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -230,7 +230,7 @@
             <figcaption>
               <span>05</span>
               <h3>文件修改仍然可审查</h3>
-              <p>Modify 工具显示整行 diff、语法高亮和路径信息，用户能快速确认 Agent 的文件改动。</p>
+              <p>文件工具显示整行 diff、按文件分段的语法高亮和路径信息，用户能快速确认 Agent 的文件改动。</p>
             </figcaption>
           </figure>
           <figure class="workflow-card">
@@ -377,7 +377,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.11</span>
+      <span>Deepy 0.2.12</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>
