@@ -31,6 +31,7 @@ SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_
 SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
 TOOL_DISPLAY_LABELS = {
     "AskUserQuestion": "AskUserQuestion",
+    "Search": "Search",
     "WebFetch": "WebFetch",
     "WebSearch": "WebSearch",
     "apply_patch": "Patch",
@@ -113,6 +114,8 @@ def parse_tool_output(output: str) -> ToolOutputView:
 
     if name == "load_skill" and ok_value is True:
         detail = _string_or_none(metadata_dict.get("name")) or path or ""
+    elif name == "Search" and ok_value is True:
+        detail = _format_search_output_detail(metadata_dict, text_output)
     else:
         detail = (error or path or _first_nonempty_line(text_output) or "").strip()
     summary = f"{format_tool_display_label(name)} {status}" + (
@@ -791,6 +794,8 @@ def _format_tool_params_snippet(
         return _format_write_params_snippet(args, project_root=project_root)
     if tool_name == "apply_patch":
         return _format_patch_params_snippet(args, project_root=project_root)
+    if tool_name == "Search":
+        return _format_search_params_snippet(args, project_root=project_root)
 
     if tool_name == "shell":
         command = args.get("command")
@@ -842,6 +847,50 @@ def _format_patch_params_snippet(args: dict[str, Any], *, project_root: str | No
         return f"{operation_count} {operation_label}, {len(paths)} {file_label}: {', '.join(labels)}"
 
     return "operations"
+
+
+def _format_search_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
+    query = _string_or_none(args.get("query")) or "query"
+    path = _string_or_none(args.get("path")) or "."
+    glob = _string_or_none(args.get("glob"))
+    output_mode = _string_or_none(args.get("output_mode"))
+    mode = _string_or_none(args.get("mode"))
+    shortened_path = _shorten_project_path(path, project_root=project_root)
+    parts = [repr(_truncate(query, 60)), "in", shortened_path]
+    if glob:
+        parts.append(f"glob {glob}")
+    if output_mode and output_mode != "content":
+        parts.append(output_mode)
+    if mode and mode != "literal":
+        parts.append(mode)
+    return " ".join(parts)
+
+
+def _format_search_output_detail(metadata: dict[str, Any], output: str) -> str:
+    total_matches = metadata.get("totalMatches")
+    matched_files = metadata.get("matchedFileCount")
+    total_results = metadata.get("totalResults")
+    details: list[str] = []
+    if isinstance(total_matches, int):
+        match_label = "match" if total_matches == 1 else "matches"
+        details.append(f"{total_matches} {match_label}")
+    if isinstance(matched_files, int):
+        file_label = "file" if matched_files == 1 else "files"
+        details.append(f"in {matched_files} {file_label}")
+    if isinstance(total_results, int) and total_results != total_matches:
+        result_label = "result" if total_results == 1 else "results"
+        details.append(f"({total_results} {result_label})")
+    if metadata.get("truncated") is True:
+        next_offset = metadata.get("nextOffset")
+        if isinstance(next_offset, int):
+            details.append(f"truncated, offset {next_offset}")
+        else:
+            details.append("truncated")
+    if metadata.get("timedOut") is True:
+        details.append("timed out")
+    if details:
+        return " ".join(details)
+    return _first_nonempty_line(output) or ""
 
 
 def _text_size_summary(text: str) -> str:

@@ -7,6 +7,7 @@ import os
 import shlex
 import sys
 
+import deepy.tools.search as search_module
 from deepy.config import Settings
 from deepy.config.settings import (
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
@@ -2102,6 +2103,156 @@ def test_load_skill_returns_skill_body_and_root(tmp_path):
     assert payload["metadata"]["root"] == str(skill_dir)
 
 
+def test_search_literal_content_default(tmp_path):
+    tmp_path.joinpath("src").mkdir()
+    tmp_path.joinpath("src", "app.py").write_text(
+        "class ToolRuntime:\n    pass\n",
+        encoding="utf-8",
+    )
+    tmp_path.joinpath("README.md").write_text("No match here\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.search("ToolRuntime", path=".", glob="src/*.py"))
+
+    assert payload["ok"] is True
+    assert payload["name"] == "Search"
+    assert payload["output"] == "src/app.py:1:class ToolRuntime:"
+    assert payload["metadata"]["engine"] == "python"
+    assert payload["metadata"]["mode"] == "literal"
+    assert payload["metadata"]["outputMode"] == "content"
+    assert payload["metadata"]["matchedFileCount"] == 1
+    assert payload["metadata"]["totalMatches"] == 1
+    assert payload["metadata"]["truncated"] is False
+
+
+def test_search_literal_mode_does_not_treat_query_as_regex(tmp_path):
+    tmp_path.joinpath("data.txt").write_text(
+        "abcXdef\nabc.def\n",
+        encoding="utf-8",
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.search("abc.def"))
+
+    assert payload["ok"] is True
+    assert payload["output"] == "data.txt:2:abc.def"
+    assert payload["metadata"]["totalMatches"] == 1
+
+
+def test_search_regex_mode_and_invalid_regex(tmp_path):
+    tmp_path.joinpath("data.txt").write_text("alpha1\nalpha2\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    regex_payload = decode(runtime.search(r"alpha\d", mode="regex"))
+    invalid_payload = decode(runtime.search("[", mode="regex"))
+
+    assert regex_payload["ok"] is True
+    assert "data.txt:1:alpha1" in regex_payload["output"]
+    assert "data.txt:2:alpha2" in regex_payload["output"]
+    assert regex_payload["metadata"]["totalMatches"] == 2
+    assert invalid_payload["ok"] is False
+    assert invalid_payload["metadata"]["error_code"] == "invalid_regex"
+    assert "Invalid regex pattern" in invalid_payload["error"]
+
+
+def test_search_regex_timeout_returns_structured_error(tmp_path, monkeypatch):
+    tmp_path.joinpath("data.txt").write_text("needle\n", encoding="utf-8")
+
+    def timeout_count_in_line(_self, _line):
+        return 0, True
+
+    monkeypatch.setattr(search_module._Matcher, "count_in_line", timeout_count_in_line)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.search("needle", mode="regex"))
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["timedOut"] is True
+    assert payload["metadata"]["error_code"] == "regex_timeout"
+
+
+def test_search_output_modes_and_pagination(tmp_path):
+    tmp_path.joinpath("a.txt").write_text("needle\n", encoding="utf-8")
+    tmp_path.joinpath("b.txt").write_text("needle\nneedle\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    files_page = decode(runtime.search("needle", output_mode="files", limit=1))
+    counts = decode(runtime.search("needle", output_mode="count"))
+
+    assert files_page["ok"] is True
+    assert files_page["output"].startswith("a.txt")
+    assert files_page["metadata"]["resultCount"] == 1
+    assert files_page["metadata"]["totalResults"] == 2
+    assert files_page["metadata"]["nextOffset"] == 1
+    assert files_page["metadata"]["truncated"] is True
+    assert counts["ok"] is True
+    assert counts["output"].splitlines() == ["a.txt:1", "b.txt:2"]
+
+
+def test_search_respects_gitignore_and_include_ignored(tmp_path):
+    tmp_path.joinpath(".gitignore").write_text("ignored/\n", encoding="utf-8")
+    tmp_path.joinpath("src").mkdir()
+    tmp_path.joinpath("ignored").mkdir()
+    tmp_path.joinpath("src", "hit.txt").write_text("needle\n", encoding="utf-8")
+    tmp_path.joinpath("ignored", "hit.txt").write_text("needle\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    default_payload = decode(runtime.search("needle", output_mode="files"))
+    included_payload = decode(runtime.search("needle", output_mode="files", include_ignored=True))
+
+    assert default_payload["ok"] is True
+    assert default_payload["output"].splitlines() == ["src/hit.txt"]
+    assert included_payload["ok"] is True
+    assert included_payload["output"].splitlines() == ["ignored/hit.txt", "src/hit.txt"]
+
+
+def test_search_skips_binary_oversized_sensitive_and_unsupported_files(tmp_path):
+    tmp_path.joinpath("visible.txt").write_text("needle\n", encoding="utf-8")
+    tmp_path.joinpath(".env").write_text("needle=secret\n", encoding="utf-8")
+    tmp_path.joinpath("binary.bin").write_bytes(b"needle\x00hidden")
+    tmp_path.joinpath("notebook.ipynb").write_text("needle\n", encoding="utf-8")
+    tmp_path.joinpath("large.txt").write_bytes(b"needle" + b"x" * search_module.MAX_SEARCH_FILE_BYTES)
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.search("needle", output_mode="files"))
+    skipped = {item["path"]: item["reason"] for item in payload["metadata"]["skipped"]}
+
+    assert payload["ok"] is True
+    assert payload["output"] == "visible.txt"
+    assert skipped[".env"] == "sensitive"
+    assert skipped["binary.bin"] == "binary"
+    assert skipped["large.txt"] == "too_large"
+    assert skipped["notebook.ipynb"] == "unsupported"
+    assert payload["metadata"]["sensitiveFiltered"] == 1
+
+
+def test_search_decodes_windows_text_encodings_and_crlf(tmp_path):
+    tmp_path.joinpath("utf16.txt").write_text("needle\r\nnext\r\n", encoding="utf-16")
+    tmp_path.joinpath("utf8sig.txt").write_text("needle\n", encoding="utf-8-sig")
+    tmp_path.joinpath("gb18030.txt").write_bytes("中文 needle\n".encode("gb18030"))
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+
+    payload = decode(runtime.search("needle", output_mode="content"))
+
+    assert payload["ok"] is True
+    assert "utf16.txt:1:needle" in payload["output"]
+    assert "utf8sig.txt:1:needle" in payload["output"]
+    assert "gb18030.txt:1:中文 needle" in payload["output"]
+    assert payload["metadata"]["totalMatches"] == 3
+
+
+def test_search_rejects_paths_outside_project(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    outside.write_text("needle\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(runtime.search("needle", path=str(outside)))
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["error_code"] == "path_policy"
+    assert payload["metadata"]["policyDecision"] == "deny"
+
+
 def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
@@ -2110,6 +2261,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert [tool.name for tool in tools] == [
         "shell",
         "AskUserQuestion",
+        "Search",
         "read_file",
         "edit_text",
         "write_file",
@@ -2130,16 +2282,20 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "偏好" in ask_tool.description
     assert "for Chinese requests, ask in Chinese" in ask_tool.description
     assert "low-impact details" in ask_tool.description
-    read_tool = tools[2]
+    search_tool = tools[2]
+    assert search_tool.name == "Search"
+    assert "without shell grep or rg" in search_tool.description
+    assert "Defaults to literal content search" in search_tool.description
+    read_tool = tools[3]
     assert read_tool.name == "read_file"
     assert "managed text snapshots" in read_tool.description
-    edit_tool = tools[3]
+    edit_tool = tools[4]
     assert edit_tool.name == "edit_text"
     assert "Preferred tool for small single-file exact/string edits" in edit_tool.description
-    write_tool = tools[4]
+    write_tool = tools[5]
     assert write_tool.name == "write_file"
     assert "snapshot_id or expected_hash" in write_tool.description
-    patch_tool = tools[5]
+    patch_tool = tools[6]
     assert patch_tool.name == "apply_patch"
     assert "multiple edits in one file" in patch_tool.description
     assert "operations array" in patch_tool.description
@@ -2159,6 +2315,30 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
     assert list(tools["shell"].params_json_schema["properties"]) == ["command", "description"]
     assert tools["AskUserQuestion"].params_json_schema["required"] == ["questions"]
     assert list(tools["AskUserQuestion"].params_json_schema["properties"]) == ["questions"]
+    assert tools["Search"].params_json_schema["required"] == [
+        "query",
+        "path",
+        "glob",
+        "mode",
+        "output_mode",
+        "case_sensitive",
+        "context",
+        "limit",
+        "offset",
+        "include_ignored",
+    ]
+    assert list(tools["Search"].params_json_schema["properties"]) == [
+        "query",
+        "path",
+        "glob",
+        "mode",
+        "output_mode",
+        "case_sensitive",
+        "context",
+        "limit",
+        "offset",
+        "include_ignored",
+    ]
     assert tools["read_file"].params_json_schema["required"] == [
         "file_path",
         "offset",

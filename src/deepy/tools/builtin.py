@@ -29,6 +29,7 @@ from deepy.utils import json as json_utils
 
 from .file_state import FileSnippet, FileState
 from .result import ToolResult
+from .search import SearchMode, SearchOutputMode, SearchRequest, search_project
 from .shell_output import decode_shell_output
 from .shell_utils import RuntimeEnvironment
 from .shell_utils import build_disable_extglob_command
@@ -1571,6 +1572,46 @@ class ToolRuntime:
         pages: str | None = None,
     ) -> str:
         return self._read_file_result(path, start_line=start_line, limit=limit, pages=pages)
+
+    def search(
+        self,
+        query: str,
+        *,
+        path: str = ".",
+        glob: str | None = None,
+        mode: str = "literal",
+        output_mode: str = "content",
+        case_sensitive: bool = True,
+        context: int = 0,
+        limit: int = 100,
+        offset: int = 0,
+        include_ignored: bool = False,
+    ) -> str:
+        name = "Search"
+        request = SearchRequest(
+            query=query,
+            path=path,
+            glob=glob,
+            mode=cast(SearchMode, mode),
+            output_mode=cast(SearchOutputMode, output_mode),
+            case_sensitive=case_sensitive,
+            context=context,
+            limit=limit,
+            offset=offset,
+            include_ignored=include_ignored,
+        )
+        page = search_project(self.cwd, request)
+        error = page.metadata.get("error")
+        error_code = page.metadata.get("error_code")
+        if isinstance(error, str) and error_code:
+            return ToolResult.error_result(name, error, metadata=page.metadata).to_json()
+        if error_code and not page.output:
+            return ToolResult.error_result(
+                name,
+                "Search failed.",
+                metadata=page.metadata,
+            ).to_json()
+        return ToolResult.ok_result(name, page.output, metadata=page.metadata).to_json()
 
     def write(
         self,

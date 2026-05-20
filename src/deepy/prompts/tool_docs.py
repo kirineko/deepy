@@ -5,6 +5,7 @@ from importlib import resources
 
 TOOL_DOC_FILES = (
     "shell.md",
+    "Search.md",
     "read_file.md",
     "edit_text.md",
     "write_file.md",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from deepy.utils import json as json_utils
@@ -25,6 +26,22 @@ def build_function_tools(
         args = _tool_args(raw_input)
         questions = args.get("questions")
         return runtime.ask_user_question(questions if isinstance(questions, list) else [])
+
+    async def invoke_search(_context: object, raw_input: str) -> str:
+        args = _tool_args(raw_input)
+        return await asyncio.to_thread(
+            runtime.search,
+            _string_arg(args, "query"),
+            path=_string_arg(args, "path") or ".",
+            glob=_optional_string_arg(args, "glob"),
+            mode=_string_arg(args, "mode") or "literal",
+            output_mode=_string_arg(args, "output_mode") or "content",
+            case_sensitive=_bool_arg(args, "case_sensitive", True),
+            context=_int_arg(args, "context", 0),
+            limit=_int_arg(args, "limit", 100),
+            offset=_int_arg(args, "offset", 0),
+            include_ignored=_bool_arg(args, "include_ignored", False),
+        )
 
     async def invoke_read_file(_context: object, raw_input: str) -> str:
         args = _tool_args(raw_input)
@@ -113,6 +130,17 @@ def build_function_tools(
             params_json_schema=ASK_USER_QUESTION_SCHEMA,
             on_invoke_tool=invoke_ask_user_question,
             strict_json_schema=False,
+        ),
+        FunctionTool(
+            name="Search",
+            description=(
+                "Search local project files without shell grep or rg. Prefer this for repository "
+                "code/text search. Defaults to literal content search; use regex mode only when "
+                "a regular expression is intentional."
+            ),
+            params_json_schema=SEARCH_SCHEMA,
+            on_invoke_tool=invoke_search,
+            strict_json_schema=True,
         ),
         FunctionTool(
             name="read_file",
@@ -300,6 +328,67 @@ ASK_USER_QUESTION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["questions"],
+    "additionalProperties": False,
+}
+
+SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Literal string or regex pattern to search for in local project files.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Project-relative file or directory path to search. Use '.' for the project.",
+        },
+        "glob": {
+            "type": ["string", "null"],
+            "description": "Optional glob filter against project-relative paths, such as '*.py'.",
+        },
+        "mode": {
+            "type": "string",
+            "enum": ["literal", "regex"],
+            "description": "Search mode. Use literal by default; use regex only intentionally.",
+        },
+        "output_mode": {
+            "type": "string",
+            "enum": ["content", "files", "count"],
+            "description": "Return matching lines, matching file paths, or per-file counts.",
+        },
+        "case_sensitive": {
+            "type": "boolean",
+            "description": "Whether matching is case-sensitive.",
+        },
+        "context": {
+            "type": "integer",
+            "description": "Number of context lines before and after content matches.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Maximum number of result entries to return. Use 0 for unlimited sparingly.",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Number of result entries to skip for pagination.",
+        },
+        "include_ignored": {
+            "type": "boolean",
+            "description": "Whether to include gitignored files. Sensitive files are still filtered.",
+        },
+    },
+    "required": [
+        "query",
+        "path",
+        "glob",
+        "mode",
+        "output_mode",
+        "case_sensitive",
+        "context",
+        "limit",
+        "offset",
+        "include_ignored",
+    ],
     "additionalProperties": False,
 }
 

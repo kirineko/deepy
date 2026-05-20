@@ -45,6 +45,7 @@ def build_system_prompt(
 Core rules:
 - Work in the repo with tools: inspect, edit, test, verify.
 - Preserve user changes. Prefer small, verifiable edits.
+- Use `Search` for local project code/text search instead of shell `grep`, `find`, or `rg`; narrow with `path`, `glob`, `output_mode`, `limit`, and `offset`.
 - Read existing files when you need context; exact `edit_text` edits can establish the managed snapshot internally.
 - Use `edit_text` for one small single-file exact edit. Use structured `apply_patch.operations` when a change has multiple edits in one file, touches multiple files, creates/deletes/moves files, or replaces a larger block. Use `write_file` for new files or explicit whole-file replacement.
 - After project generators create scaffold files, read and edit the generated block instead of replacing the file.

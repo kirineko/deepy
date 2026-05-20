@@ -1,6 +1,6 @@
 [project]
 name = "deepy-cli"
-version = "0.2.12"
+version = "0.2.13"
 description = "Deepy - Vibe coding for DeepSeek models in your terminal"
 readme = "README.md"
 authors = [
@@ -21,8 +21,10 @@ dependencies = [
     "openai-agents>=0.17.0",
     "openai>=2.26,<3",
     "orjson>=3.10,<4",
+    "pathspec>=1.1.1",
     "pydantic>=2.12,<3",
     "prompt-toolkit>=3.0,<4",
+    "regex>=2026.5.9",
     "pyyaml>=6.0,<7",
     "rich>=14.2,<15",
     "textual>=8.2,<9",

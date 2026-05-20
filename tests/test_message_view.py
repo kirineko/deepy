@@ -51,6 +51,29 @@ def test_format_tool_output_summary_summarizes_loaded_skill_by_name():
     assert format_tool_output_summary(output) == "[Load Skill] ok - demo"
 
 
+def test_format_tool_output_summary_summarizes_search_metadata():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "Search",
+            "output": "src/a.py:1:needle",
+            "metadata": {
+                "totalMatches": 3,
+                "matchedFileCount": 2,
+                "totalResults": 3,
+                "truncated": True,
+                "nextOffset": 2,
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    assert (
+        format_tool_output_summary(output)
+        == "[Search] ok - 3 matches in 2 files truncated, offset 2"
+    )
+
+
 def test_format_tool_output_summary_uses_error_detail():
     output = (
         '{"ok":false,"name":"shell","output":"stderr","error":"Command exited with code 1.",'
@@ -74,6 +97,7 @@ def test_parse_tool_output_preserves_pending_question_state():
 
 def test_format_tool_display_label_normalizes_protocol_names():
     assert format_tool_display_label("AskUserQuestion") == "[AskUserQuestion]"
+    assert format_tool_display_label("Search") == "[Search]"
     assert format_tool_display_label("WebFetch") == "[WebFetch]"
     assert format_tool_display_label("edit_text") == "[Edit]"
     assert format_tool_display_label("todo_write") == "[Todo]"
@@ -862,6 +886,24 @@ def test_format_tool_call_summary_formats_read_arguments():
         )
         == "[Read] README.md"
     )
+
+
+def test_format_tool_call_summary_formats_search_arguments():
+    summary = format_tool_call_summary(
+        "Search",
+        json.dumps(
+            {
+                "query": "ToolRuntime",
+                "path": "/repo/src",
+                "glob": "*.py",
+                "mode": "literal",
+                "output_mode": "files",
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "[Search] 'ToolRuntime' in src glob *.py files"
 
 
 def test_format_tool_call_summary_formats_write_without_content_body():
