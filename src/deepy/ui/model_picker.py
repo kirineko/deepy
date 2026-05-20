@@ -15,7 +15,7 @@ from prompt_toolkit.widgets import Box
 from prompt_toolkit.widgets import Frame
 from prompt_toolkit.widgets import RadioList
 
-from deepy.config import DEEPSEEK_MODEL_CATALOG
+from deepy.config import PROVIDER_CATALOG, provider_info_for, thinking_modes_for_provider
 
 
 REASONING_MODE_CHOICES = (
@@ -23,25 +23,102 @@ REASONING_MODE_CHOICES = (
     ("high", "high  Thinking enabled, lower reasoning effort"),
     ("max", "max   Thinking enabled, maximum reasoning effort"),
 )
+SWITCH_ONLY_THINKING_CHOICES = (
+    ("disabled", "disabled  Thinking disabled"),
+    ("enabled", "enabled   Thinking enabled"),
+)
+OPENROUTER_REASONING_CHOICES = (
+    ("enabled", "enabled  Reasoning enabled with model default settings"),
+    ("disabled", "disabled Reasoning disabled"),
+    ("xhigh", "xhigh    Largest reasoning token allocation"),
+    ("high", "high     Large reasoning token allocation"),
+    ("medium", "medium   Moderate reasoning token allocation"),
+    ("low", "low      Smaller reasoning token allocation"),
+    ("minimal", "minimal  Minimal reasoning token allocation"),
+    ("none", "none     Thinking disabled"),
+)
 
 
-def pick_model(current: str) -> str | None:
-    return ModelPicker(current).run()
+def thinking_mode_choices(provider: str) -> tuple[tuple[str, str], ...]:
+    if provider == "openrouter":
+        return OPENROUTER_REASONING_CHOICES
+    modes = thinking_modes_for_provider(provider)
+    if modes == ("disabled", "enabled"):
+        return SWITCH_ONLY_THINKING_CHOICES
+    return REASONING_MODE_CHOICES
 
 
-def pick_reasoning_mode(current: str) -> str | None:
-    return ReasoningModePicker(current).run()
+def provider_api_key_reconfiguration_message(provider: str) -> str:
+    provider_info = provider_info_for(provider)
+    message = (
+        f"Provider switched to {provider}. "
+        "Reconfigure the API key for this provider with /reset or `deepy config setup`."
+    )
+    if provider_info.api_key_url:
+        message += f" Create an API key at {provider_info.api_key_url}"
+    return message
+
+
+def pick_provider(current: str) -> str | None:
+    return ProviderPicker(current).run()
+
+
+def pick_model(current: str, *, provider: str = "deepseek") -> str | None:
+    return ModelPicker(current, provider=provider).run()
+
+
+def pick_reasoning_mode(current: str, *, provider: str = "deepseek") -> str | None:
+    return ReasoningModePicker(current, provider=provider).run()
+
+
+class ProviderPicker:
+    def __init__(self, current: str) -> None:
+        default = current if current in {provider.id for provider in PROVIDER_CATALOG} else "deepseek"
+        self._radio_list = RadioList[str](
+            values=[
+                (provider.id, f"{provider.id}\n  {provider.description}")
+                for provider in PROVIDER_CATALOG
+            ],
+            default=default,
+            show_numbers=False,
+            select_on_focus=True,
+            open_character="",
+            select_character="›",
+            close_character="",
+            show_cursor=False,
+            show_scrollbar=False,
+            container_style="class:model-list",
+            checked_style="class:model-list.checked",
+        )
+        self._app = self._build_app(current=current)
+
+    def run(self) -> str | None:
+        return self._app.run()
+
+    def _header_fragments(self, current: str) -> StyleAndTextTuples:
+        return [
+            ("class:header.title", " Select provider "),
+            ("class:header.meta", f" current {current} "),
+        ]
+
+    def _build_app(self, *, current: str) -> Application[str | None]:
+        return _build_picker_app(
+            radio_list=self._radio_list,
+            header_fragments=lambda: self._header_fragments(current),
+            frame_title=" Providers ",
+        )
 
 
 class ModelPicker:
-    def __init__(self, current: str) -> None:
-        default = current if current in {model.name for model in DEEPSEEK_MODEL_CATALOG} else None
+    def __init__(self, current: str, *, provider: str) -> None:
+        provider_info = provider_info_for(provider)
+        default = current if current in {model.name for model in provider_info.models} else None
         if default is None:
-            default = DEEPSEEK_MODEL_CATALOG[0].name
+            default = provider_info.default_model
         self._radio_list = RadioList[str](
             values=[
                 (model.name, f"{model.name}\n  {model.description}")
-                for model in DEEPSEEK_MODEL_CATALOG
+                for model in provider_info.models
             ],
             default=default,
             show_numbers=False,
@@ -74,10 +151,12 @@ class ModelPicker:
 
 
 class ReasoningModePicker:
-    def __init__(self, current: str) -> None:
-        default = current if current in {value for value, _label in REASONING_MODE_CHOICES} else "max"
+    def __init__(self, current: str, *, provider: str) -> None:
+        choices = thinking_mode_choices(provider)
+        default_mode = provider_info_for(provider).default_thinking_mode
+        default = current if current in {value for value, _label in choices} else default_mode
         self._radio_list = RadioList[str](
-            values=list(REASONING_MODE_CHOICES),
+            values=list(choices),
             default=default,
             show_numbers=False,
             select_on_focus=True,

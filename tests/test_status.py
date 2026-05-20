@@ -29,7 +29,8 @@ def test_status_report_includes_counts_and_context(tmp_path):
 
     assert report.skill_count >= 3
     assert "API key: configured" in rendered
-    assert "Reasoning: max" in rendered
+    assert "Provider: deepseek" in rendered
+    assert "Thinking: max" in rendered
     assert "Reserved context: 50000 tokens" in rendered
     assert "Input suggestions: enabled" in rendered
     assert f"Project: {tmp_path}" in rendered
@@ -42,6 +43,7 @@ def test_status_report_to_dict_is_json_ready(tmp_path):
     payload = status_report_to_dict(report)
 
     assert payload["project_root"] == str(tmp_path)
+    assert payload["provider"] == "deepseek"
     assert payload["model"] == "deepseek-v4-pro"
     assert payload["reasoning_mode"] == "max"
     assert payload["reserved_context_tokens"] == 50000

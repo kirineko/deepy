@@ -108,6 +108,24 @@ def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
     assert "3" in summary
 
 
+def test_build_exit_summary_text_shows_recorded_input_suggestion_model():
+    summary = build_exit_summary_text(
+        session={
+            "inputSuggestionUsage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 3,
+                "total_tokens": 15,
+                "requests": 2,
+                "model": "xiaomi/mimo-v2.5-pro",
+            },
+        },
+        model="xiaomi/mimo-v2.5-pro",
+    )
+
+    assert "suggestions" in summary
+    assert "xiaomi/mimo-v2.5-pro" in summary
+
+
 def test_build_exit_summary_text_shows_session_cost_delta():
     summary = build_exit_summary_text(
         session={
@@ -139,3 +157,13 @@ def test_build_exit_summary_text_shows_unavailable_session_cost():
 
     assert "session cost" in summary
     assert "unavailable (end timeout)" in summary
+
+
+def test_build_exit_summary_text_shows_unsupported_session_cost():
+    summary = build_exit_summary_text(
+        model="xiaomi/mimo-v2.5-pro",
+        session_cost_unsupported=True,
+    )
+
+    assert "session cost" in summary
+    assert "unsupported" in summary

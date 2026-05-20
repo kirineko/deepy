@@ -41,6 +41,7 @@ class BalanceStatus:
 @dataclass(frozen=True)
 class StatusReport:
     project_root: Path
+    provider: str
     model: str
     reasoning_mode: str
     api_key_configured: bool
@@ -80,6 +81,7 @@ def build_status_report(
             )
     return StatusReport(
         project_root=root,
+        provider=settings.model.provider,
         model=settings.model.name,
         reasoning_mode=settings.model.reasoning_mode,
         api_key_configured=bool(settings.model.api_key),
@@ -103,8 +105,9 @@ def format_status_report(report: StatusReport) -> str:
     return "\n".join(
         [
             f"Project: {report.project_root}",
+            f"Provider: {report.provider}",
             f"Model: {report.model}",
-            f"Reasoning: {report.reasoning_mode}",
+            f"Thinking: {report.reasoning_mode}",
             f"API key: {'configured' if report.api_key_configured else 'missing'}",
             f"Context: {report.context_window_tokens} tokens",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
@@ -129,6 +132,7 @@ def format_status_report(report: StatusReport) -> str:
 def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
     return {
         "project_root": str(report.project_root),
+        "provider": report.provider,
         "model": report.model,
         "reasoning_mode": report.reasoning_mode,
         "api_key_configured": report.api_key_configured,
@@ -216,7 +220,7 @@ def parse_balance_payload(payload: Any) -> BalanceStatus:
 
 def format_compact_status_report(report: StatusReport) -> str:
     rows = [
-        ("model", f"{report.model}[{report.reasoning_mode}]"),
+        ("model", f"{report.provider} {report.model}[{report.reasoning_mode}]"),
         ("api", "configured" if report.api_key_configured else "missing"),
         ("balance", format_balance_status(report.balance)),
         ("session usage", _format_status_usage(report.active_session_usage)),

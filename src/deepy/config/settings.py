@@ -4,6 +4,7 @@ import os
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Mapping, Self
 
 import tomli_w
@@ -22,14 +23,34 @@ DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 30.0
 DEFAULT_MCP_CACHE_TOOLS_LIST = True
 DEFAULT_INPUT_SUGGESTIONS_ENABLED = True
-REASONING_EFFORTS = {"high", "max"}
-REASONING_MODES = {"none", "high", "max"}
+DEFAULT_PROVIDER = "deepseek"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1"
+DEEPSEEK_REASONING_EFFORTS = {"high", "max"}
+SWITCH_ONLY_REASONING_EFFORTS = {"high", "none"}
+OPENROUTER_REASONING_MODES = (
+    "enabled",
+    "disabled",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "none",
+)
+OPENROUTER_REASONING_EFFORTS = set(OPENROUTER_REASONING_MODES)
+REASONING_EFFORTS = DEEPSEEK_REASONING_EFFORTS | SWITCH_ONLY_REASONING_EFFORTS | OPENROUTER_REASONING_EFFORTS
+DEEPSEEK_REASONING_MODES = ("none", "high", "max")
+SWITCH_ONLY_THINKING_MODES = ("disabled", "enabled")
+REASONING_MODES = set(DEEPSEEK_REASONING_MODES)
+THINKING_MODES = set(DEEPSEEK_REASONING_MODES) | set(SWITCH_ONLY_THINKING_MODES) | OPENROUTER_REASONING_EFFORTS
+PROVIDERS = {"deepseek", "openrouter", "xiaomi"}
 UI_THEMES = {"auto", "dark", "light"}
 UI_THEME_OPTIONS = (("1", "auto"), ("2", "dark"), ("3", "light"))
 
 
 @dataclass(frozen=True)
-class DeepSeekModelInfo:
+class ModelInfo:
     name: str
     label: str
     description: str
@@ -37,19 +58,221 @@ class DeepSeekModelInfo:
     default_reasoning_mode: str = "max"
 
 
+@dataclass(frozen=True)
+class ProviderInfo:
+    id: str
+    label: str
+    description: str
+    default_base_url: str
+    models: tuple[ModelInfo, ...]
+    thinking_modes: tuple[str, ...]
+    default_model: str
+    default_thinking_mode: str
+    sends_reasoning_effort: bool = True
+    api_key_url: str | None = None
+
+
+DeepSeekModelInfo = ModelInfo
+
+
 DEEPSEEK_MODEL_CATALOG = (
-    DeepSeekModelInfo(
+    ModelInfo(
         name="deepseek-v4-pro",
         label="DeepSeek V4 Pro",
         description="Higher quality for agentic coding and complex reasoning.",
     ),
-    DeepSeekModelInfo(
+    ModelInfo(
         name="deepseek-v4-flash",
         label="DeepSeek V4 Flash",
         description="Lower latency and cost for faster everyday turns.",
     ),
 )
+OPENROUTER_MODEL_CATALOG = (
+    ModelInfo(
+        name="xiaomi/mimo-v2.5-pro",
+        label="MiMo V2.5 Pro",
+        description="Xiaomi MiMo V2.5 Pro via OpenRouter.",
+        default_reasoning_mode="enabled",
+    ),
+    ModelInfo(
+        name="xiaomi/mimo-v2.5",
+        label="MiMo V2.5",
+        description="Xiaomi MiMo V2.5 via OpenRouter.",
+        default_reasoning_mode="enabled",
+    ),
+)
+XIAOMI_MODEL_CATALOG = (
+    ModelInfo(
+        name="mimo-v2.5-pro",
+        label="MiMo V2.5 Pro",
+        description="Xiaomi official MiMo V2.5 Pro.",
+        default_reasoning_mode="enabled",
+    ),
+    ModelInfo(
+        name="mimo-v2.5",
+        label="MiMo V2.5",
+        description="Xiaomi official MiMo V2.5.",
+        default_reasoning_mode="enabled",
+    ),
+)
+PROVIDER_CATALOG = (
+    ProviderInfo(
+        id="deepseek",
+        label="DeepSeek",
+        description="DeepSeek official OpenAI-compatible API.",
+        default_base_url=DEFAULT_BASE_URL,
+        models=DEEPSEEK_MODEL_CATALOG,
+        thinking_modes=DEEPSEEK_REASONING_MODES,
+        default_model=DEFAULT_MODEL,
+        default_thinking_mode="max",
+        api_key_url="https://platform.deepseek.com/api_keys",
+    ),
+    ProviderInfo(
+        id="openrouter",
+        label="OpenRouter",
+        description="OpenRouter gateway for Xiaomi MiMo models.",
+        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
+        models=OPENROUTER_MODEL_CATALOG,
+        thinking_modes=OPENROUTER_REASONING_MODES,
+        default_model="xiaomi/mimo-v2.5-pro",
+        default_thinking_mode="enabled",
+        api_key_url="https://openrouter.ai/workspaces/default/keys",
+    ),
+    ProviderInfo(
+        id="xiaomi",
+        label="Xiaomi",
+        description="Xiaomi official MiMo OpenAI-compatible API.",
+        default_base_url=DEFAULT_XIAOMI_BASE_URL,
+        models=XIAOMI_MODEL_CATALOG,
+        thinking_modes=SWITCH_ONLY_THINKING_MODES,
+        default_model="mimo-v2.5-pro",
+        default_thinking_mode="enabled",
+        sends_reasoning_effort=False,
+        api_key_url="https://platform.xiaomimimo.com/console/api-keys",
+    ),
+)
+PROVIDER_BY_ID = {provider.id: provider for provider in PROVIDER_CATALOG}
 SUPPORTED_DEEPSEEK_MODELS = frozenset(model.name for model in DEEPSEEK_MODEL_CATALOG)
+SUPPORTED_MODELS_BY_PROVIDER = {
+    provider.id: frozenset(model.name for model in provider.models)
+    for provider in PROVIDER_CATALOG
+}
+
+
+def provider_info_for(provider: str | None) -> ProviderInfo:
+    return PROVIDER_BY_ID.get(provider or DEFAULT_PROVIDER, PROVIDER_BY_ID[DEFAULT_PROVIDER])
+
+
+def resolve_provider(raw_provider: str | None, base_url: str | None) -> str:
+    provider = (raw_provider or "").strip().lower()
+    if provider in PROVIDERS:
+        return provider
+    inferred = infer_provider_from_base_url(base_url)
+    return inferred or DEFAULT_PROVIDER
+
+
+def infer_provider_from_base_url(base_url: str | None) -> str | None:
+    if not base_url:
+        return None
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    if host == "api.deepseek.com":
+        return "deepseek"
+    if host == "openrouter.ai":
+        return "openrouter"
+    if host == "api.xiaomimimo.com":
+        return "xiaomi"
+    return None
+
+
+def _raw_provider_value(raw: Mapping[str, Any], env: Mapping[str, str]) -> str | None:
+    provider = _as_str(env.get("DEEPY_PROVIDER"), _as_str(raw.get("provider"), ""))
+    return provider.lower() if provider else None
+
+
+def is_supported_provider(value: str) -> bool:
+    return value in PROVIDERS
+
+
+def is_supported_model_for_provider(model: str, provider: str) -> bool:
+    return model in SUPPORTED_MODELS_BY_PROVIDER.get(provider, ())
+
+
+def allows_custom_model_for_provider(provider: str) -> bool:
+    return provider == "openrouter"
+
+
+def is_valid_config_model_for_provider(model: str, provider: str) -> bool:
+    return bool(model.strip()) and (
+        allows_custom_model_for_provider(provider)
+        or is_supported_model_for_provider(model, provider)
+    )
+
+
+def default_model_for_provider(provider: str) -> str:
+    return provider_info_for(provider).default_model
+
+
+def default_base_url_for_provider(provider: str) -> str:
+    return provider_info_for(provider).default_base_url
+
+
+def default_thinking_mode_for_provider(provider: str) -> str:
+    return provider_info_for(provider).default_thinking_mode
+
+
+def thinking_modes_for_provider(provider: str) -> tuple[str, ...]:
+    return provider_info_for(provider).thinking_modes
+
+
+def is_valid_thinking_mode_for_provider(value: str, provider: str) -> bool:
+    return value in thinking_modes_for_provider(provider)
+
+
+def normalize_reasoning_effort(
+    value: str,
+    *,
+    provider: str,
+    thinking: bool | None,
+) -> str:
+    provider_info = provider_info_for(provider)
+    if provider == "openrouter":
+        if thinking is False or value in {"none", "disabled"}:
+            return "none"
+        if value == "enabled":
+            return "enabled"
+        if value in OPENROUTER_REASONING_EFFORTS:
+            return value
+        return provider_info.default_thinking_mode
+    if provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
+        if thinking is False or value == "none":
+            return "none"
+        return "high"
+    if value in DEEPSEEK_REASONING_EFFORTS:
+        return value
+    return provider_info.default_thinking_mode
+
+
+def thinking_enabled_for_mode(mode: str, provider: str) -> bool:
+    if provider == "openrouter":
+        return mode not in {"none", "disabled"}
+    if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
+        return mode != "disabled"
+    return mode != "none"
+
+
+def reasoning_effort_for_mode(mode: str, provider: str) -> str:
+    if provider == "openrouter":
+        if mode in {"none", "disabled"}:
+            return "none"
+        if mode == "enabled":
+            return "enabled"
+        if mode in OPENROUTER_REASONING_EFFORTS:
+            return mode
+        return provider_info_for(provider).default_thinking_mode
+    if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
+        return "none" if mode == "disabled" else "high"
+    return mode if mode in DEEPSEEK_REASONING_EFFORTS else "max"
 
 
 def default_config_path() -> Path:
@@ -100,6 +323,7 @@ def _as_str(value: Any, default: str = "") -> str:
 
 @dataclass(frozen=True)
 class ModelConfig:
+    provider: str = DEFAULT_PROVIDER
     name: str = DEFAULT_MODEL
     base_url: str = DEFAULT_BASE_URL
     api_key: str | None = None
@@ -109,20 +333,33 @@ class ModelConfig:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -> Self:
         env = env or {}
-        name = _as_str(env.get("DEEPY_MODEL"), _as_str(raw.get("name"), DEFAULT_MODEL))
         base_url = _as_str(
             env.get("DEEPY_BASE_URL"),
             _as_str(raw.get("base_url"), DEFAULT_BASE_URL),
         )
+        raw_provider = _raw_provider_value(raw, env)
+        inferred_provider = infer_provider_from_base_url(base_url)
+        provider = resolve_provider(raw_provider, base_url)
+        provider_was_explicit_or_inferred = raw_provider in PROVIDERS or inferred_provider is not None
+        provider_info = provider_info_for(provider)
+        name = _as_str(env.get("DEEPY_MODEL"), _as_str(raw.get("name"), provider_info.default_model))
+        if (
+            provider_was_explicit_or_inferred
+            and provider in PROVIDERS
+            and not is_valid_config_model_for_provider(name, provider)
+        ):
+            name = provider_info.default_model
         api_key = _as_str(env.get("DEEPY_API_KEY"), _as_str(raw.get("api_key"), "")) or None
-        effort = _as_str(raw.get("reasoning_effort"), "max")
-        if effort not in REASONING_EFFORTS:
-            effort = "max"
-
         thinking_value = raw.get("thinking")
         thinking = thinking_value if isinstance(thinking_value, bool) else None
+        effort = normalize_reasoning_effort(
+            _as_str(raw.get("reasoning_effort"), provider_info.default_thinking_mode),
+            provider=provider,
+            thinking=thinking,
+        )
 
         return cls(
+            provider=provider,
             name=name,
             base_url=base_url,
             api_key=api_key,
@@ -134,13 +371,27 @@ class ModelConfig:
     def thinking_enabled(self) -> bool:
         if self.thinking is not None:
             return self.thinking
-        return self.name.lower() in SUPPORTED_DEEPSEEK_MODELS
+        return self.provider_info.default_thinking_mode != "none"
 
     @property
     def reasoning_mode(self) -> str:
+        if self.provider == "openrouter":
+            if not self.thinking_enabled:
+                return "none"
+            return (
+                self.reasoning_effort
+                if self.reasoning_effort in OPENROUTER_REASONING_EFFORTS
+                else self.provider_info.default_thinking_mode
+            )
+        if self.provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
+            return "enabled" if self.thinking_enabled else "disabled"
         if not self.thinking_enabled:
             return "none"
-        return self.reasoning_effort if self.reasoning_effort in REASONING_EFFORTS else "max"
+        return self.reasoning_effort if self.reasoning_effort in DEEPSEEK_REASONING_EFFORTS else "max"
+
+    @property
+    def provider_info(self) -> ProviderInfo:
+        return provider_info_for(self.provider)
 
 
 @dataclass(frozen=True)
@@ -371,8 +622,16 @@ def is_supported_deepseek_model(value: str) -> bool:
     return value in SUPPORTED_DEEPSEEK_MODELS
 
 
+def is_supported_model(value: str, provider: str) -> bool:
+    return is_supported_model_for_provider(value, provider)
+
+
 def is_valid_reasoning_mode(value: str) -> bool:
     return value in REASONING_MODES
+
+
+def is_valid_thinking_mode(value: str) -> bool:
+    return value in THINKING_MODES
 
 
 def ui_theme_number(theme: str) -> str:
@@ -399,22 +658,38 @@ def write_config(
     config_path: Path,
     *,
     api_key: str,
+    provider: str = DEFAULT_PROVIDER,
     model: str,
-    base_url: str,
+    base_url: str | None = None,
     theme: str,
+    thinking_mode: str | None = None,
 ) -> None:
     if not is_valid_ui_theme(theme):
         raise ValueError("UI theme must be one of: auto, dark, light.")
+    if not is_supported_provider(provider):
+        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
+    provider_info = provider_info_for(provider)
+    if not is_valid_config_model_for_provider(model, provider):
+        raise ValueError(
+            "Model must be one of: " + ", ".join(model_info.name for model_info in provider_info.models)
+        )
+    mode = thinking_mode or provider_info.default_thinking_mode
+    if not is_valid_thinking_mode_for_provider(mode, provider):
+        raise ValueError(
+            "Thinking mode must be one of: " + ", ".join(provider_info.thinking_modes)
+        )
     path = config_path.expanduser()
     if path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    resolved_base_url = base_url or provider_info.default_base_url
     payload = {
         "model": {
+            "provider": provider,
             "name": model,
-            "base_url": base_url,
+            "base_url": resolved_base_url,
             "api_key": api_key,
-            "thinking": True,
-            "reasoning_effort": "max",
+            "thinking": thinking_enabled_for_mode(mode, provider),
+            "reasoning_effort": reasoning_effort_for_mode(mode, provider),
         },
         "context": {
             "window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -462,29 +737,54 @@ def write_config(
 def update_config_model_settings(
     config_path: Path,
     *,
+    provider: str | None = None,
     model: str | None = None,
+    base_url: str | None = None,
     reasoning_mode: str | None = None,
 ) -> None:
-    if model is not None and not is_supported_deepseek_model(model):
-        raise ValueError(
-            "Model must be one of: " + ", ".join(model_info.name for model_info in DEEPSEEK_MODEL_CATALOG)
-        )
-    if reasoning_mode is not None and not is_valid_reasoning_mode(reasoning_mode):
-        raise ValueError("Reasoning mode must be one of: none, high, max.")
     path = config_path.expanduser()
     if path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
     raw = _read_toml_mapping(path)
     model_section = raw.get("model")
     model_map = dict(model_section) if isinstance(model_section, Mapping) else {}
+    current = ModelConfig.from_mapping(model_map)
+    active_provider = provider or current.provider
+    if provider is not None and not is_supported_provider(provider):
+        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
+    provider_info = provider_info_for(active_provider)
+    active_model = model or current.name
+    if model is None and provider is not None and not is_supported_model_for_provider(active_model, active_provider):
+        active_model = provider_info.default_model
+    # `/model` updates intentionally stay within Deepy's curated provider model catalog.
+    if not is_supported_model_for_provider(active_model, active_provider):
+        raise ValueError(
+            "Model must be one of: " + ", ".join(model_info.name for model_info in provider_info.models)
+        )
+    active_mode = reasoning_mode or (
+        current.reasoning_mode
+        if is_valid_thinking_mode_for_provider(current.reasoning_mode, active_provider)
+        else provider_info.default_thinking_mode
+    )
+    if not is_valid_thinking_mode_for_provider(active_mode, active_provider):
+        if provider_info.thinking_modes == DEEPSEEK_REASONING_MODES:
+            raise ValueError("Reasoning mode must be one of: none, high, max.")
+        raise ValueError(
+            "Thinking mode must be one of: " + ", ".join(provider_info.thinking_modes)
+        )
+    if provider is not None:
+        model_map["provider"] = active_provider
+        if base_url is None:
+            model_map["base_url"] = provider_info.default_base_url
+    if base_url is not None:
+        model_map["base_url"] = base_url
     if model is not None:
-        model_map["name"] = model
-    if reasoning_mode is not None:
-        if reasoning_mode == "none":
-            model_map["thinking"] = False
-        else:
-            model_map["thinking"] = True
-            model_map["reasoning_effort"] = reasoning_mode
+        model_map["name"] = active_model
+    elif provider is not None:
+        model_map["name"] = active_model
+    if reasoning_mode is not None or provider is not None:
+        model_map["thinking"] = thinking_enabled_for_mode(active_mode, active_provider)
+        model_map["reasoning_effort"] = reasoning_effort_for_mode(active_mode, active_provider)
     raw["model"] = model_map
     _write_private_toml(path, raw)
 

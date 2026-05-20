@@ -7,11 +7,17 @@ from typing import Any, Mapping
 from deepy.config import Settings
 
 
-def should_track_session_cost(settings: Settings) -> bool:
-    if not settings.model.api_key:
+def supports_session_cost(settings: Settings) -> bool:
+    if settings.model.provider != "deepseek":
         return False
     parsed = urllib.parse.urlparse(settings.model.base_url)
     return parsed.scheme in {"http", "https"} and parsed.hostname == "api.deepseek.com"
+
+
+def should_track_session_cost(settings: Settings) -> bool:
+    if not settings.model.api_key:
+        return False
+    return supports_session_cost(settings)
 
 
 def balance_snapshot_to_dict(balance: Any, *, captured_at_ms: int) -> dict[str, Any]:

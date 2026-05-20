@@ -55,9 +55,67 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert 'theme = "auto"' in text
 
 
+def test_config_init_accepts_openrouter_provider_defaults(tmp_path, capsys):
+    config = tmp_path / "config.toml"
+
+    code = main(
+        [
+            "--config",
+            str(config),
+            "config",
+            "init",
+            "--api-key",
+            "sk-test",
+            "--provider",
+            "openrouter",
+            "--model",
+            "xiaomi/mimo-v2.5-pro",
+            "--thinking",
+            "disabled",
+        ]
+    )
+
+    assert code == 0
+    assert "Wrote" in capsys.readouterr().out
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
+    assert 'base_url = "https://openrouter.ai/api/v1"' in text
+    assert 'thinking = false' in text
+    assert 'reasoning_effort = "none"' in text
+
+
+def test_config_init_accepts_openrouter_custom_model_and_effort(tmp_path):
+    config = tmp_path / "config.toml"
+
+    code = main(
+        [
+            "--config",
+            str(config),
+            "config",
+            "init",
+            "--api-key",
+            "sk-test",
+            "--provider",
+            "openrouter",
+            "--model",
+            "anthropic/claude-sonnet-4.5",
+            "--thinking",
+            "minimal",
+        ]
+    )
+
+    assert code == 0
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'name = "anthropic/claude-sonnet-4.5"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "minimal"' in text
+
+
 def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    answers = iter(["sk-live", "deepseek-v4-flash", "https://api.deepseek.com", "3"])
+    answers = iter(["1", "sk-live", "2", "https://api.deepseek.com", "3", "3"])
     prompts: list[dict[str, object]] = []
 
     class FakePromptSession:
@@ -71,18 +129,121 @@ def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypat
 
     assert code == 0
     assert "https://platform.deepseek.com/api_keys" in capsys.readouterr().out
-    assert prompts[0]["is_password"] is True
+    assert prompts[1]["is_password"] is True
     assert config.stat().st_mode & 0o777 == 0o600
     text = config.read_text(encoding="utf-8")
+    assert 'provider = "deepseek"' in text
     assert 'api_key = "sk-live"' in text
     assert 'name = "deepseek-v4-flash"' in text
     assert 'theme = "light"' in text
 
 
+def test_config_setup_prints_openrouter_api_key_guidance(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    answers = iter(["2", "sk-or-live", "1", "", "1", "1", "3"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "setup"])
+
+    assert code == 0
+    assert "https://openrouter.ai/workspaces/default/keys" in capsys.readouterr().out
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'api_key = "sk-or-live"' in text
+    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
+    assert 'reasoning_effort = "enabled"' in text
+
+
+def test_config_setup_accepts_openrouter_custom_model_and_effort(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    answers = iter([
+        "2",
+        "sk-or-live",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "1",
+        "minimal",
+        "3",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "setup"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "paste any model name copied from the OpenRouter models page" in output
+    assert "Reasoning effort:" in output
+    assert "default" in output
+    assert "minimal" in output
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'name = "anthropic/claude-sonnet-4.5"' in text
+    assert 'reasoning_effort = "minimal"' in text
+
+
+def test_config_setup_openrouter_disabled_skips_effort_prompt(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    answers = iter([
+        "2",
+        "sk-or-live",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "2",
+        "3",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "setup"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Reasoning effort:" not in output
+    text = config.read_text(encoding="utf-8")
+    assert 'thinking = false' in text
+    assert 'reasoning_effort = "none"' in text
+
+
+def test_config_setup_cancellation_preserves_existing_config(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    config.write_text(original, encoding="utf-8")
+    answers = iter(["2"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "setup"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Configuration setup cancelled" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    assert config.read_text(encoding="utf-8") == original
+
+
 def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
-    answers = iter(["sk-reset", "deepseek-v4-pro", "https://api.deepseek.com", "3"])
+    answers = iter(["1", "sk-reset", "1", "https://api.deepseek.com", "3", "3"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -99,8 +260,53 @@ def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, m
     assert config.stat().st_mode & 0o777 == 0o600
     text = config.read_text(encoding="utf-8")
     assert "old-key" not in text
+    assert 'provider = "deepseek"' in text
     assert 'api_key = "sk-reset"' in text
     assert 'theme = "light"' in text
+
+
+def test_config_reset_cancellation_restores_existing_config(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    config.write_text(original, encoding="utf-8")
+    answers = iter(["2", "sk-or-reset", "anthropic/claude-sonnet-4.5", "", "1"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "reset"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Removed" in captured.out
+    assert "Configuration setup cancelled" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_config_reset_cancellation_removes_partial_config_when_none_existed(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "config.toml"
+    answers = iter(["2", "sk-or-reset", "anthropic/claude-sonnet-4.5", "", "1"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    code = main(["--config", str(config), "config", "reset"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "No existing config" in captured.out
+    assert "No config was written" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    assert not config.exists()
 
 
 def test_config_theme_shows_and_updates_theme(tmp_path, capsys):
@@ -257,7 +463,8 @@ def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
     assert code == 0
     out = capsys.readouterr().out
     assert f"Project: {tmp_path}" in out
-    assert "Reasoning: max" in out
+    assert "Provider: deepseek" in out
+    assert "Thinking: max" in out
     assert "API key: configured" in out
 
 

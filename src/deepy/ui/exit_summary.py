@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from typing import Any, Mapping
 
+from deepy.input_suggestions import INPUT_SUGGESTION_MODEL
 from deepy.session_cost import format_session_cost
 
 
@@ -61,6 +62,7 @@ def build_exit_summary_text(
     messages: Sequence[Mapping[str, Any]] | None = None,
     model: str | None = None,
     session_id: str | None = None,
+    session_cost_unsupported: bool = False,
 ) -> str:
     usage = extract_usage_fields(_get_usage(session))
     raw_input_suggestion_usage = _get_input_suggestion_usage(session)
@@ -90,11 +92,11 @@ def build_exit_summary_text(
                 _usage_summary(
                     input_suggestion_usage,
                     requests=_get_requests(raw_input_suggestion_usage),
-                    model="deepseek-v4-flash",
+                    model=_get_input_suggestion_model(raw_input_suggestion_usage),
                 ),
             )
         )
-    cost = format_session_cost(_get_session_cost(session))
+    cost = "unsupported" if session_cost_unsupported else format_session_cost(_get_session_cost(session))
     if cost:
         rows.append(("session cost", cost))
     return _simple_box("Deepy Session Summary", rows)
@@ -158,6 +160,13 @@ def _get_requests(usage: Any) -> int:
     if not isinstance(usage, Mapping):
         return 0
     return _number_field(usage.get("requests"))
+
+
+def _get_input_suggestion_model(usage: Any) -> str | None:
+    if not isinstance(usage, Mapping):
+        return INPUT_SUGGESTION_MODEL
+    model = usage.get("model")
+    return model if isinstance(model, str) and model else INPUT_SUGGESTION_MODEL
 
 
 def _number_field(value: Any) -> int:

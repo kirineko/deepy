@@ -1312,6 +1312,35 @@ def test_status_slash_command_prints_status(tmp_path, monkeypatch):
     assert "balance" in rendered
 
 
+def test_status_slash_command_does_not_fetch_balance_for_third_party_provider(tmp_path, monkeypatch):
+    console = Console(record=True, width=200)
+
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", fail_fetch)
+
+    next_session = _handle_slash_command(
+        SlashCommand("status"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="xiaomi/mimo-v2.5-pro",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+            )
+        ),
+    )
+
+    assert next_session == "s1"
+    rendered = console.export_text()
+    assert "balance" in rendered
+    assert "unsupported provider" in rendered
+
+
 def test_model_slash_command_lists_models(tmp_path):
     console = Console(record=True)
 
@@ -1319,13 +1348,16 @@ def test_model_slash_command_lists_models(tmp_path):
 
     rendered = console.export_text()
     assert next_session == "s1"
-    assert "Available models:" in rendered
+    assert "Available providers and models:" in rendered
+    assert "openrouter" in rendered
+    assert "xiaomi" in rendered
     assert "deepseek-v4-pro" in rendered
     assert "deepseek-v4-flash" in rendered
-    assert "Reasoning modes:" in rendered
+    assert "thinking:" in rendered
     assert "none" in rendered
     assert "high" in rendered
     assert "max" in rendered
+    assert "enabled" in rendered
 
 
 def test_model_slash_command_sets_model_and_reasoning_directly(tmp_path):
@@ -1347,8 +1379,9 @@ def test_model_slash_command_sets_model_and_reasoning_directly(tmp_path):
     rendered = console.export_text()
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved model: deepseek-v4-flash · reasoning: high" in rendered
+    assert "Saved provider: deepseek · model: deepseek-v4-flash · thinking: high" in rendered
     assert 'api_key = "sk-test"' in text
+    assert 'provider = "deepseek"' in text
     assert 'name = "deepseek-v4-flash"' in text
     assert 'thinking = true' in text
     assert 'reasoning_effort = "high"' in text
@@ -1371,8 +1404,39 @@ def test_model_slash_command_sets_reasoning_none_directly(tmp_path):
     )
 
     assert next_session == "s1"
-    assert "Saved model: deepseek-v4-pro · reasoning: none" in console.export_text()
+    assert "Saved provider: deepseek · model: deepseek-v4-pro · thinking: none" in console.export_text()
     assert 'thinking = false' in config.read_text(encoding="utf-8")
+
+
+def test_model_slash_command_sets_openrouter_provider_model_and_thinking(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("model", "set openrouter xiaomi/mimo-v2.5-pro disabled"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, model=ModelConfig(api_key="sk-test")),
+    )
+
+    text = config.read_text(encoding="utf-8")
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Saved provider: openrouter · model: xiaomi/mimo-v2.5-pro · thinking: none" in rendered
+    assert "Provider switched to openrouter" in rendered
+    assert "Reconfigure the API key" in rendered
+    assert "https://openrouter.ai/workspaces/default/keys" in rendered
+    assert 'api_key = "sk-test"' in text
+    assert 'provider = "openrouter"' in text
+    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
+    assert 'base_url = "https://openrouter.ai/api/v1"' in text
+    assert 'thinking = false' in text
+    assert 'reasoning_effort = "none"' in text
 
 
 def test_model_slash_command_rejects_invalid_values_without_changing_config(tmp_path):
@@ -1397,7 +1461,7 @@ def test_model_slash_command_uses_numbered_selection(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["2", "1"])
+    answers = iter(["2", "1", "3"])
 
     next_session = _handle_slash_command(
         SlashCommand("model"),
@@ -1411,12 +1475,17 @@ def test_model_slash_command_uses_numbered_selection(tmp_path):
     rendered = console.export_text()
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Current model: deepseek-v4-pro · reasoning: max" in rendered
-    assert "Available models:" in rendered
-    assert "Thinking strength:" in rendered
-    assert "Saved model: deepseek-v4-flash · reasoning: none" in rendered
-    assert 'name = "deepseek-v4-flash"' in text
-    assert 'thinking = false' in text
+    assert "Current provider: deepseek · model: deepseek-v4-pro · thinking: max" in rendered
+    assert "Providers:" in rendered
+    assert "Models for openrouter:" in rendered
+    assert "Thinking:" in rendered
+    assert "Saved provider: openrouter · model: xiaomi/mimo-v2.5-pro · thinking: xhigh" in rendered
+    assert "Provider switched to openrouter" in rendered
+    assert "https://openrouter.ai/workspaces/default/keys" in rendered
+    assert 'provider = "openrouter"' in text
+    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "xhigh"' in text
 
 
 def test_model_slash_command_cancels_without_saving(tmp_path):
@@ -1444,8 +1513,9 @@ def test_model_slash_command_uses_keyboard_pickers_when_no_input_func(tmp_path, 
     config = tmp_path / "config.toml"
     config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
     console = Console(record=True)
-    monkeypatch.setattr(terminal, "pick_model", lambda current: "deepseek-v4-flash")
-    monkeypatch.setattr(terminal, "pick_reasoning_mode", lambda current: "high")
+    monkeypatch.setattr(terminal, "pick_provider", lambda current: "deepseek")
+    monkeypatch.setattr(terminal, "pick_model", lambda current, *, provider: "deepseek-v4-flash")
+    monkeypatch.setattr(terminal, "pick_reasoning_mode", lambda current, *, provider: "high")
 
     next_session = _handle_slash_command(
         SlashCommand("model"),
@@ -1457,7 +1527,7 @@ def test_model_slash_command_uses_keyboard_pickers_when_no_input_func(tmp_path, 
 
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved model: deepseek-v4-flash · reasoning: high" in console.export_text()
+    assert "Saved provider: deepseek · model: deepseek-v4-flash · thinking: high" in console.export_text()
     assert 'name = "deepseek-v4-flash"' in text
     assert 'reasoning_effort = "high"' in text
 
@@ -1723,7 +1793,7 @@ def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["sk-reset", "deepseek-v4-flash", "https://api.deepseek.com", "3"])
+    answers = iter(["1", "sk-reset", "2", "https://api.deepseek.com", "3", "3"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -1751,6 +1821,183 @@ def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch
     assert 'api_key = "sk-reset"' in text
     assert 'name = "deepseek-v4-flash"' in text
     assert 'theme = "light"' in text
+
+
+def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+    answers = iter(["3", "sk-mi-reset", "1", "", "1", "3"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "https://platform.xiaomimimo.com/console/api-keys" in rendered
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "xiaomi"' in text
+    assert 'api_key = "sk-mi-reset"' in text
+    assert 'name = "mimo-v2.5-pro"' in text
+
+
+def test_reset_slash_command_accepts_openrouter_custom_model_and_effort(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+    answers = iter([
+        "2",
+        "sk-or-reset",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "1",
+        "minimal",
+        "3",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "paste any model name copied from the OpenRouter models page" in rendered
+    assert "Reasoning effort:" in rendered
+    assert "default" in rendered
+    assert "minimal" in rendered
+    assert 'provider = "openrouter"' in text
+    assert 'api_key = "sk-or-reset"' in text
+    assert 'name = "anthropic/claude-sonnet-4.5"' in text
+    assert 'reasoning_effort = "minimal"' in text
+
+
+def test_reset_slash_command_openrouter_disabled_skips_effort_prompt(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    console = Console(record=True)
+    answers = iter([
+        "2",
+        "sk-or-reset",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "2",
+        "3",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert "Reasoning effort:" not in rendered
+    assert 'thinking = false' in text
+    assert 'reasoning_effort = "none"' in text
+
+
+def test_reset_slash_command_cancellation_restores_existing_config(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    config.write_text(original, encoding="utf-8")
+    console = Console(record=True)
+    answers = iter([
+        "2",
+        "sk-or-reset",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "1",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "Removed" in rendered
+    assert "Configuration setup cancelled" in rendered
+    assert "Existing config was left unchanged" in rendered
+    assert "Traceback" not in rendered
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_reset_slash_command_cancellation_removes_partial_config_when_none_existed(
+    tmp_path,
+    monkeypatch,
+):
+    config = tmp_path / "config.toml"
+    console = Console(record=True)
+    answers = iter([
+        "2",
+        "sk-or-reset",
+        "anthropic/claude-sonnet-4.5",
+        "",
+        "1",
+    ])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
+    )
+
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert "No existing config" in rendered
+    assert "No config was written" in rendered
+    assert "Traceback" not in rendered
+    assert not config.exists()
 
 
 def test_exit_slash_command_prints_exit_summary(tmp_path):
@@ -2261,13 +2508,13 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
         active_work="thinking 3s",
     )
 
-    assert footer.plain.startswith("model deepseek-v4-pro[max] · thinking 3s")
+    assert footer.plain.startswith("provider deepseek · thinking 3s · model deepseek-v4-pro[max]")
     assert "mcp 1" in footer.plain
     assert "[AGENTS.md]" in footer.plain
     assert "MCP" not in footer.plain
     assert "mcp:" not in footer.plain
     assert "AGENTS.md loaded" not in footer.plain
-    assert footer.to_prompt_toolkit()[0] == ("class:toolbar.title", "model")
+    assert footer.to_prompt_toolkit()[0] == ("class:toolbar.title", "provider")
     assert ("class:toolbar.active", "thinking 3s") in footer.to_prompt_toolkit()
     assert ("class:toolbar.title", "mcp") in footer.to_prompt_toolkit()
     assert ("class:toolbar.loaded", "[AGENTS.md]") in footer.to_prompt_toolkit()
@@ -2788,6 +3035,37 @@ def test_run_interactive_exit_summary_shows_cost_unavailable(tmp_path, monkeypat
     assert result == 0
     assert "session cost" in rendered
     assert "unavailable (end timeout)" in rendered
+
+
+def test_run_interactive_exit_summary_marks_third_party_cost_unsupported(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
+    monkeypatch.setattr(terminal, "fetch_deepseek_balance", fail_fetch)
+
+    result = terminal.run_interactive(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="xiaomi/mimo-v2.5-pro",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+            )
+        ),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "session cost" in rendered
+    assert "unsupported" in rendered
 
 
 def test_stable_non_status_exit_does_not_fetch_balance(tmp_path, monkeypatch):

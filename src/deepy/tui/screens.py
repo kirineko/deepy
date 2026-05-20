@@ -125,8 +125,10 @@ class ChoiceScreen(ModalScreen[str | None]):
 @dataclass(frozen=True)
 class ResetConfigResult:
     api_key: str
+    provider: str
     model: str
     base_url: str
+    thinking: str
     theme: str
 
 
@@ -166,14 +168,18 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
         self,
         *,
         api_key: str,
+        provider: str,
         model: str,
         base_url: str,
+        thinking: str,
         theme: str,
     ) -> None:
         super().__init__()
         self.api_key = api_key
+        self.provider = provider
         self.model = model
         self.base_url = base_url
+        self.thinking = thinking
         self.theme = theme
 
     def compose(self) -> ComposeResult:
@@ -181,8 +187,10 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
             yield Label("Reset Deepy Config", classes="block-title")
             yield Static("Ctrl+S saves. Esc cancels.", classes="screen-help")
             yield Input(value=self.api_key, placeholder="API key", password=True, id="reset-api-key")
+            yield Input(value=self.provider, placeholder="Provider: deepseek|openrouter|xiaomi", id="reset-provider")
             yield Input(value=self.model, placeholder="Model", id="reset-model")
             yield Input(value=self.base_url, placeholder="Base URL", id="reset-base-url")
+            yield Input(value=self.thinking, placeholder="Thinking", id="reset-thinking")
             yield Input(value=self.theme, placeholder="Theme: auto|dark|light", id="reset-theme")
             yield Footer()
 
@@ -193,8 +201,10 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
         self.dismiss(
             ResetConfigResult(
                 api_key=self.query_one("#reset-api-key", Input).value.strip(),
+                provider=self.query_one("#reset-provider", Input).value.strip(),
                 model=self.query_one("#reset-model", Input).value.strip(),
                 base_url=self.query_one("#reset-base-url", Input).value.strip(),
+                thinking=self.query_one("#reset-thinking", Input).value.strip(),
                 theme=self.query_one("#reset-theme", Input).value.strip(),
             )
         )

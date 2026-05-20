@@ -10,20 +10,24 @@ import tomli_w
 
 from . import __version__
 from .config import (
+    PROVIDER_CATALOG,
     Settings,
+    allows_custom_model_for_provider,
+    default_base_url_for_provider,
+    default_model_for_provider,
+    default_thinking_mode_for_provider,
+    is_supported_provider,
+    is_valid_thinking_mode_for_provider,
     load_settings,
+    provider_info_for,
     settings_to_toml_dict,
+    thinking_modes_for_provider,
     ui_theme_from_selection,
     ui_theme_number,
     update_config_theme,
     write_config,
 )
-from .config.settings import (
-    DEFAULT_BASE_URL,
-    DEFAULT_MODEL,
-    DEFAULT_UI_THEME,
-    UI_THEMES,
-)
+from .config.settings import DEFAULT_UI_THEME, UI_THEMES
 from .errors import format_error_display
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
@@ -52,9 +56,11 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser.add_argument("--show-secret", action="store_true", help="Show API key.")
     show_parser.add_argument("--json", action="store_true", help="Print JSON instead of TOML.")
     init_parser = config_sub.add_parser("init", help="Create a TOML config file.")
-    init_parser.add_argument("--api-key", help="DeepSeek API key.")
-    init_parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name.")
-    init_parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible base URL.")
+    init_parser.add_argument("--api-key", help="Provider API key.")
+    init_parser.add_argument("--provider", default="deepseek", help="Provider: deepseek, openrouter, or xiaomi.")
+    init_parser.add_argument("--model", help="Model name.")
+    init_parser.add_argument("--base-url", help="OpenAI-compatible base URL.")
+    init_parser.add_argument("--thinking", help="Thinking mode for the provider.")
     init_parser.add_argument("--theme", default=DEFAULT_UI_THEME, help="UI theme: auto, dark, or light.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
     setup_parser = config_sub.add_parser("setup", help="Interactively configure Deepy.")
@@ -118,8 +124,10 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
     _write_config(
         config_path,
         api_key=args.api_key or "",
-        model=args.model,
+        provider=args.provider,
+        model=args.model or default_model_for_provider(args.provider),
         base_url=args.base_url,
+        thinking_mode=args.thinking,
         theme=args.theme,
     )
     print(f"Wrote {config_path}")
@@ -130,33 +138,88 @@ def _cmd_config_setup(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
     if config_path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    previous_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+    try:
+        _run_config_setup(config_path)
+    except (KeyboardInterrupt, EOFError, StopIteration):
+        print(_setup_cancelled_message(previous_text), file=sys.stderr)
+        return 1
+    print(f"Wrote {config_path}")
+    return 0
+
+
+def _run_config_setup(config_path: Path) -> None:
     if config_path.exists():
         existing = load_settings(config_path)
     else:
         existing = Settings(path=config_path)
 
-    print("DeepSeek API keys: https://platform.deepseek.com/api_keys")
+    provider = _prompt_provider_value(default=existing.model.provider)
+    provider_info = provider_info_for(provider)
+    print(f"{provider_info.label} provider selected.")
+    if provider_info.api_key_url:
+        print(f"Create an API key at {provider_info.api_key_url}")
     api_key = _prompt_config_value("API key", default=existing.model.api_key or "", is_password=True)
-    model = _prompt_config_value("Model", default=existing.model.name)
-    base_url = _prompt_config_value("Base URL", default=existing.model.base_url)
+    model = _prompt_model_value(provider, default=existing.model.name)
+    base_default = (
+        existing.model.base_url
+        if existing.model.provider == provider
+        else default_base_url_for_provider(provider)
+    )
+    base_url = _prompt_config_value("Base URL", default=base_default)
+    thinking_mode = _prompt_thinking_mode_value(provider, default=existing.model.reasoning_mode)
     theme = _prompt_theme_value(default=existing.ui.theme)
-    _write_config(config_path, api_key=api_key, model=model, base_url=base_url, theme=theme)
-    print(f"Wrote {config_path}")
-    return 0
+    _write_config(
+        config_path,
+        api_key=api_key,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        thinking_mode=thinking_mode,
+        theme=theme,
+    )
 
 
 def _cmd_config_reset(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml"
     if config_path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    previous_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
     if config_path.exists():
         config_path.unlink()
         print(f"Removed {config_path}")
     else:
         print(f"No existing config at {config_path}")
     print("Starting Deepy configuration setup...")
-    setup_args = argparse.Namespace(config=args.config, force=True)
-    return _cmd_config_setup(setup_args)
+    try:
+        _run_config_setup(config_path)
+    except (KeyboardInterrupt, EOFError, StopIteration):
+        _restore_config_after_failed_setup(config_path, previous_text)
+        print(_setup_cancelled_message(previous_text), file=sys.stderr)
+        return 1
+    print(f"Wrote {config_path}")
+    return 0
+
+
+def _setup_cancelled_message(previous_text: str | None) -> str:
+    if previous_text is None:
+        return "Configuration setup cancelled. No config was written."
+    return "Configuration setup cancelled. Existing config was left unchanged."
+
+
+def _restore_config_after_failed_setup(config_path: Path, previous_text: str | None) -> None:
+    if previous_text is None:
+        try:
+            config_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(previous_text, encoding="utf-8")
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _prompt_config_value(label: str, *, default: str, is_password: bool = False) -> str:
@@ -171,6 +234,151 @@ def _prompt_config_value(label: str, *, default: str, is_password: bool = False)
     return value or default
 
 
+def _prompt_provider_value(*, default: str = "deepseek") -> str:
+    print("Provider:")
+    for index, provider in enumerate(PROVIDER_CATALOG, 1):
+        print(f"{index}. {provider.id}  {provider.description}")
+    value = _prompt_config_value("Provider number or name", default=_provider_number(default))
+    return _provider_from_selection(value, default=default)
+
+
+def _provider_number(provider: str) -> str:
+    for index, item in enumerate(PROVIDER_CATALOG, 1):
+        if item.id == provider:
+            return str(index)
+    return "1"
+
+
+def _provider_from_selection(value: str, *, default: str = "deepseek") -> str:
+    normalized = value.strip().lower()
+    by_number = {str(index): item.id for index, item in enumerate(PROVIDER_CATALOG, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    if is_supported_provider(normalized):
+        return normalized
+    return default if is_supported_provider(default) else "deepseek"
+
+
+def _prompt_model_value(provider: str, *, default: str) -> str:
+    provider_info = provider_info_for(provider)
+    print("Model:")
+    for index, model in enumerate(provider_info.models, 1):
+        print(f"{index}. {model.name}  {model.description}")
+    if allows_custom_model_for_provider(provider):
+        print("Or paste any model name copied from the OpenRouter models page.")
+    default_value = default if default in {model.name for model in provider_info.models} else provider_info.default_model
+    value = _prompt_config_value("Model number or name", default=_model_number(provider, default_value))
+    return _model_from_selection(provider, value, default=default_value)
+
+
+def _model_number(provider: str, model: str) -> str:
+    for index, item in enumerate(provider_info_for(provider).models, 1):
+        if item.name == model:
+            return str(index)
+    return "1"
+
+
+def _model_from_selection(provider: str, value: str, *, default: str) -> str:
+    normalized = value.strip()
+    models = provider_info_for(provider).models
+    by_number = {str(index): item.name for index, item in enumerate(models, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    if normalized in {item.name for item in models}:
+        return normalized
+    if allows_custom_model_for_provider(provider) and normalized:
+        return normalized
+    return default_model_for_provider(provider) if not default else default
+
+
+def _prompt_thinking_mode_value(provider: str, *, default: str) -> str:
+    if provider == "openrouter":
+        return _prompt_openrouter_thinking_mode(default=default)
+    modes = thinking_modes_for_provider(provider)
+    print("Thinking:")
+    for index, mode in enumerate(modes, 1):
+        print(f"{index}. {mode}")
+    default_value = default if is_valid_thinking_mode_for_provider(default, provider) else default_thinking_mode_for_provider(provider)
+    value = _prompt_config_value("Thinking number or name", default=_thinking_mode_number(provider, default_value))
+    return _thinking_mode_from_selection(provider, value, default=default_value)
+
+
+def _thinking_mode_number(provider: str, mode: str) -> str:
+    for index, item in enumerate(thinking_modes_for_provider(provider), 1):
+        if item == mode:
+            return str(index)
+    return "1"
+
+
+def _prompt_openrouter_thinking_mode(*, default: str) -> str:
+    current_enabled = default not in {"none", "disabled"}
+    print("Thinking:")
+    print("1. enabled  Reasoning enabled")
+    print("2. disabled Reasoning disabled")
+    state_default = "1" if current_enabled else "2"
+    state_value = _prompt_config_value("Thinking number or name", default=state_default)
+    state = _openrouter_thinking_state_from_selection(state_value, default="enabled" if current_enabled else "disabled")
+    if state == "disabled":
+        return "none"
+    print("Reasoning effort:")
+    print("1. default  Use the model default reasoning strength")
+    for index, effort in enumerate(("xhigh", "high", "medium", "low", "minimal"), 2):
+        print(f"{index}. {effort}")
+    effort_default = _openrouter_effort_number(default)
+    effort_value = _prompt_config_value("Reasoning effort number or name", default=effort_default)
+    return _openrouter_effort_from_selection(effort_value, default=default)
+
+
+def _openrouter_thinking_state_from_selection(value: str, *, default: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"1", "enabled", "enable", "on", "true", "yes"}:
+        return "enabled"
+    if normalized in {"2", "disabled", "disable", "off", "false", "no", "none"}:
+        return "disabled"
+    return default
+
+
+def _openrouter_effort_number(mode: str) -> str:
+    return {
+        "enabled": "1",
+        "xhigh": "2",
+        "high": "3",
+        "medium": "4",
+        "low": "5",
+        "minimal": "6",
+    }.get(mode, "1")
+
+
+def _openrouter_effort_from_selection(value: str, *, default: str) -> str:
+    normalized = value.strip().lower()
+    by_number = {
+        "1": "enabled",
+        "2": "xhigh",
+        "3": "high",
+        "4": "medium",
+        "5": "low",
+        "6": "minimal",
+    }
+    if normalized in by_number:
+        return by_number[normalized]
+    if normalized in {"default", "enabled"}:
+        return "enabled"
+    if normalized in {"xhigh", "high", "medium", "low", "minimal"}:
+        return normalized
+    return default if default in {"enabled", "xhigh", "high", "medium", "low", "minimal"} else "enabled"
+
+
+def _thinking_mode_from_selection(provider: str, value: str, *, default: str) -> str:
+    normalized = value.strip().lower()
+    modes = thinking_modes_for_provider(provider)
+    by_number = {str(index): mode for index, mode in enumerate(modes, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    if normalized in modes:
+        return normalized
+    return default
+
+
 def _prompt_theme_value(*, default: str = DEFAULT_UI_THEME) -> str:
     print("UI theme:")
     print("1. auto  Detect when possible; falls back to dark")
@@ -180,8 +388,25 @@ def _prompt_theme_value(*, default: str = DEFAULT_UI_THEME) -> str:
     return ui_theme_from_selection(value, default=default)
 
 
-def _write_config(config_path: Path, *, api_key: str, model: str, base_url: str, theme: str) -> None:
-    write_config(config_path, api_key=api_key, model=model, base_url=base_url, theme=theme)
+def _write_config(
+    config_path: Path,
+    *,
+    api_key: str,
+    provider: str,
+    model: str,
+    base_url: str | None,
+    theme: str,
+    thinking_mode: str | None,
+) -> None:
+    write_config(
+        config_path,
+        api_key=api_key,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        theme=theme,
+        thinking_mode=thinking_mode,
+    )
 
 
 def _cmd_config_theme(args: argparse.Namespace) -> int:
@@ -215,6 +440,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "configured" if settings.model.api_key else "missing; run `deepy config setup`",
     )
     check("model", bool(settings.model.name), settings.model.name)
+    check("provider", bool(settings.model.provider), settings.model.provider)
     check("base_url", bool(settings.model.base_url), settings.model.base_url)
     check(
         "context_window",
@@ -245,10 +471,11 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     return 0 if ok else 1, {
         "ok": ok,
         "checks": checks,
-        "thinking": {
-            "enabled": settings.model.thinking_enabled,
-            "reasoning_effort": settings.model.reasoning_effort,
-            "reasoning_mode": settings.model.reasoning_mode,
+            "thinking": {
+                "provider": settings.model.provider,
+                "enabled": settings.model.thinking_enabled,
+                "reasoning_effort": settings.model.reasoning_effort,
+                "reasoning_mode": settings.model.reasoning_mode,
         },
     }
 
@@ -278,6 +505,7 @@ async def _doctor_live(settings: Settings) -> dict[str, Any]:
     usage = usage_from_run_result(result)
     return {
         "ok": True,
+        "provider": settings.model.provider,
         "model": settings.model.name,
         "base_url": settings.model.base_url,
         "api_key": "configured",
@@ -314,14 +542,15 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         status = "ok" if item["ok"] else "fail"
         print(f"{status:4} {item['name']}: {item['detail']}")
     thinking = report["thinking"]
-    print(f"info reasoning: mode={thinking['reasoning_mode']}")
+    print(f"info provider: {thinking['provider']}")
+    print(f"info thinking: mode={thinking['reasoning_mode']}")
     live = report.get("live")
     if isinstance(live, dict):
         if live.get("ok"):
             usage = live.get("usage")
             print(
-                "ok   live: "
-                f"model={live.get('model')} base_url={live.get('base_url')} "
+                    "ok   live: "
+                    f"provider={live.get('provider')} model={live.get('model')} base_url={live.get('base_url')} "
                 f"response={live.get('response_summary')!r} "
                 f"{format_usage_line(usage if isinstance(usage, dict) else TokenUsage())}"
             )
@@ -415,9 +644,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
 def _ensure_interactive_settings(args: argparse.Namespace) -> Settings:
     settings = load_settings(args.config)
     if not settings.model.api_key:
-        print("Deepy needs a DeepSeek API key before starting interactive mode.")
+        print("Deepy needs a provider API key before starting interactive mode.")
         setup_args = argparse.Namespace(config=args.config, force=True)
-        _cmd_config_setup(setup_args)
+        if _cmd_config_setup(setup_args) != 0:
+            raise SystemExit(1)
         settings = load_settings(args.config)
     if settings.path is not None and not settings.ui.theme_configured:
         theme = _prompt_theme_value(default=settings.ui.theme)

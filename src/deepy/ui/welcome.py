@@ -87,9 +87,11 @@ def build_welcome_tips(skills: list[SkillInfo]) -> list[WelcomeTip]:
 
 def build_welcome_settings(
     *,
+    provider: str = "deepseek",
     model: str,
     thinking_enabled: bool,
     reasoning_effort: str,
+    thinking_mode: str | None = None,
     project_root: str | Path,
     current_version: str,
     version_update: VersionUpdate | None = None,
@@ -99,8 +101,9 @@ def build_welcome_settings(
 ) -> list[WelcomeSetting]:
     settings = [
         WelcomeSetting("Version", _format_version_value(current_version, version_update)),
+        WelcomeSetting("Provider", provider),
         WelcomeSetting("Model", model),
-        WelcomeSetting("Reasoning", reasoning_effort if thinking_enabled else "none"),
+        WelcomeSetting("Thinking", thinking_mode or (reasoning_effort if thinking_enabled else "none")),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
     if theme:
@@ -152,9 +155,11 @@ def _build_section(
 
 def build_welcome_panel(
     *,
+    provider: str = "deepseek",
     model: str,
     thinking_enabled: bool,
     reasoning_effort: str,
+    thinking_mode: str | None = None,
     project_root: str | Path,
     skills: list[SkillInfo],
     current_version: str,
@@ -166,9 +171,11 @@ def build_welcome_panel(
 ) -> Panel:
     palette = palette or DARK_PALETTE
     settings = build_welcome_settings(
+        provider=provider,
         model=model,
         thinking_enabled=thinking_enabled,
         reasoning_effort=reasoning_effort,
+        thinking_mode=thinking_mode,
         project_root=project_root,
         current_version=current_version,
         version_update=version_update,
@@ -184,7 +191,7 @@ def build_welcome_panel(
 
     intro = Text()
     intro.append("Deepy\n", style=f"bold {palette.assistant}")
-    intro.append("Terminal coding agent for DeepSeek.\n", style=palette.markdown_bold)
+    intro.append("Terminal coding agent for OpenAI-compatible models.\n", style=palette.markdown_bold)
     intro.append("Read, edit, run tools, and keep project context.", style=palette.muted)
 
     hero.add_row(build_deepy_ascii_logo(palette=palette), intro)

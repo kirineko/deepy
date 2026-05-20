@@ -6,6 +6,7 @@ from deepy.session_cost import (
     compute_session_cost_amounts,
     format_session_cost,
     should_track_session_cost,
+    supports_session_cost,
     start_session_cost,
     complete_session_cost,
 )
@@ -32,7 +33,29 @@ def test_should_track_session_cost_requires_official_deepseek_key():
     assert not should_track_session_cost(
         Settings(model=ModelConfig(api_key="sk-test", base_url="https://example.com"))
     )
+    assert not should_track_session_cost(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                api_key="sk-test",
+                base_url="https://api.deepseek.com",
+            )
+        )
+    )
     assert should_track_session_cost(Settings(model=ModelConfig(api_key="sk-test")))
+
+
+def test_supports_session_cost_is_deepseek_provider_only():
+    assert supports_session_cost(Settings())
+    assert not supports_session_cost(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="xiaomi/mimo-v2.5-pro",
+                base_url="https://openrouter.ai/api/v1",
+            )
+        )
+    )
 
 
 def test_balance_snapshot_to_dict_reuses_balance_parser_shape():

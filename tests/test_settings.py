@@ -4,14 +4,18 @@ import pytest
 
 from deepy.config import (
     DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
+    DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_RESERVED_CONTEXT_TOKENS,
+    DEFAULT_XIAOMI_BASE_URL,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
     load_settings,
     settings_to_toml_dict,
     update_config_model_settings,
     update_config_input_suggestions_enabled,
     update_config_theme,
+    provider_info_for,
     ui_theme_from_selection,
+    write_config,
 )
 
 
@@ -86,6 +90,119 @@ def test_supported_deepseek_model_loads_from_config(tmp_path):
     assert settings.model.name == "deepseek-v4-flash"
     assert settings.model.thinking_enabled is True
     assert settings.model.reasoning_mode == "max"
+
+
+def test_loads_explicit_openrouter_provider_and_switch_thinking(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+provider = "openrouter"
+name = "xiaomi/mimo-v2.5"
+base_url = "https://openrouter.ai/api/v1"
+thinking = false
+reasoning_effort = "max"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "openrouter"
+    assert settings.model.name == "xiaomi/mimo-v2.5"
+    assert settings.model.base_url == DEFAULT_OPENROUTER_BASE_URL
+    assert settings.model.reasoning_mode == "none"
+    assert settings.model.reasoning_effort == "none"
+
+
+def test_loads_openrouter_custom_model_and_reasoning_effort(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+provider = "openrouter"
+name = "anthropic/claude-sonnet-4.5"
+base_url = "https://openrouter.ai/api/v1"
+thinking = true
+reasoning_effort = "minimal"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "openrouter"
+    assert settings.model.name == "anthropic/claude-sonnet-4.5"
+    assert settings.model.reasoning_mode == "minimal"
+    assert settings.model.reasoning_effort == "minimal"
+
+
+def test_loads_openrouter_custom_model_with_boolean_reasoning(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+provider = "openrouter"
+name = "google/gemini-3.5-flash"
+base_url = "https://openrouter.ai/api/v1"
+thinking = true
+reasoning_effort = "enabled"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "openrouter"
+    assert settings.model.name == "google/gemini-3.5-flash"
+    assert settings.model.reasoning_mode == "enabled"
+    assert settings.model.reasoning_effort == "enabled"
+
+
+def test_provider_catalog_exposes_api_key_guidance_urls():
+    assert provider_info_for("deepseek").api_key_url == "https://platform.deepseek.com/api_keys"
+    assert provider_info_for("openrouter").api_key_url == "https://openrouter.ai/workspaces/default/keys"
+    assert provider_info_for("xiaomi").api_key_url == "https://platform.xiaomimimo.com/console/api-keys"
+
+
+def test_infers_xiaomi_provider_from_base_url(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+name = "mimo-v2.5-pro"
+base_url = "https://api.xiaomimimo.com/v1"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "xiaomi"
+    assert settings.model.name == "mimo-v2.5-pro"
+    assert settings.model.base_url == DEFAULT_XIAOMI_BASE_URL
+    assert settings.model.reasoning_mode == "enabled"
+
+
+def test_unknown_base_url_without_provider_preserves_custom_model(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+name = "custom-model"
+base_url = "https://llm.example/v1"
+thinking = true
+reasoning_effort = "high"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "deepseek"
+    assert settings.model.name == "custom-model"
+    assert settings.model.base_url == "https://llm.example/v1"
+    assert settings.model.reasoning_mode == "high"
 
 
 def test_existing_thinking_fields_resolve_reasoning_mode(tmp_path):
@@ -330,6 +447,49 @@ def test_update_config_model_settings_preserves_existing_values_and_permissions(
     assert 'reasoning_effort = "high"' in text
 
 
+def test_write_config_uses_provider_default_base_urls_and_switch_thinking(tmp_path):
+    config = tmp_path / "config.toml"
+
+    write_config(
+        config,
+        api_key="sk-test",
+        provider="xiaomi",
+        model="mimo-v2.5",
+        theme="auto",
+        thinking_mode="disabled",
+    )
+
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "xiaomi"' in text
+    assert 'name = "mimo-v2.5"' in text
+    assert f'base_url = "{DEFAULT_XIAOMI_BASE_URL}"' in text
+    assert 'thinking = false' in text
+    assert 'reasoning_effort = "none"' in text
+
+
+def test_update_config_model_settings_switches_provider_with_defaults_and_preserves_unrelated(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        (
+            '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n'
+            'base_url = "https://api.deepseek.com"\nreasoning_effort = "max"\n\n'
+            '[ui]\ntheme = "dark"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    update_config_model_settings(config, provider="openrouter")
+
+    text = config.read_text(encoding="utf-8")
+    assert 'api_key = "sk-test"' in text
+    assert 'theme = "dark"' in text
+    assert 'provider = "openrouter"' in text
+    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
+    assert f'base_url = "{DEFAULT_OPENROUTER_BASE_URL}"' in text
+    assert 'thinking = true' in text
+    assert 'reasoning_effort = "enabled"' in text
+
+
 def test_update_config_model_settings_saves_none_with_existing_fields(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
@@ -352,5 +512,15 @@ def test_update_config_model_settings_rejects_invalid_values_without_changing_co
         update_config_model_settings(config, model="deepseek-chat")
     with pytest.raises(ValueError, match="Reasoning mode must be one of"):
         update_config_model_settings(config, reasoning_mode="medium")
+    with pytest.raises(ValueError, match="Provider must be one of"):
+        update_config_model_settings(config, provider="kimi")
+    write_config(
+        tmp_path / "custom-openrouter.toml",
+        api_key="sk-test",
+        provider="openrouter",
+        model="deepseek/deepseek-r1",
+        theme="auto",
+        thinking_mode="xhigh",
+    )
 
     assert config.read_text(encoding="utf-8") == '[model]\nname = "deepseek-v4-pro"\n'

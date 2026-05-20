@@ -5,7 +5,7 @@
 <h1 align="center">Deepy</h1>
 
 <p align="center">
-  A terminal coding agent built for DeepSeek.
+  A terminal coding agent for DeepSeek and OpenAI-compatible providers.
   <br>
   Read projects, edit files, run commands, search the web, and keep long project context in one recoverable terminal session.
 </p>
@@ -24,7 +24,8 @@
 
 ## What Deepy Does
 
-Deepy is a Python CLI coding agent for DeepSeek's OpenAI-compatible models. It
+Deepy is a Python CLI coding agent for DeepSeek and supported
+OpenAI-compatible providers. It
 keeps the working loop inside your terminal: inspect a project, ask questions,
 modify code, run validation commands, search or fetch web pages, and resume the
 same project session later.
@@ -35,9 +36,10 @@ of hiding tool calls behind chat text.
 
 ## Why Use It
 
-- **DeepSeek-first defaults**: starts with `deepseek-v4-pro`, thinking enabled,
-  and `reasoning_effort=max`. Use `/model` to switch V4 Pro / V4 Flash and
-  choose `none`, `high`, or `max` thinking strength.
+- **Provider-aware model selection**: starts with DeepSeek `deepseek-v4-pro`,
+  thinking enabled, and `reasoning_effort=max`. Use `/model` to switch between
+  DeepSeek, OpenRouter MiMo, and Xiaomi MiMo models with provider-specific
+  thinking choices.
 - **Project-aware coding tools**: read files, write new files, modify existing
   files with stale-write protection, run shell commands, and review readable
   diffs.
@@ -115,7 +117,7 @@ uv tool install deepy-cli
 
 The installed command is `deepy`.
 
-4. Configure your DeepSeek API key and start Deepy:
+4. Configure your provider API key and start Deepy:
 
 ```bash
 deepy config setup
@@ -218,7 +220,7 @@ uv tool uninstall deepy-cli
 Inside an interactive Deepy session:
 
 ```text
-/model       Select model and thinking strength
+/model       Select provider, model, and thinking mode
 /status      Show usage, context pressure, and DeepSeek balance
 /resume      Resume a previous project session
 /new         Start a fresh session
@@ -247,6 +249,7 @@ Deepy uses TOML configuration at `~/.deepy/config.toml`.
 ```toml
 [model]
 api_key = "sk-..."
+provider = "deepseek"
 name = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
 thinking = true
@@ -265,9 +268,23 @@ theme = "auto" # auto, dark, or light
 Set config without the interactive wizard:
 
 ```bash
-deepy config init --api-key sk-... --model deepseek-v4-pro
+deepy config init --api-key sk-... --provider deepseek --model deepseek-v4-pro
+deepy config init --api-key sk-or-... --provider openrouter --model xiaomi/mimo-v2.5-pro
+deepy config init --api-key sk-or-... --provider openrouter --model anthropic/claude-sonnet-4.5 --thinking minimal
+deepy config init --api-key sk-... --provider xiaomi --model mimo-v2.5-pro
 deepy config theme light
 ```
+
+Supported provider/model pairs:
+
+- `deepseek`: `deepseek-v4-pro`, `deepseek-v4-flash`; thinking modes `none`,
+  `high`, `max`.
+- `openrouter`: UI model selection offers `xiaomi/mimo-v2.5-pro`,
+  `xiaomi/mimo-v2.5`; setup/init may also use a model id copied from
+  OpenRouter. Thinking modes are `enabled`, `disabled`, `xhigh`, `high`,
+  `medium`, `low`, `minimal`, `none`.
+- `xiaomi`: `mimo-v2.5-pro`, `mimo-v2.5`; thinking modes `enabled`,
+  `disabled`.
 
 WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it:
 

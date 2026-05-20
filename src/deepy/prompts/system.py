@@ -109,7 +109,7 @@ Loaded skills:
 {loaded_skills_block}
 
 Runtime context:
-Runtime: root={project_root}; model={settings.model.name}; reasoning={settings.model.reasoning_mode}
+Runtime: root={project_root}; provider={settings.model.provider}; model={settings.model.name}; thinking={settings.model.reasoning_mode}
 {runtime_context_block}
 """
 

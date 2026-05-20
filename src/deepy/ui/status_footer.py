@@ -83,7 +83,7 @@ def _help_parts(help_text: str) -> list[tuple[FooterPartRole, str]]:
 
 
 def _known_title(text: str) -> str | None:
-    for title in ("model", "cwd", "mcp", "ctx", "newline"):
+    for title in ("provider", "model", "cwd", "mcp", "ctx", "newline"):
         if text == title or text.startswith(f"{title} ") or text.startswith(f"{title}:"):
             return title
     return None

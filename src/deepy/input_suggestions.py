@@ -139,11 +139,18 @@ class InputSuggestionController:
             self.clear()
 
 
-def input_suggestion_model_settings() -> ModelSettings:
+def input_suggestion_model_name(settings: Settings | None = None) -> str:
+    if settings is not None and settings.model.provider != "deepseek":
+        return settings.model.name
+    return INPUT_SUGGESTION_MODEL
+
+
+def input_suggestion_model_settings(settings: Settings | None = None) -> ModelSettings:
+    provider = settings.model.provider if settings is not None else "deepseek"
     return ModelSettings(
         include_usage=True,
         store=False,
-        extra_body=build_thinking_extra_body(False),
+        extra_body=build_thinking_extra_body(False, provider=provider),
     )
 
 
@@ -210,12 +217,13 @@ async def generate_input_suggestion(
         ],
     )
     client = AsyncOpenAI(base_url=settings.model.base_url, api_key=settings.model.api_key)
-    settings_payload = input_suggestion_model_settings()
+    suggestion_model = input_suggestion_model_name(settings)
+    settings_payload = input_suggestion_model_settings(settings)
     started_at = time.time()
     try:
         response = await asyncio.wait_for(
             client.chat.completions.create(
-                model=INPUT_SUGGESTION_MODEL,
+                model=suggestion_model,
                 messages=request_messages,
                 temperature=0,
                 max_tokens=64,
@@ -256,7 +264,7 @@ async def generate_input_suggestion(
         settings,
         {
             "status": "generated",
-            "model": INPUT_SUGGESTION_MODEL,
+            "model": suggestion_model,
             "suggestion": suggestion,
             "usage": usage.to_dict(),
         },
@@ -264,6 +272,7 @@ async def generate_input_suggestion(
     return InputSuggestion(
         text=suggestion,
         usage=usage,
+        model=suggestion_model,
         elapsed_ms=int((time.time() - started_at) * 1000),
     )
 

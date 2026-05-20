@@ -22,12 +22,17 @@ from rich.text import Text
 
 from deepy import __version__
 from deepy.config import (
-    DEEPSEEK_MODEL_CATALOG,
+    PROVIDER_CATALOG,
     Settings,
     UI_THEMES,
-    is_supported_deepseek_model,
-    is_valid_reasoning_mode,
+    allows_custom_model_for_provider,
+    default_base_url_for_provider,
+    default_model_for_provider,
+    is_supported_model_for_provider,
+    is_supported_provider,
+    is_valid_thinking_mode_for_provider,
     load_settings,
+    provider_info_for,
     ui_theme_from_selection,
     ui_theme_number,
     update_config_input_suggestions_enabled,
@@ -48,7 +53,11 @@ from deepy.mcp import DeepyMcpRuntime, format_mcp_status
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
-from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost
+from deepy.session_cost import (
+    balance_snapshot_to_dict,
+    should_track_session_cost,
+    supports_session_cost,
+)
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
     install_market_skill,
@@ -59,6 +68,7 @@ from deepy.skill_market import (
 )
 from deepy.skills import SkillInfo, discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from deepy.status import (
+    BalanceStatus,
     build_status_report,
     fetch_deepseek_balance,
     format_compact_status_report,
@@ -114,7 +124,13 @@ from deepy.ui.styles import (
     status_style,
 )
 from deepy.ui.theme_picker import THEME_CHOICES, pick_theme
-from deepy.ui.model_picker import REASONING_MODE_CHOICES, pick_model, pick_reasoning_mode
+from deepy.ui.model_picker import (
+    pick_model,
+    pick_provider,
+    pick_reasoning_mode,
+    provider_api_key_reconfiguration_message,
+    thinking_mode_choices,
+)
 from deepy.ui.welcome import build_welcome_panel
 from deepy.ui.welcome import format_home_relative_path
 from deepy.usage import TokenUsage, context_window_usage, format_usage_line
@@ -208,9 +224,11 @@ def run_interactive(
     )
     output.print(
         build_welcome_panel(
+            provider=settings.model.provider,
             model=settings.model.name,
             thinking_enabled=settings.model.thinking_enabled,
             reasoning_effort=settings.model.reasoning_effort,
+            thinking_mode=settings.model.reasoning_mode,
             project_root=root,
             skills=discover_skills(root),
             current_version=__version__,
@@ -982,7 +1000,11 @@ def _handle_slash_command(
             )
         return current_session_id
     if command.name == "status":
-        balance = fetch_deepseek_balance(settings)
+        balance = (
+            fetch_deepseek_balance(settings)
+            if supports_session_cost(settings)
+            else BalanceStatus(unavailable_reason="unsupported provider")
+        )
         console.print(
             format_compact_status_report(
                 build_status_report(
@@ -1443,15 +1465,10 @@ def _handle_model_command(
     if action == "list" and len(parts) == 1:
         _print_model_choices(console)
         return current_session_id
-    if action == "set" and len(parts) in {2, 3}:
-        model = parts[1]
-        if not is_supported_deepseek_model(model):
-            console.print(f"[{palette.error}]Invalid model:[/] {model}")
-            _print_model_usage(console, palette)
-            return current_session_id
-        reasoning_mode = parts[2] if len(parts) == 3 else None
-        if reasoning_mode is not None and not is_valid_reasoning_mode(reasoning_mode):
-            console.print(f"[{palette.error}]Invalid reasoning mode:[/] {reasoning_mode}")
+    if action == "provider" and len(parts) == 2:
+        provider = parts[1].lower()
+        if not is_supported_provider(provider):
+            console.print(f"[{palette.error}]Invalid provider:[/] {provider}")
             _print_model_usage(console, palette)
             return current_session_id
         return _save_model_settings(
@@ -1459,13 +1476,59 @@ def _handle_model_command(
             current_session_id,
             settings,
             palette,
+            provider=provider,
+        )
+    if action == "set" and len(parts) in {2, 3}:
+        model = parts[1]
+        provider = "deepseek"
+        if not is_supported_model_for_provider(model, provider):
+            console.print(f"[{palette.error}]Invalid model:[/] {model}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        reasoning_mode = parts[2] if len(parts) == 3 else None
+        if reasoning_mode is not None and not is_valid_thinking_mode_for_provider(reasoning_mode, provider):
+            console.print(f"[{palette.error}]Invalid thinking mode:[/] {reasoning_mode}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        return _save_model_settings(
+            console,
+            current_session_id,
+            settings,
+            palette,
+            provider=provider,
+            model=model,
+            reasoning_mode=reasoning_mode,
+        )
+    if action == "set" and len(parts) == 4:
+        provider = parts[1].lower()
+        model = parts[2]
+        reasoning_mode = parts[3].lower()
+        if not is_supported_provider(provider):
+            console.print(f"[{palette.error}]Invalid provider:[/] {provider}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        if not is_supported_model_for_provider(model, provider):
+            console.print(f"[{palette.error}]Invalid model:[/] {model}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        if not is_valid_thinking_mode_for_provider(reasoning_mode, provider):
+            console.print(f"[{palette.error}]Invalid thinking mode:[/] {reasoning_mode}")
+            _print_model_usage(console, palette)
+            return current_session_id
+        return _save_model_settings(
+            console,
+            current_session_id,
+            settings,
+            palette,
+            provider=provider,
             model=model,
             reasoning_mode=reasoning_mode,
         )
     if action in {"reasoning", "thinking"} and len(parts) == 2:
         reasoning_mode = parts[1]
-        if not is_valid_reasoning_mode(reasoning_mode):
-            console.print(f"[{palette.error}]Invalid reasoning mode:[/] {reasoning_mode}")
+        provider = settings.model.provider
+        if not is_valid_thinking_mode_for_provider(reasoning_mode, provider):
+            console.print(f"[{palette.error}]Invalid thinking mode:[/] {reasoning_mode}")
             _print_model_usage(console, palette)
             return current_session_id
         return _save_model_settings(
@@ -1506,10 +1569,20 @@ def _handle_interactive_model_selection(
     input_func: InputFunc | None = None,
 ) -> str | None:
     console.print(
-        f"Current model: {settings.model.name} · reasoning: {settings.model.reasoning_mode}"
+        f"Current provider: {settings.model.provider} · model: {settings.model.name} · "
+        f"thinking: {settings.model.reasoning_mode}"
     )
+    selected_provider = _prompt_for_provider_selection(
+        settings.model.provider,
+        console=console,
+        input_func=input_func,
+    )
+    if selected_provider is None:
+        console.print("Model unchanged.")
+        return current_session_id
     selected_model = _prompt_for_model_selection(
-        settings.model.name,
+        settings.model.name if settings.model.provider == selected_provider else default_model_for_provider(selected_provider),
+        provider=selected_provider,
         console=console,
         input_func=input_func,
     )
@@ -1518,6 +1591,7 @@ def _handle_interactive_model_selection(
         return current_session_id
     selected_reasoning = _prompt_for_reasoning_mode_selection(
         settings.model.reasoning_mode,
+        provider=selected_provider,
         console=console,
         input_func=input_func,
     )
@@ -1529,6 +1603,7 @@ def _handle_interactive_model_selection(
         current_session_id,
         settings,
         palette,
+        provider=selected_provider,
         model=selected_model,
         reasoning_mode=selected_reasoning,
     )
@@ -1540,6 +1615,7 @@ def _save_model_settings(
     settings: Settings,
     palette: UiPalette,
     *,
+    provider: str | None = None,
     model: str | None = None,
     reasoning_mode: str | None = None,
 ) -> str | None:
@@ -1549,84 +1625,197 @@ def _save_model_settings(
     try:
         update_config_model_settings(
             settings.path,
+            provider=provider,
             model=model,
             reasoning_mode=reasoning_mode,
         )
     except ValueError as exc:
         console.print(f"[{palette.error}]{exc}[/]")
         return current_session_id
-    active_model = model or settings.model.name
-    active_reasoning = reasoning_mode or settings.model.reasoning_mode
-    console.print(f"Saved model: {active_model} · reasoning: {active_reasoning}")
+    saved_settings = load_settings(settings.path)
+    console.print(
+        f"Saved provider: {saved_settings.model.provider} · "
+        f"model: {saved_settings.model.name} · "
+        f"thinking: {saved_settings.model.reasoning_mode}"
+    )
+    if saved_settings.model.provider != settings.model.provider:
+        console.print(provider_api_key_reconfiguration_message(saved_settings.model.provider))
     return current_session_id
 
 
 def _print_model_choices(console: Console) -> None:
-    console.print("Available models:")
-    for index, model in enumerate(DEEPSEEK_MODEL_CATALOG, 1):
-        console.print(f"{index}. {model.name} - {model.description}")
-    console.print("Reasoning modes:")
-    for index, (value, _label) in enumerate(REASONING_MODE_CHOICES, 1):
-        console.print(f"{index}. {value}")
+    console.print("Available providers and models:")
+    for provider in PROVIDER_CATALOG:
+        console.print(f"{provider.id} - {provider.description}")
+        for index, model in enumerate(provider.models, 1):
+            console.print(f"  {index}. {model.name} - {model.description}")
+        modes = ", ".join(provider.thinking_modes)
+        console.print(f"  thinking: {modes}")
 
 
 def _print_model_usage(console: Console, palette: UiPalette) -> None:
     console.print(
         f"[{palette.error}]Usage:[/] /model | /model list | "
         "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
-        "/model reasoning none|high|max"
+        "/model set openrouter xiaomi/mimo-v2.5-pro none|minimal|low|medium|high|xhigh | "
+        "/model set xiaomi mimo-v2.5-pro enabled|disabled | "
+        "/model provider deepseek|openrouter|xiaomi | "
+        "/model thinking <mode>"
     )
+
+
+def _prompt_for_provider_selection(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    if input_func is None:
+        return pick_provider(default)
+    _print_provider_choices(console)
+    value = input_func("Provider number or name").strip()
+    if not value:
+        return None
+    return _provider_from_selection(value)
 
 
 def _prompt_for_model_selection(
     default: str,
     *,
+    provider: str,
     console: Console,
     input_func: InputFunc | None = None,
+    allow_custom_model: bool = False,
 ) -> str | None:
     if input_func is None:
-        return pick_model(default)
-    _print_model_choices(console)
+        return pick_model(default, provider=provider)
+    _print_provider_model_choices(console, provider)
+    if allow_custom_model and allows_custom_model_for_provider(provider):
+        console.print("Or paste any model name copied from the OpenRouter models page.")
     value = input_func("Model number or name").strip()
     if not value:
         return None
-    return _model_from_selection(value)
+    return _model_from_selection(value, provider=provider, allow_custom_model=allow_custom_model)
 
 
 def _prompt_for_reasoning_mode_selection(
     default: str,
     *,
+    provider: str,
     console: Console,
     input_func: InputFunc | None = None,
+    setup_flow: bool = False,
 ) -> str | None:
     if input_func is None:
-        return pick_reasoning_mode(default)
-    _print_reasoning_choices(console)
-    value = input_func("Thinking strength number or name").strip()
+        return pick_reasoning_mode(default, provider=provider)
+    if setup_flow and provider == "openrouter":
+        return _prompt_for_openrouter_reasoning_setup(default, console=console, input_func=input_func)
+    _print_reasoning_choices(console, provider)
+    value = input_func("Thinking number or name").strip()
     if not value:
         return None
-    return _reasoning_mode_from_selection(value)
+    return _reasoning_mode_from_selection(value, provider=provider)
 
 
-def _model_from_selection(value: str) -> str | None:
-    normalized = value.strip()
-    by_number = {str(index): model.name for index, model in enumerate(DEEPSEEK_MODEL_CATALOG, 1)}
-    if normalized in by_number:
-        return by_number[normalized]
-    return normalized if is_supported_deepseek_model(normalized) else None
+def _prompt_for_openrouter_reasoning_setup(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc,
+) -> str | None:
+    current_enabled = default not in {"none", "disabled"}
+    console.print("Thinking:")
+    console.print("1. enabled - Reasoning enabled")
+    console.print("2. disabled - Reasoning disabled")
+    state_value = input_func("Thinking number or name").strip()
+    if not state_value:
+        return None
+    state = _openrouter_thinking_state_from_selection(
+        state_value,
+        default="enabled" if current_enabled else "disabled",
+    )
+    if state == "disabled":
+        return "none"
+    console.print("Reasoning effort:")
+    console.print("1. default - Use the model default reasoning strength")
+    for index, effort in enumerate(("xhigh", "high", "medium", "low", "minimal"), 2):
+        console.print(f"{index}. {effort}")
+    effort_value = input_func("Reasoning effort number or name").strip()
+    if not effort_value:
+        return "enabled"
+    return _openrouter_effort_from_selection(effort_value, default=default)
 
 
-def _reasoning_mode_from_selection(value: str) -> str | None:
+def _openrouter_thinking_state_from_selection(value: str, *, default: str) -> str:
     normalized = value.strip().lower()
-    by_number = {str(index): mode for index, (mode, _label) in enumerate(REASONING_MODE_CHOICES, 1)}
+    if normalized in {"1", "enabled", "enable", "on", "true", "yes"}:
+        return "enabled"
+    if normalized in {"2", "disabled", "disable", "off", "false", "no", "none"}:
+        return "disabled"
+    return default
+
+
+def _openrouter_effort_from_selection(value: str, *, default: str) -> str:
+    normalized = value.strip().lower()
+    by_number = {
+        "1": "enabled",
+        "2": "xhigh",
+        "3": "high",
+        "4": "medium",
+        "5": "low",
+        "6": "minimal",
+    }
     if normalized in by_number:
         return by_number[normalized]
-    return normalized if is_valid_reasoning_mode(normalized) else None
+    if normalized in {"default", "enabled"}:
+        return "enabled"
+    if normalized in {"xhigh", "high", "medium", "low", "minimal"}:
+        return normalized
+    return default if default in {"enabled", "xhigh", "high", "medium", "low", "minimal"} else "enabled"
 
 
-def _print_reasoning_choices(console: Console) -> None:
-    console.print("Thinking strength:")
-    for index, (value, label) in enumerate(REASONING_MODE_CHOICES, 1):
+def _provider_from_selection(value: str) -> str | None:
+    normalized = value.strip().lower()
+    by_number = {str(index): provider.id for index, provider in enumerate(PROVIDER_CATALOG, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    return normalized if is_supported_provider(normalized) else None
+
+
+def _model_from_selection(value: str, *, provider: str, allow_custom_model: bool = False) -> str | None:
+    normalized = value.strip()
+    by_number = {str(index): model.name for index, model in enumerate(provider_info_for(provider).models, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    if allow_custom_model and allows_custom_model_for_provider(provider) and normalized:
+        return normalized
+    return normalized if is_supported_model_for_provider(normalized, provider) else None
+
+
+def _reasoning_mode_from_selection(value: str, *, provider: str) -> str | None:
+    normalized = value.strip().lower()
+    choices = thinking_mode_choices(provider)
+    by_number = {str(index): mode for index, (mode, _label) in enumerate(choices, 1)}
+    if normalized in by_number:
+        return by_number[normalized]
+    return normalized if is_valid_thinking_mode_for_provider(normalized, provider) else None
+
+
+def _print_provider_choices(console: Console) -> None:
+    console.print("Providers:")
+    for index, provider in enumerate(PROVIDER_CATALOG, 1):
+        console.print(f"{index}. {provider.id} - {provider.description}")
+
+
+def _print_provider_model_choices(console: Console, provider: str) -> None:
+    console.print(f"Models for {provider}:")
+    for index, model in enumerate(provider_info_for(provider).models, 1):
+        console.print(f"{index}. {model.name} - {model.description}")
+
+
+def _print_reasoning_choices(console: Console, provider: str = "deepseek") -> None:
+    console.print("Thinking:")
+    for index, (value, label) in enumerate(thinking_mode_choices(provider), 1):
         console.print(f"{index}. {label}")
 
 
@@ -1667,15 +1856,42 @@ def _handle_reset_command(
     if settings.path is None:
         console.print(f"[{palette.error}]Cannot reset config: config path is unknown.[/]")
         return current_session_id
+    previous_text = settings.path.read_text(encoding="utf-8") if settings.path.exists() else None
     if settings.path.exists():
         settings.path.unlink()
         console.print(f"Removed {settings.path}")
     else:
         console.print(f"No existing config at {settings.path}")
     console.print("Starting Deepy configuration setup...")
-    _run_interactive_config_setup(settings.path, previous=settings, console=console)
+    try:
+        _run_interactive_config_setup(settings.path, previous=settings, console=console)
+    except (KeyboardInterrupt, EOFError, StopIteration):
+        _restore_config_after_failed_setup(settings.path, previous_text)
+        console.print(f"[{palette.warning}]{_setup_cancelled_message(previous_text)}[/]")
+        return current_session_id
     console.print(f"Wrote {settings.path}")
     return current_session_id
+
+
+def _setup_cancelled_message(previous_text: str | None) -> str:
+    if previous_text is None:
+        return "Configuration setup cancelled. No config was written."
+    return "Configuration setup cancelled. Existing config was left unchanged."
+
+
+def _restore_config_after_failed_setup(config_path: Path, previous_text: str | None) -> None:
+    if previous_text is None:
+        try:
+            config_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(previous_text, encoding="utf-8")
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _run_interactive_config_setup(
@@ -1684,16 +1900,54 @@ def _run_interactive_config_setup(
     previous: Settings,
     console: Console,
 ) -> None:
-    console.print("DeepSeek API keys: https://platform.deepseek.com/api_keys")
+    provider = _prompt_for_provider_selection(
+        previous.model.provider,
+        console=console,
+        input_func=lambda label: _prompt_config_value(label, default=""),
+    ) or previous.model.provider
+    provider_info = provider_info_for(provider)
+    console.print(f"Provider: {provider}")
+    if provider_info.api_key_url:
+        console.print(f"Create an API key at {provider_info.api_key_url}")
     api_key = _prompt_config_value("API key", default="", is_password=True)
-    model = _prompt_config_value("Model", default=previous.model.name)
-    base_url = _prompt_config_value("Base URL", default=previous.model.base_url)
+    model_default = (
+        previous.model.name
+        if previous.model.provider == provider and is_supported_model_for_provider(previous.model.name, provider)
+        else default_model_for_provider(provider)
+    )
+    model = _prompt_for_model_selection(
+        model_default,
+        provider=provider,
+        console=console,
+        input_func=lambda label: _prompt_config_value(label, default=""),
+        allow_custom_model=True,
+    ) or model_default
+    base_default = (
+        previous.model.base_url
+        if previous.model.provider == provider
+        else default_base_url_for_provider(provider)
+    )
+    base_url = _prompt_config_value("Base URL", default=base_default)
+    thinking_default = (
+        previous.model.reasoning_mode
+        if previous.model.provider == provider and is_valid_thinking_mode_for_provider(previous.model.reasoning_mode, provider)
+        else provider_info_for(provider).default_thinking_mode
+    )
+    thinking_mode = _prompt_for_reasoning_mode_selection(
+        thinking_default,
+        provider=provider,
+        console=console,
+        input_func=lambda label: _prompt_config_value(label, default=""),
+        setup_flow=True,
+    ) or thinking_default
     theme = _prompt_theme_config_value(default=previous.ui.theme, console=console)
     write_config(
         config_path,
         api_key=api_key,
+        provider=provider,
         model=model,
         base_url=base_url,
+        thinking_mode=thinking_mode,
         theme=theme,
     )
 
@@ -2025,6 +2279,7 @@ def _print_exit_summary(
             messages=messages,
             model=settings.model.name,
             session_id=session_id,
+            session_cost_unsupported=not supports_session_cost(settings),
         )
     )
 
@@ -2129,6 +2384,7 @@ def _build_status_footer(
         return StatusFooter(())
 
     segments = [
+        StatusFooterSegment(f"provider {settings.model.provider}", "identity"),
         StatusFooterSegment(
             f"model {settings.model.name}[{settings.model.reasoning_mode}]",
             "identity",

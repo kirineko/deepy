@@ -69,8 +69,9 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
 
     assert [(item.label, item.value) for item in settings] == [
         ("Version", "0.1.0"),
+        ("Provider", "deepseek"),
         ("Model", "deepseek-v4-pro"),
-        ("Reasoning", "max"),
+        ("Thinking", "max"),
         ("CWD", "~/project"),
     ]
 
@@ -85,7 +86,7 @@ def test_build_welcome_settings_uses_none_when_thinking_is_disabled(tmp_path):
         home=Path("/tmp/home"),
     )
 
-    assert ("Reasoning", "none") in [(item.label, item.value) for item in settings]
+    assert ("Thinking", "none") in [(item.label, item.value) for item in settings]
 
 
 def test_build_welcome_settings_includes_theme_when_available(tmp_path):
@@ -155,8 +156,9 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
     assert ">_" in rendered
     assert "Terminal coding agent" in rendered
     assert "0.1.0" in rendered
+    assert "deepseek" in rendered
     assert "deepseek-v4-pro" in rendered
-    assert "Reasoning" in rendered
+    assert "Thinking" in rendered
     assert "Theme" in rendered
     assert "light" in rendered
     assert "/resume" in rendered

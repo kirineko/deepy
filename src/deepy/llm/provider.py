@@ -70,7 +70,7 @@ def build_provider_bundle(settings: Settings) -> ProviderBundle:
     from .thinking import build_model_settings
 
     if not settings.model.api_key:
-        raise ValueError(f"DeepSeek API key is missing in {settings.path or 'Deepy config'}.")
+        raise ValueError(f"Model API key is missing in {settings.path or 'Deepy config'}.")
 
     set_tracing_disabled(disabled=True)
     client = AsyncOpenAI(base_url=settings.model.base_url, api_key=settings.model.api_key)

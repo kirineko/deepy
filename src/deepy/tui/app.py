@@ -18,12 +18,15 @@ from textual.reactive import var
 from textual.widgets import Footer, Header, Label, Static
 
 from deepy.config import (
-    DEEPSEEK_MODEL_CATALOG,
+    PROVIDER_CATALOG,
     Settings,
-    is_supported_deepseek_model,
-    is_valid_reasoning_mode,
+    allows_custom_model_for_provider,
+    is_supported_model_for_provider,
+    is_supported_provider,
+    is_valid_thinking_mode_for_provider,
     is_valid_ui_theme,
     load_settings,
+    provider_info_for,
     update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
@@ -40,7 +43,7 @@ from deepy.mcp import load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
-from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost
+from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost, supports_session_cost
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
     InstalledSkill,
@@ -127,7 +130,7 @@ from deepy.ui.message_view import parse_tool_output
 from deepy.ui.session_list import format_session_title
 from deepy.ui.session_picker import ResumeSessionPreview, format_session_time
 from deepy.ui.slash_commands import build_slash_commands
-from deepy.ui.model_picker import REASONING_MODE_CHOICES
+from deepy.ui.model_picker import provider_api_key_reconfiguration_message, thinking_mode_choices
 from deepy.ui.welcome import format_home_relative_path
 from deepy.usage import context_window_usage, format_usage_line
 from deepy.utils import json as json_utils
@@ -429,7 +432,7 @@ class DeepyTuiApp(App[None]):
         self.run_worker(self._initial_setup_command(), exclusive=False)
 
     async def _initial_setup_command(self) -> None:
-        await self._append_block(InfoBlock("Deepy needs a DeepSeek API key before starting TUI."))
+        await self._append_block(InfoBlock("Deepy needs a provider API key before starting TUI."))
         await self._reset_command()
 
     @on(PromptTextArea.Submitted)
@@ -514,10 +517,15 @@ class DeepyTuiApp(App[None]):
             self.push_screen(InfoScreen("Deepy TUI Help", self._help_markdown()))
             return
         if name == "status":
+            balance = (
+                fetch_deepseek_balance(self.settings)
+                if supports_session_cost(self.settings)
+                else BalanceStatus(unavailable_reason="unsupported provider")
+            )
             self.push_screen(
                 InfoScreen(
                     "Deepy TUI Status",
-                    self._status_markdown(balance=fetch_deepseek_balance(self.settings)),
+                    self._status_markdown(balance=balance),
                 )
             )
             return
@@ -584,8 +592,9 @@ class DeepyTuiApp(App[None]):
             "# Status",
             "",
             f"- Project: `{report.project_root}`",
+            f"- Provider: `{report.provider}`",
             f"- Model: `{report.model}`",
-            f"- Reasoning: `{report.reasoning_mode}`",
+            f"- Thinking: `{report.reasoning_mode}`",
             f"- Session: `{self.state.session_id or 'new'}`",
             f"- Theme: `{self.settings.ui.theme}`",
             f"- Input suggestions: `{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}`",
@@ -720,60 +729,102 @@ class DeepyTuiApp(App[None]):
         self._update_status(f"Theme {theme}")
 
     async def _model_command(self, argument: str) -> None:
-        parts = argument.split()
-        model: str | None = None
-        reasoning: str | None = None
-        if not parts:
-            model = await self.push_screen_wait(
-                ChoiceScreen(
-                    "Select model",
-                    [
-                        Choice(item.name, item.name, item.description)
-                        for item in DEEPSEEK_MODEL_CATALOG
-                    ],
+        try:
+            parts = argument.split()
+            provider: str | None = None
+            model: str | None = None
+            reasoning: str | None = None
+            if not parts:
+                provider = await self.push_screen_wait(
+                    ChoiceScreen(
+                        "Select provider",
+                        [
+                            Choice(item.id, item.id, item.description)
+                            for item in PROVIDER_CATALOG
+                        ],
+                    )
+                )
+                if not provider:
+                    self._update_status("Model unchanged")
+                    return
+                model = await self.push_screen_wait(
+                    ChoiceScreen(
+                        "Select model",
+                        [
+                            Choice(item.name, item.name, item.description)
+                            for item in provider_info_for(provider).models
+                        ],
+                    )
+                )
+                if not model:
+                    self._update_status("Model unchanged")
+                    return
+                reasoning = await self.push_screen_wait(
+                    ChoiceScreen(
+                        "Select thinking",
+                        [Choice(value, value, label) for value, label in thinking_mode_choices(provider)],
+                    )
+                )
+                if not reasoning:
+                    self._update_status("Model unchanged")
+                    return
+            elif parts[0] == "list" and len(parts) == 1:
+                await self._append_block(InfoBlock(_model_list_text()))
+                return
+            elif parts[0] == "provider" and len(parts) == 2:
+                provider = parts[1]
+            elif parts[0] == "set" and len(parts) in {2, 3}:
+                provider = "deepseek"
+                model = parts[1]
+                reasoning = parts[2] if len(parts) == 3 else None
+            elif parts[0] == "set" and len(parts) == 4:
+                provider = parts[1]
+                model = parts[2]
+                reasoning = parts[3]
+            elif parts[0] in {"reasoning", "thinking"} and len(parts) == 2:
+                reasoning = parts[1]
+            else:
+                await self._append_block(ErrorBlock(_model_usage_text()))
+                return
+            active_provider = provider or self.settings.model.provider
+            if provider is not None and not is_supported_provider(provider):
+                await self._append_block(ErrorBlock(f"Invalid provider: {provider}\n{_model_usage_text()}"))
+                return
+            if model is not None and not is_supported_model_for_provider(model, active_provider):
+                await self._append_block(ErrorBlock(f"Invalid model: {model}\n{_model_usage_text()}"))
+                return
+            if reasoning is not None and not is_valid_thinking_mode_for_provider(reasoning, active_provider):
+                await self._append_block(ErrorBlock(f"Invalid thinking mode: {reasoning}\n{_model_usage_text()}"))
+                return
+            if self.settings.path is None:
+                await self._append_block(ErrorBlock("Cannot persist model settings: config path is unknown."))
+                return
+            previous_provider = self.settings.model.provider
+            update_config_model_settings(
+                self.settings.path,
+                provider=provider,
+                model=model,
+                reasoning_mode=reasoning,
+            )
+            self.settings = load_settings(self.settings.path)
+            self.controller.settings = self.settings
+            await self._append_block(
+                InfoBlock(
+                    "Saved model: "
+                    f"{self.settings.model.provider} {self.settings.model.name} "
+                    f"- thinking: {self.settings.model.reasoning_mode}"
                 )
             )
-            if not model:
-                self._update_status("Model unchanged")
-                return
-            reasoning = await self.push_screen_wait(
-                ChoiceScreen(
-                    "Select reasoning",
-                    [Choice(value, value, label) for value, label in REASONING_MODE_CHOICES],
+            if self.settings.model.provider != previous_provider:
+                await self._append_block(
+                    InfoBlock(provider_api_key_reconfiguration_message(self.settings.model.provider))
                 )
-            )
-            if not reasoning:
-                self._update_status("Model unchanged")
-                return
-        elif parts[0] == "list" and len(parts) == 1:
-            await self._append_block(InfoBlock(_model_list_text()))
-            return
-        elif parts[0] == "set" and len(parts) in {2, 3}:
-            model = parts[1]
-            reasoning = parts[2] if len(parts) == 3 else None
-        elif parts[0] in {"reasoning", "thinking"} and len(parts) == 2:
-            reasoning = parts[1]
-        else:
-            await self._append_block(ErrorBlock(_model_usage_text()))
-            return
-        if model is not None and not is_supported_deepseek_model(model):
-            await self._append_block(ErrorBlock(f"Invalid model: {model}\n{_model_usage_text()}"))
-            return
-        if reasoning is not None and not is_valid_reasoning_mode(reasoning):
-            await self._append_block(ErrorBlock(f"Invalid reasoning mode: {reasoning}\n{_model_usage_text()}"))
-            return
-        if self.settings.path is None:
-            await self._append_block(ErrorBlock("Cannot persist model settings: config path is unknown."))
-            return
-        update_config_model_settings(self.settings.path, model=model, reasoning_mode=reasoning)
-        self.settings = load_settings(self.settings.path)
-        self.controller.settings = self.settings
-        await self._append_block(
-            InfoBlock(
-                f"Saved model: {self.settings.model.name} - reasoning: {self.settings.model.reasoning_mode}"
-            )
-        )
-        self._update_status("Model saved")
+            self._update_status("Model saved")
+        finally:
+            self.call_after_refresh(self._focus_prompt_input)
+
+    def _focus_prompt_input(self) -> None:
+        self.query_one("#prompt-input", PromptTextArea).focus()
 
     async def _input_suggestion_command(self, argument: str) -> None:
         if argument:
@@ -805,8 +856,10 @@ class DeepyTuiApp(App[None]):
         result = await self.push_screen_wait(
             ResetConfigScreen(
                 api_key=self.settings.model.api_key or "",
+                provider=self.settings.model.provider,
                 model=self.settings.model.name,
                 base_url=self.settings.model.base_url,
+                thinking=self.settings.model.reasoning_mode,
                 theme=self.settings.ui.theme,
             )
         )
@@ -823,8 +876,10 @@ class DeepyTuiApp(App[None]):
             write_config(
                 self.settings.path,
                 api_key=result.api_key,
+                provider=result.provider,
                 model=result.model,
                 base_url=result.base_url,
+                thinking_mode=result.thinking,
                 theme=result.theme,
             )
         except Exception as exc:
@@ -1439,8 +1494,9 @@ class DeepyTuiApp(App[None]):
         self._set_status_bar(status)
         self.query_one("#side-status", Static).update(
             f"Project: {self.project_root}\n"
+            f"Provider: {self.settings.model.provider}\n"
             f"Model: {self.settings.model.name}\n"
-            f"Reasoning: {self.settings.model.reasoning_mode}\n"
+            f"Thinking: {self.settings.model.reasoning_mode}\n"
             f"Session: {self.state.session_id or 'new'}\n"
             f"Skills: {', '.join(self.controller.loaded_skill_names) or 'none'}"
             + (f"\n\nTodos:\n{self._todo_text}" if self._todo_text else "")
@@ -1502,6 +1558,7 @@ class DeepyTuiApp(App[None]):
             messages=messages,
             model=self.settings.model.name,
             session_id=self.state.session_id,
+            session_cost_unsupported=not supports_session_cost(self.settings),
         )
 
     def _capture_session_cost_start(self) -> dict[str, Any] | None:
@@ -1775,12 +1832,12 @@ def _call_id(item: dict[str, Any]) -> str:
 
 
 def _model_list_text() -> str:
-    lines = ["Available models:"]
-    for model in DEEPSEEK_MODEL_CATALOG:
-        lines.append(f"- {model.name}: {model.description}")
-    lines.append("Reasoning modes:")
-    for value, label in REASONING_MODE_CHOICES:
-        lines.append(f"- {value}: {label}")
+    lines = ["Available providers and models:"]
+    for provider in PROVIDER_CATALOG:
+        lines.append(f"- {provider.id}: {provider.description}")
+        for model in provider.models:
+            lines.append(f"  - {model.name}: {model.description}")
+        lines.append(f"  - thinking: {', '.join(provider.thinking_modes)}")
     return "\n".join(lines)
 
 
@@ -1788,15 +1845,27 @@ def _model_usage_text() -> str:
     return (
         "Usage: /model | /model list | "
         "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
-        "/model reasoning none|high|max"
+        "/model set openrouter xiaomi/mimo-v2.5-pro none|minimal|low|medium|high|xhigh | "
+        "/model set xiaomi mimo-v2.5-pro enabled|disabled | "
+        "/model provider deepseek|openrouter|xiaomi | "
+        "/model thinking <mode>"
     )
 
 
 def _reset_config_validation_error(result: ResetConfigResult) -> str:
+    if not result.provider:
+        return "Provider is required."
+    if not is_supported_provider(result.provider):
+        return f"Invalid provider: {result.provider}\n{_model_usage_text()}"
     if not result.model:
         return "Model is required."
-    if not is_supported_deepseek_model(result.model):
+    if not (
+        is_supported_model_for_provider(result.model, result.provider)
+        or (allows_custom_model_for_provider(result.provider) and result.model.strip())
+    ):
         return f"Invalid model: {result.model}\n{_model_usage_text()}"
+    if result.thinking and not is_valid_thinking_mode_for_provider(result.thinking, result.provider):
+        return f"Invalid thinking mode: {result.thinking}\n{_model_usage_text()}"
     if not result.base_url:
         return "Base URL is required."
     if not result.theme:
@@ -1813,6 +1882,7 @@ def _build_tui_status_context(
     settings: Settings,
 ) -> str:
     segments = [
+        f"provider {settings.model.provider}",
         f"model {settings.model.name}[{settings.model.reasoning_mode}]",
         f"cwd {format_home_relative_path(project_root)}",
     ]

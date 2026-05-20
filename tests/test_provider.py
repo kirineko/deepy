@@ -57,6 +57,22 @@ def test_provider_bundle_uses_selected_model_name():
     assert bundle.model.model == "deepseek-v4-flash"
 
 
+def test_provider_bundle_uses_selected_provider_base_url_and_model():
+    settings = Settings(
+        model=ModelConfig(
+            provider="openrouter",
+            api_key="sk-test",
+            name="xiaomi/mimo-v2.5-pro",
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+
+    bundle = build_provider_bundle(settings)
+
+    assert bundle.model.model == "xiaomi/mimo-v2.5-pro"
+    assert str(bundle.client.base_url) == "https://openrouter.ai/api/v1/"
+
+
 def test_model_settings_map_reasoning_modes_to_deepseek_body():
     disabled = build_model_settings(
         Settings(model=ModelConfig(api_key="sk-test", thinking=False))
@@ -71,6 +87,81 @@ def test_model_settings_map_reasoning_modes_to_deepseek_body():
     assert disabled == {"thinking": {"type": "disabled"}}
     assert high == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     assert max_effort == {"thinking": {"type": "enabled"}, "reasoning_effort": "max"}
+
+
+def test_model_settings_map_openrouter_reasoning_effort():
+    enabled = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="google/gemini-3.5-flash",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+                thinking=True,
+                reasoning_effort="enabled",
+            )
+        )
+    )
+    minimal = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="anthropic/claude-sonnet-4.5",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+                thinking=True,
+                reasoning_effort="minimal",
+            )
+        )
+    )
+    disabled = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="openrouter",
+                name="xiaomi/mimo-v2.5",
+                base_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+                thinking=False,
+                reasoning_effort="none",
+            )
+        )
+    )
+
+    assert enabled.extra_body == {"reasoning": {"enabled": True}}
+    assert minimal.extra_body == {"reasoning": {"enabled": True, "effort": "minimal"}}
+    assert disabled.extra_body == {"reasoning": {"enabled": False}}
+    assert minimal.include_usage is True
+    assert minimal.store is False
+
+
+def test_model_settings_map_xiaomi_mimo_switch_thinking_without_reasoning_effort():
+    enabled = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+                thinking=True,
+                reasoning_effort="high",
+            )
+        )
+    ).extra_body
+    disabled = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+                thinking=False,
+                reasoning_effort="none",
+            )
+        )
+    ).extra_body
+
+    assert enabled == {"thinking": {"type": "enabled"}}
+    assert disabled == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.asyncio

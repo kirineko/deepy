@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import cast
 
 from textual import on
 from textual.app import ComposeResult
@@ -37,7 +39,61 @@ from deepy.ui.slash_commands import (
 )
 
 
-class PromptTextArea(TextArea):
+_KITTY_TEXT_SEQUENCE_RE = re.compile(r"(?:\x1b)?\[([0-9:;]+)u")
+
+
+def decode_kitty_text_sequences(text: str) -> str:
+    """Decode Kitty keyboard-protocol text sequences leaked as plain input."""
+
+    def replace(match: re.Match[str]) -> str:
+        payload = match.group(1)
+        fields = payload.split(";")
+        if len(fields) < 3:
+            return match.group(0)
+        encoded_text = ";".join(fields[2:])
+        if not encoded_text:
+            return match.group(0)
+        values: list[int] = []
+        for item in re.split(r"[:;]", encoded_text):
+            if not item.isdecimal():
+                return match.group(0)
+            value = int(item)
+            if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+                return match.group(0)
+            if value < 0x20 or 0x7F <= value <= 0x9F:
+                return match.group(0)
+            values.append(value)
+        return "".join(chr(value) for value in values)
+
+    return _KITTY_TEXT_SEQUENCE_RE.sub(replace, text)
+
+
+def _end_cursor_location(text: str) -> tuple[int, int]:
+    lines = text.splitlines() or [""]
+    if text.endswith("\n"):
+        return (len(lines), 0)
+    return (len(lines) - 1, len(lines[-1]))
+
+
+class _KeyboardProtocolTextMixin:
+    _normalizing_keyboard_protocol_text = False
+
+    def _normalize_keyboard_protocol_text(self) -> bool:
+        if self._normalizing_keyboard_protocol_text:
+            return False
+        normalized = decode_kitty_text_sequences(self.text)
+        if normalized == self.text:
+            return False
+        self._normalizing_keyboard_protocol_text = True
+        try:
+            self.text = normalized
+            cast(TextArea, self).move_cursor(_end_cursor_location(normalized))
+        finally:
+            self._normalizing_keyboard_protocol_text = False
+        return True
+
+
+class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
     BINDINGS = [
         Binding("enter", "submit", "Send", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
@@ -59,6 +115,11 @@ class PromptTextArea(TextArea):
 
     class HistoryNext(Message):
         pass
+
+    @on(TextArea.Changed)
+    def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
+        if self._normalize_keyboard_protocol_text():
+            event.stop()
 
     def action_submit(self) -> None:
         panel = self.parent
@@ -112,7 +173,7 @@ class PromptTextArea(TextArea):
         super().action_cursor_down(select)
 
 
-class QuestionTextArea(TextArea):
+class QuestionTextArea(_KeyboardProtocolTextMixin, TextArea):
     BINDINGS = [
         Binding("enter", "submit", "Submit", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
@@ -120,6 +181,11 @@ class QuestionTextArea(TextArea):
 
     class Submitted(Message):
         pass
+
+    @on(TextArea.Changed)
+    def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
+        if self._normalize_keyboard_protocol_text():
+            event.stop()
 
     def action_submit(self) -> None:
         self.post_message(self.Submitted())

@@ -36,6 +36,7 @@ from deepy.tui.widgets import (
     ToolBlock,
     UsageLine,
     UserBlock,
+    decode_kitty_text_sequences,
 )
 from deepy.sessions import DeepyJsonlSession
 from deepy.ui.local_command import LocalCommandResult
@@ -73,6 +74,22 @@ async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable
     await _wait_for(pilot, condition)
 
 
+def test_decode_kitty_text_sequences_decodes_chinese_text_event() -> None:
+    assert decode_kitty_text_sequences("[32;;20320;22909u") == "你好"
+    assert decode_kitty_text_sequences("[32;;20320:22909u") == "你好"
+    assert decode_kitty_text_sequences("[0;1;20320:22909u") == "你好"
+    assert decode_kitty_text_sequences("\x1b[32;;20320;22909u") == "你好"
+    assert decode_kitty_text_sequences("ask [32;;20320;22909u") == "ask 你好"
+    assert decode_kitty_text_sequences("[32;;104:101:108:108:111u") == "hello"
+    assert decode_kitty_text_sequences("say [32;;104:101:108:108:111u") == "say hello"
+
+
+def test_decode_kitty_text_sequences_leaves_non_text_sequences_unchanged() -> None:
+    assert decode_kitty_text_sequences("\x1b[20320u") == "\x1b[20320u"
+    assert decode_kitty_text_sequences("[32;;not-a-codepointu") == "[32;;not-a-codepointu"
+    assert decode_kitty_text_sequences("[32;;7u") == "[32;;7u"
+
+
 @pytest.mark.asyncio
 async def test_tui_starts_and_exits_headless(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
@@ -87,6 +104,19 @@ async def test_tui_starts_and_exits_headless(tmp_path) -> None:
         assert app.query(InfoBlock).first() is not None
         await pilot.press("ctrl+o")
         assert app.query_one("#side-panel").has_class("-visible")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_decodes_kitty_text_sequence(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "[32;;20320:22909u"
+        await _wait_for(pilot, lambda: prompt.text == "你好")
+        assert prompt.cursor_location == (0, 2)
         app.exit()
 
 
@@ -238,6 +268,36 @@ async def test_tui_exit_summary_shows_unavailable_session_cost(tmp_path, monkeyp
         assert app.exit_summary_text is not None
         assert "session cost" in app.exit_summary_text
         assert "unavailable (end timeout)" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_marks_third_party_cost_unsupported(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(
+        settings=Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+            )
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "unsupported" in app.exit_summary_text
 
 
 def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, capsys) -> None:
@@ -583,11 +643,72 @@ async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> No
 
         saved = load_settings(config_path)
         assert saved.model.api_key == "sk-test"
+        assert saved.model.provider == "deepseek"
         assert saved.model.name == "deepseek-v4-flash"
         assert saved.model.base_url == "https://example.test"
+        assert saved.model.reasoning_mode == "max"
         assert saved.ui.theme == "light"
         assert app.settings.ui.theme == "light"
         assert any("Wrote" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_form_writes_third_party_provider_settings(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, ResetConfigScreen)
+        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-provider").value = "xiaomi"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-model").value = "mimo-v2.5"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-base-url").value = "https://api.xiaomimimo.com/v1"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-thinking").value = "disabled"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-theme").value = "light"  # type: ignore[attr-defined]
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.2)
+
+        saved = load_settings(config_path)
+        assert saved.model.provider == "xiaomi"
+        assert saved.model.name == "mimo-v2.5"
+        assert saved.model.reasoning_mode == "disabled"
+        assert saved.model.reasoning_effort == "none"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_form_accepts_openrouter_custom_model_and_effort(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, ResetConfigScreen)
+        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-provider").value = "openrouter"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-model").value = "anthropic/claude-sonnet-4.5"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-thinking").value = "minimal"  # type: ignore[attr-defined]
+        app.screen.query_one("#reset-theme").value = "light"  # type: ignore[attr-defined]
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.2)
+
+        saved = load_settings(config_path)
+        assert saved.model.provider == "openrouter"
+        assert saved.model.name == "anthropic/claude-sonnet-4.5"
+        assert saved.model.reasoning_mode == "minimal"
+        assert saved.model.reasoning_effort == "minimal"
         app.exit()
 
 
@@ -1091,7 +1212,7 @@ async def test_tui_initial_setup_guides_missing_config(tmp_path) -> None:
         await pilot.pause(0.2)
 
         assert isinstance(app.screen, ResetConfigScreen)
-        assert any("Deepy needs a DeepSeek API key" in block.body for block in app.query(InfoBlock))
+        assert any("Deepy needs a provider API key" in block.body for block in app.query(InfoBlock))
         app.exit()
 
 
@@ -1596,6 +1717,38 @@ async def test_tui_status_command_opens_status_screen(tmp_path, monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_tui_status_command_does_not_fetch_balance_for_third_party_provider(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(
+        settings=Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+            )
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/status"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, InfoScreen)
+        assert "Balance:" in app.screen.markdown
+        assert "unsupported provider" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
 async def test_tui_non_status_surfaces_do_not_fetch_balance(tmp_path, monkeypatch) -> None:
     def fail_fetch(settings):
         raise AssertionError("balance lookup should not run")
@@ -1630,11 +1783,80 @@ async def test_tui_theme_and_model_direct_commands_persist_settings(tmp_path) ->
         prompt.text = "/model set deepseek-v4-flash high"
         await pilot.press("enter")
         await pilot.pause(0.2)
+        prompt.text = "/model set openrouter xiaomi/mimo-v2.5 high"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
 
         saved = load_settings(config_path)
         assert saved.ui.theme == "light"
-        assert saved.model.name == "deepseek-v4-flash"
+        assert saved.model.provider == "openrouter"
+        assert saved.model.name == "xiaomi/mimo-v2.5"
         assert saved.model.reasoning_mode == "high"
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider switched to openrouter" in rendered_info
+        assert "Reconfigure the API key" in rendered_info
+        assert "https://openrouter.ai/workspaces/default/keys" in rendered_info
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_model_picker_refocuses_prompt_after_save(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/model"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, ChoiceScreen)
+            and app.screen.title_text == "Select provider",
+        )
+
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, ChoiceScreen)
+            and app.screen.title_text == "Select model",
+        )
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, ChoiceScreen)
+            and app.screen.title_text == "Select thinking",
+        )
+        await pilot.press("enter")
+
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        saved = load_settings(config_path)
+        assert saved.model.provider == "deepseek"
+        assert saved.model.name == "deepseek-v4-pro"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_model_picker_refocuses_prompt_after_cancel(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/model"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, ChoiceScreen)
+            and app.screen.title_text == "Select provider",
+        )
+
+        await pilot.press("escape")
+
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
         app.exit()
 
 
