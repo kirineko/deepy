@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from deepy.utils import json as json_utils
@@ -15,9 +16,16 @@ if TYPE_CHECKING:
 def build_function_tools(
     runtime: ToolRuntime,
     *,
+    mimo_schema_compatibility: bool = False,
     preferred_mcp_web_search_tools: list[str] | None = None,
 ) -> list[Tool]:
     from agents.tool import FunctionTool
+
+    def make_function_tool(**kwargs: Any) -> FunctionTool:
+        tool = FunctionTool(**kwargs)
+        if mimo_schema_compatibility:
+            tool.params_json_schema = make_mimo_compatible_tool_schema(tool.params_json_schema)
+        return tool
 
     async def invoke_shell(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "shell")
@@ -131,7 +139,7 @@ def build_function_tools(
         )
 
     return [
-        FunctionTool(
+        make_function_tool(
             name="shell",
             description=(
                 "Execute commands in the current runtime shell. Match the runtime context's "
@@ -141,7 +149,7 @@ def build_function_tools(
             on_invoke_tool=invoke_shell,
             strict_json_schema=False,
         ),
-        FunctionTool(
+        make_function_tool(
             name="AskUserQuestion",
             description=(
                 "当用户意图、范围、偏好、实现路线、高影响取舍或必要批准会明显影响结果时，"
@@ -154,7 +162,7 @@ def build_function_tools(
             on_invoke_tool=invoke_ask_user_question,
             strict_json_schema=False,
         ),
-        FunctionTool(
+        make_function_tool(
             name="Search",
             description=(
                 "Search local project files without shell grep or rg. Prefer this for repository "
@@ -165,7 +173,7 @@ def build_function_tools(
             on_invoke_tool=invoke_search,
             strict_json_schema=True,
         ),
-        FunctionTool(
+        make_function_tool(
             name="read_file",
             description=(
                 "Read a file or directory and record managed text snapshots for later edits. "
@@ -175,7 +183,7 @@ def build_function_tools(
             on_invoke_tool=invoke_read_file,
             strict_json_schema=True,
         ),
-        FunctionTool(
+        make_function_tool(
             name="edit_text",
             description=(
                 "Preferred tool for small single-file exact/string edits. Use file_path "
@@ -186,7 +194,7 @@ def build_function_tools(
             on_invoke_tool=invoke_edit_text,
             strict_json_schema=True,
         ),
-        FunctionTool(
+        make_function_tool(
             name="write_file",
             description=(
                 "Create a new text file or explicitly replace a whole file. Existing-file "
@@ -196,7 +204,7 @@ def build_function_tools(
             on_invoke_tool=invoke_write_file,
             strict_json_schema=True,
         ),
-        FunctionTool(
+        make_function_tool(
             name="apply_patch",
             description=(
                 "Batch structured file operations. Best for multiple edits in one file, "
@@ -208,21 +216,21 @@ def build_function_tools(
             on_invoke_tool=invoke_apply_patch,
             strict_json_schema=True,
         ),
-        FunctionTool(
+        make_function_tool(
             name="WebSearch",
             description=web_search_description,
             params_json_schema=WEB_SEARCH_SCHEMA,
             on_invoke_tool=invoke_web_search,
             strict_json_schema=False,
         ),
-        FunctionTool(
+        make_function_tool(
             name="WebFetch",
             description="Fetch and extract readable content from a complete http or https URL.",
             params_json_schema=WEB_FETCH_SCHEMA,
             on_invoke_tool=invoke_web_fetch,
             strict_json_schema=False,
         ),
-        FunctionTool(
+        make_function_tool(
             name="load_skill",
             description=(
                 "Load the complete instructions for an available Agent Skill by name. Use this "
@@ -233,7 +241,7 @@ def build_function_tools(
             on_invoke_tool=invoke_load_skill,
             strict_json_schema=False,
         ),
-        FunctionTool(
+        make_function_tool(
             name="todo_write",
             description=(
                 "Create, replace, read, or clear the session todo list for complex multi-step "
@@ -245,6 +253,50 @@ def build_function_tools(
             strict_json_schema=False,
         ),
     ]
+
+
+def make_mimo_compatible_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    compatible = deepcopy(schema)
+    _remove_nullable_required_fields(compatible)
+    return compatible
+
+
+def _remove_nullable_required_fields(value: Any) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _remove_nullable_required_fields(item)
+        return
+    if not isinstance(value, dict):
+        return
+
+    properties = value.get("properties")
+    required = value.get("required")
+    if isinstance(properties, dict) and isinstance(required, list):
+        value["required"] = [
+            field
+            for field in required
+            if not (
+                isinstance(field, str)
+                and isinstance(properties.get(field), dict)
+                and _schema_type_allows_null(properties[field])
+            )
+        ]
+
+    if _schema_type_allows_null(value):
+        schema_type = value["type"]
+        non_null_types = [item for item in schema_type if item != "null"]
+        if len(non_null_types) == 1:
+            value["type"] = non_null_types[0]
+        elif non_null_types:
+            value["type"] = non_null_types
+
+    for item in value.values():
+        _remove_nullable_required_fields(item)
+
+
+def _schema_type_allows_null(schema: dict[str, Any]) -> bool:
+    schema_type = schema.get("type")
+    return isinstance(schema_type, list) and "null" in schema_type
 
 
 def _tool_args(raw_input: str, tool_name: str) -> tuple[dict[str, Any], str | None]:

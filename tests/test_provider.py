@@ -8,6 +8,7 @@ from deepy.config.settings import ModelConfig, Settings
 from deepy.llm.provider import (
     DeepyOpenAIChatCompletionsModel,
     build_provider_bundle,
+    should_replay_chat_completion_reasoning_content,
     should_replay_deepseek_reasoning_content,
 )
 from deepy.llm.thinking import build_model_settings
@@ -20,9 +21,10 @@ class Reasoning:
 
 
 class ReplayContext:
-    def __init__(self, model, reasoning):
+    def __init__(self, model, reasoning, base_url=None):
         self.model = model
         self.reasoning = reasoning
+        self.base_url = base_url
 
 
 def test_deepseek_reasoning_replay_only_for_deepseek_sources():
@@ -40,13 +42,115 @@ def test_deepseek_reasoning_replay_only_for_deepseek_sources():
     )
 
 
+def test_xiaomi_reasoning_replay_only_for_direct_xiaomi_mimo_sources():
+    assert should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "mimo-v2.5",
+            Reasoning(origin_model="mimo-v2.5"),
+            base_url="https://api.xiaomimimo.com/v1",
+        )
+    )
+    assert should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "mimo-v2.5-pro",
+            Reasoning(provider_data={}),
+            base_url="https://api.xiaomimimo.com/v1/",
+        )
+    )
+    assert not should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "xiaomi/mimo-v2.5",
+            Reasoning(origin_model="mimo-v2.5"),
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+    assert not should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "google/gemini-3.5-flash",
+            Reasoning(origin_model="mimo-v2.5"),
+            base_url="https://api.xiaomimimo.com/v1",
+        )
+    )
+
+
+def test_xiaomi_reasoning_content_is_replayed_for_tool_followup():
+    from agents.models.openai_chatcompletions import Converter
+
+    reasoning_item = {
+        "id": "__reasoning__",
+        "type": "reasoning",
+        "summary": [{"text": "I should read the file.", "type": "summary_text"}],
+        "provider_data": {"model": "mimo-v2.5"},
+    }
+    tool_call = {
+        "arguments": '{"file_path":"AGENTS.md"}',
+        "call_id": "call-read",
+        "name": "read_file",
+        "type": "function_call",
+    }
+
+    messages = Converter.items_to_messages(
+        [reasoning_item, tool_call],
+        model="mimo-v2.5",
+        base_url="https://api.xiaomimimo.com/v1",
+        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
+    )
+
+    assert messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-read",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"file_path":"AGENTS.md"}',
+                    },
+                }
+            ],
+            "reasoning_content": "I should read the file.",
+        }
+    ]
+
+
+def test_openrouter_mimo_reasoning_content_is_not_replayed():
+    from agents.models.openai_chatcompletions import Converter
+
+    messages = Converter.items_to_messages(
+        [
+            {
+                "id": "__reasoning__",
+                "type": "reasoning",
+                "summary": [{"text": "I should read the file.", "type": "summary_text"}],
+                "provider_data": {"model": "mimo-v2.5"},
+            },
+            {
+                "arguments": '{"file_path":"AGENTS.md"}',
+                "call_id": "call-read",
+                "name": "read_file",
+                "type": "function_call",
+            },
+        ],
+        model="xiaomi/mimo-v2.5",
+        base_url="https://openrouter.ai/api/v1",
+        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
+    )
+
+    assert "reasoning_content" not in messages[0]
+
+
 def test_provider_bundle_passes_explicit_reasoning_replay_hook():
     settings = Settings(model=ModelConfig(api_key="sk-test"))
 
     bundle = build_provider_bundle(settings)
 
     assert isinstance(bundle.model, DeepyOpenAIChatCompletionsModel)
-    assert bundle.model.should_replay_reasoning_content is should_replay_deepseek_reasoning_content
+    assert (
+        bundle.model.should_replay_reasoning_content
+        is should_replay_chat_completion_reasoning_content
+    )
 
 
 def test_provider_bundle_uses_selected_model_name():

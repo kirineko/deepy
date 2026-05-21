@@ -49,18 +49,34 @@ class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
         )
 
 
-def should_replay_deepseek_reasoning_content(context: object) -> bool:
+def should_replay_chat_completion_reasoning_content(context: object) -> bool:
     model = str(getattr(context, "model", "")).lower()
-    if "deepseek" not in model:
-        return False
+    base_url = str(getattr(context, "base_url", "") or "").rstrip("/").lower()
+    if "deepseek" in model:
+        return _reasoning_origin_matches(context, "deepseek")
+    if _is_direct_xiaomi_mimo(model, base_url):
+        return _reasoning_origin_matches(context, "mimo")
+    return False
 
+
+def should_replay_deepseek_reasoning_content(context: object) -> bool:
+    return should_replay_chat_completion_reasoning_content(context)
+
+
+def _reasoning_origin_matches(context: object, model_fragment: str) -> bool:
     reasoning = getattr(context, "reasoning", None)
     origin_model = getattr(reasoning, "origin_model", None)
     provider_data = getattr(reasoning, "provider_data", {}) or {}
     return (
         isinstance(origin_model, str)
-        and "deepseek" in origin_model.lower()
+        and model_fragment in origin_model.lower()
     ) or provider_data == {}
+
+
+def _is_direct_xiaomi_mimo(model: str, base_url: str) -> bool:
+    if "xiaomimimo.com" not in base_url:
+        return False
+    return model in {"mimo-v2.5", "mimo-v2.5-pro"}
 
 
 def build_provider_bundle(settings: Settings) -> ProviderBundle:
@@ -77,6 +93,6 @@ def build_provider_bundle(settings: Settings) -> ProviderBundle:
     model = DeepyOpenAIChatCompletionsModel(
         model=settings.model.name,
         openai_client=client,
-        should_replay_reasoning_content=should_replay_deepseek_reasoning_content,
+        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
     )
     return ProviderBundle(client=client, model=model, model_settings=build_model_settings(settings))

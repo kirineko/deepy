@@ -17,7 +17,7 @@ from deepy.config.settings import (
     WebSearchToolConfig,
 )
 from deepy.tools import ToolResult, ToolRuntime
-from deepy.tools.agents import build_function_tools
+from deepy.tools.agents import build_function_tools, make_mimo_compatible_tool_schema
 from deepy.tools.builtin import (
     DEFAULT_LINE_LIMIT,
     MAX_BASH_OUTPUT_CHARS,
@@ -2409,6 +2409,63 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
     assert list(tools["WebSearch"].params_json_schema["properties"]) == ["query"]
     assert tools["WebFetch"].params_json_schema["required"] == ["url"]
     assert list(tools["WebFetch"].params_json_schema["properties"]) == ["url"]
+
+
+def test_mimo_compatible_schema_removes_nullable_required_fields_recursively():
+    schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "offset": {"type": ["number", "null"]},
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "expected": {"type": ["integer", "null"]},
+                },
+                "required": ["name", "expected"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["file_path", "offset", "nested"],
+        "additionalProperties": False,
+    }
+
+    compatible = make_mimo_compatible_tool_schema(schema)
+
+    assert schema["required"] == ["file_path", "offset", "nested"]
+    assert compatible["required"] == ["file_path", "nested"]
+    assert compatible["properties"]["offset"]["type"] == "number"
+    nested = compatible["properties"]["nested"]
+    assert nested["required"] == ["name"]
+    assert nested["properties"]["expected"]["type"] == "integer"
+    assert nested["additionalProperties"] is False
+
+
+def test_mimo_compatible_function_tools_keep_optional_nullable_defaults(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tools = {
+        tool.name: tool for tool in build_function_tools(runtime, mimo_schema_compatibility=True)
+    }
+
+    read_schema = tools["read_file"].params_json_schema
+    assert read_schema["required"] == ["file_path"]
+    assert read_schema["properties"]["offset"]["type"] == "number"
+
+    payload = decode(
+        asyncio.run(
+            tools["read_file"].on_invoke_tool(
+                None,
+                '{"file_path":"a.txt"}',
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert "1: one" in payload["output"]
+    assert "2: two" in payload["output"]
 
 
 def test_web_search_tool_description_mentions_mcp_fallback_when_preferred(tmp_path):

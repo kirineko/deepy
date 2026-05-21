@@ -40,8 +40,22 @@ def build_deepy_agent(
         model_settings=provider.model_settings,
         tools=build_function_tools(
             runtime,
+            mimo_schema_compatibility=uses_mimo_tool_schema_compatibility(
+                settings.model.provider,
+                settings.model.name,
+            ),
             preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
         ),
         mcp_servers=list(mcp_servers or []),
         mcp_config={"include_server_in_tool_names": True},
     )
+
+
+def uses_mimo_tool_schema_compatibility(provider: str, model: str) -> bool:
+    normalized_provider = provider.strip().lower()
+    normalized_model = model.strip().lower()
+    if normalized_provider == "xiaomi":
+        return normalized_model in {"mimo-v2.5", "mimo-v2.5-pro"}
+    if normalized_provider == "openrouter":
+        return normalized_model in {"xiaomi/mimo-v2.5", "xiaomi/mimo-v2.5-pro"}
+    return False
