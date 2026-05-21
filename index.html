@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.13 是为 DeepSeek 设计的终端编程 Agent，新增内置 Search 工具，以轻量依赖提供快速代码搜索、gitignore 过滤和 Windows 文本编码支持。"
+      content="Deepy 0.2.15 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，改进第三方 provider 的 reasoning 回传和 MiMo 工具调用兼容。"
     >
-    <title>Deepy 0.2.13 - DeepSeek 终端编程 Agent</title>
+    <title>Deepy 0.2.15 - 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -34,11 +34,11 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.13</p>
+          <p class="release-kicker">Deepy 0.2.15</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            为 DeepSeek 设计的终端编程 Agent。0.2.13 新增内置 Search 工具，
-            让模型无需依赖外部 rg 也能快速定位代码、过滤路径并处理常见 Windows 文本编码。
+            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.15 改进
+            OpenRouter reasoning 回传和 MiMo 工具 schema 兼容，让第三方 provider 的工具调用更稳定。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
@@ -46,10 +46,10 @@
             <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.13 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.15 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.13</dd>
+            <dd>0.2.15</dd>
           </div>
           <div>
             <dt>TUI</dt>
@@ -68,23 +68,23 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.13 的重点</h2>
+          <h2 id="capabilities-title">0.2.15 的重点</h2>
           <p>
-            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时新增内置 Search，
-            让本地代码检索不依赖外部 ripgrep，也能保持快速、可控和跨平台。
+            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时增强
+            OpenRouter 和小米 MiMo provider 的 reasoning 与工具调用兼容。
           </p>
         </div>
         <div class="capability-grid">
           <article>
-            <h3>内置 `Search` 工具</h3>
+            <h3>第三方 provider 兼容</h3>
             <p>
-              模型可以直接搜索本地项目代码和文本，默认 literal 匹配，需要时再显式启用 regex。
+              支持 OpenRouter 和小米 MiMo 模型选择，OpenRouter reasoning 可通过现有 replay 路径延续。
             </p>
           </article>
           <article>
-            <h3>路径过滤和分页</h3>
+            <h3>MiMo 工具调用</h3>
             <p>
-              支持 project-relative path、glob、gitignore/pathspec、files/content/count 输出和 limit/offset 分页。
+              针对 MiMo 调整 model-visible tool schema，保持标准 OpenAI `tool_calls` 路径和运行时默认值。
             </p>
           </article>
           <article>
@@ -118,7 +118,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.13 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
+            TUI 仍是 opt-in 实验入口，但 0.2.15 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -192,7 +192,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.13 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.15 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -377,7 +377,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.13</span>
+      <span>Deepy 0.2.15</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

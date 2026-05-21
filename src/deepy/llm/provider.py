@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from agents import Model, ModelSettings
 from agents import OpenAIChatCompletionsModel
@@ -41,12 +42,38 @@ class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        return await super()._fetch_response(
+        response = await super()._fetch_response(
             system_instructions,
             sanitize_model_input_for_chat_completions(input),
             *args,
             **kwargs,
         )
+        preserve_openrouter_reasoning_content_alias(
+            response,
+            str(getattr(self._get_client(), "base_url", "") or ""),
+        )
+        return response
+
+
+def preserve_openrouter_reasoning_content_alias(response: Any, base_url: str) -> None:
+    if not _is_openrouter_base_url(base_url):
+        return
+
+    choices = getattr(response, "choices", None)
+    if not isinstance(choices, list):
+        return
+
+    for choice in choices:
+        message = getattr(choice, "message", None)
+        if message is None or not getattr(message, "tool_calls", None):
+            continue
+        reasoning = getattr(message, "reasoning", None)
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            continue
+        existing = getattr(message, "reasoning_content", None)
+        if isinstance(existing, str) and existing:
+            continue
+        setattr(message, "reasoning_content", reasoning)
 
 
 def should_replay_chat_completion_reasoning_content(context: object) -> bool:
@@ -56,6 +83,8 @@ def should_replay_chat_completion_reasoning_content(context: object) -> bool:
         return _reasoning_origin_matches(context, "deepseek")
     if _is_direct_xiaomi_mimo(model, base_url):
         return _reasoning_origin_matches(context, "mimo")
+    if _is_openrouter_base_url(base_url):
+        return _reasoning_origin_matches_model(context, model)
     return False
 
 
@@ -73,10 +102,26 @@ def _reasoning_origin_matches(context: object, model_fragment: str) -> bool:
     ) or provider_data == {}
 
 
+def _reasoning_origin_matches_model(context: object, model: str) -> bool:
+    reasoning = getattr(context, "reasoning", None)
+    origin_model = getattr(reasoning, "origin_model", None)
+    provider_data = getattr(reasoning, "provider_data", {}) or {}
+    return (
+        isinstance(origin_model, str)
+        and origin_model.strip().lower() == model
+    ) or provider_data == {}
+
+
 def _is_direct_xiaomi_mimo(model: str, base_url: str) -> bool:
     if "xiaomimimo.com" not in base_url:
         return False
     return model in {"mimo-v2.5", "mimo-v2.5-pro"}
+
+
+def _is_openrouter_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or base_url).rstrip("/").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
 
 
 def build_provider_bundle(settings: Settings) -> ProviderBundle:

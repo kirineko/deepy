@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from deepy.config.settings import ModelConfig, Settings
 from deepy.llm.provider import (
     DeepyOpenAIChatCompletionsModel,
     build_provider_bundle,
+    preserve_openrouter_reasoning_content_alias,
     should_replay_chat_completion_reasoning_content,
     should_replay_deepseek_reasoning_content,
 )
@@ -59,16 +61,40 @@ def test_xiaomi_reasoning_replay_only_for_direct_xiaomi_mimo_sources():
     )
     assert not should_replay_chat_completion_reasoning_content(
         ReplayContext(
-            "xiaomi/mimo-v2.5",
+            "google/gemini-3.5-flash",
             Reasoning(origin_model="mimo-v2.5"),
+            base_url="https://api.xiaomimimo.com/v1",
+        )
+    )
+
+
+def test_openrouter_reasoning_replay_matches_openrouter_model_sources():
+    assert should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "xiaomi/mimo-v2.5",
+            Reasoning(origin_model="xiaomi/mimo-v2.5"),
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+    assert should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "google/gemini-3.5-flash",
+            Reasoning(provider_data={}),
+            base_url="https://openrouter.ai/api/v1/",
+        )
+    )
+    assert not should_replay_chat_completion_reasoning_content(
+        ReplayContext(
+            "xiaomi/mimo-v2.5",
+            Reasoning(origin_model="other/model", provider_data={"model": "other/model"}),
             base_url="https://openrouter.ai/api/v1",
         )
     )
     assert not should_replay_chat_completion_reasoning_content(
         ReplayContext(
-            "google/gemini-3.5-flash",
-            Reasoning(origin_model="mimo-v2.5"),
-            base_url="https://api.xiaomimimo.com/v1",
+            "xiaomi/mimo-v2.5",
+            Reasoning(origin_model="xiaomi/mimo-v2.5"),
+            base_url="https://example.com/v1",
         )
     )
 
@@ -115,7 +141,87 @@ def test_xiaomi_reasoning_content_is_replayed_for_tool_followup():
     ]
 
 
-def test_openrouter_mimo_reasoning_content_is_not_replayed():
+def test_openrouter_reasoning_aliases_before_sdk_conversion():
+    from agents.models.openai_chatcompletions import Converter
+
+    reasoning_details = [{"type": "reasoning.text", "text": "hidden"}]
+    message = _chat_completion_message(
+        reasoning="I should read the file.",
+        reasoning_details=reasoning_details,
+    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    preserve_openrouter_reasoning_content_alias(
+        response,
+        "https://openrouter.ai/api/v1",
+    )
+
+    assert message.reasoning_content == "I should read the file."
+    assert message.reasoning_details is reasoning_details
+
+    items = _output_item_dicts(
+        Converter.message_to_output_items(
+            message,
+            provider_data={"model": "xiaomi/mimo-v2.5"},
+        )
+    )
+    messages = Converter.items_to_messages(
+        items,
+        model="xiaomi/mimo-v2.5",
+        base_url="https://openrouter.ai/api/v1",
+        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
+    )
+
+    assert messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-read",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"file_path":"AGENTS.md"}',
+                    },
+                }
+            ],
+            "reasoning_content": "I should read the file.",
+        }
+    ]
+
+
+def test_openrouter_reasoning_alias_preserves_existing_content_and_details():
+    reasoning_details = [{"type": "reasoning.text", "text": "hidden"}]
+    message = _chat_completion_message(
+        reasoning="new reasoning",
+        reasoning_content="existing reasoning",
+        reasoning_details=reasoning_details,
+    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    preserve_openrouter_reasoning_content_alias(
+        response,
+        "https://openrouter.ai/api/v1",
+    )
+
+    assert message.reasoning_content == "existing reasoning"
+    assert message.reasoning_details is reasoning_details
+
+
+def test_non_openrouter_reasoning_is_not_aliased():
+    message = _chat_completion_message(reasoning="I should read the file.")
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    preserve_openrouter_reasoning_content_alias(
+        response,
+        "https://api.example.com/v1",
+    )
+
+    assert getattr(message, "reasoning_content", None) is None
+
+
+def test_openrouter_mimo_reasoning_content_is_replayed():
     from agents.models.openai_chatcompletions import Converter
 
     messages = Converter.items_to_messages(
@@ -124,7 +230,7 @@ def test_openrouter_mimo_reasoning_content_is_not_replayed():
                 "id": "__reasoning__",
                 "type": "reasoning",
                 "summary": [{"text": "I should read the file.", "type": "summary_text"}],
-                "provider_data": {"model": "mimo-v2.5"},
+                "provider_data": {"model": "xiaomi/mimo-v2.5"},
             },
             {
                 "arguments": '{"file_path":"AGENTS.md"}',
@@ -138,7 +244,42 @@ def test_openrouter_mimo_reasoning_content_is_not_replayed():
         should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
     )
 
-    assert "reasoning_content" not in messages[0]
+    assert messages[0]["reasoning_content"] == "I should read the file."
+
+
+def _chat_completion_message(
+    *,
+    reasoning: str | None = None,
+    reasoning_content: str | None = None,
+    reasoning_details: object | None = None,
+) -> SimpleNamespace:
+    message = SimpleNamespace(
+        content=None,
+        refusal=None,
+        audio=None,
+        reasoning=reasoning,
+        reasoning_details=reasoning_details,
+        tool_calls=[
+            SimpleNamespace(
+                id="call-read",
+                type="function",
+                function=SimpleNamespace(
+                    name="read_file",
+                    arguments='{"file_path":"AGENTS.md"}',
+                ),
+            )
+        ],
+    )
+    if reasoning_content is not None:
+        message.reasoning_content = reasoning_content
+    return message
+
+
+def _output_item_dicts(items):
+    return [
+        item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else item
+        for item in items
+    ]
 
 
 def test_provider_bundle_passes_explicit_reasoning_replay_hook():
