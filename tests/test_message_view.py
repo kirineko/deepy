@@ -25,6 +25,7 @@ from deepy.ui.message_view import render_tool_diff_preview
 from deepy.ui.message_view import render_tool_output
 from deepy.ui.message_view import tool_diff_preview
 from deepy.ui.message_view import tool_diff_preview_lines
+from deepy.ui.message_view import tool_status_style
 from deepy.ui.styles import DARK_PALETTE
 from deepy.ui.styles import LIGHT_PALETTE
 
@@ -115,6 +116,32 @@ def test_format_tool_output_summary_uses_error_detail():
     )
 
     assert format_tool_output_summary(output) == "[Shell] failed - Command exited with code 1."
+
+
+def test_retryable_invalid_arguments_use_retryable_status_and_warning_style():
+    output = json.dumps(
+        {
+            "ok": False,
+            "name": "write_file",
+            "output": "",
+            "error": "Invalid tool arguments JSON",
+            "metadata": {
+                "error_code": "invalid_arguments",
+                "retryable": True,
+                "recovery": "Pass valid JSON.",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    view = parse_tool_output(output)
+
+    assert view.status == "retryable"
+    assert view.summary == "[Write] retryable - Pass valid JSON."
+    assert format_tool_progress_summary("[Write] app/page.tsx", output) == (
+        "[Write] app/page.tsx  retryable - Pass valid JSON."
+    )
+    assert tool_status_style(view, DARK_PALETTE) == DARK_PALETTE.warning
 
 
 def test_parse_tool_output_preserves_pending_question_state():
@@ -987,6 +1014,29 @@ def test_format_tool_call_summary_formats_write_file_create_without_content_body
     assert "println" not in summary
 
 
+def test_format_tool_call_summary_summarizes_malformed_write_without_content_body():
+    summary = format_tool_call_summary(
+        "write_file",
+        '{"file_path":"/repo/src/lib.rs","content":fn main() { println!("secret"); },'
+        '"overwrite":true,"snapshot_id":snapshot_4}',
+        project_root="/repo",
+    )
+
+    assert summary == "[Write] src/lib.rs (malformed args)"
+    assert "secret" not in summary
+
+
+def test_format_tool_call_summary_summarizes_malformed_edit_without_replacement_body():
+    summary = format_tool_call_summary(
+        "edit_text",
+        '{"file_path":"/repo/src/lib.rs","old_string":VERY_SECRET,"new_string":"new"}',
+        project_root="/repo",
+    )
+
+    assert summary == "[Edit] src/lib.rs (malformed args)"
+    assert "VERY_SECRET" not in summary
+
+
 def test_format_tool_call_summary_formats_structured_patch_without_content_body():
     summary = format_tool_call_summary(
         "apply_patch",
@@ -1009,6 +1059,18 @@ def test_format_tool_call_summary_formats_structured_patch_without_content_body(
     assert summary == "[Patch] 1 op, 1 file: src/lib.rs"
     assert "old" not in summary
     assert "new" not in summary
+
+
+def test_format_tool_call_summary_summarizes_malformed_patch_without_body_text():
+    summary = format_tool_call_summary(
+        "apply_patch",
+        '{"operations":[{"type":"replace_block","file_path":"/repo/src/lib.rs",'
+        '"old_text":OLD_SECRET,"new_text":"new"}]}',
+        project_root="/repo",
+    )
+
+    assert summary == "[Patch] 1 malformed ops, 1 file: src/lib.rs"
+    assert "OLD_SECRET" not in summary
 
 
 def test_build_tool_params_snippet_formats_multi_file_structured_patch_concisely():

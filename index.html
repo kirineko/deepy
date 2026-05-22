@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.15 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，改进第三方 provider 的 reasoning 回传和 MiMo 工具调用兼容。"
+      content="Deepy 0.2.17 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，新增后台任务管理并优化文件编辑工具的恢复体验。"
     >
-    <title>Deepy 0.2.15 - 终端编程 Agent</title>
+    <title>Deepy 0.2.17 - 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -34,11 +34,11 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.15</p>
+          <p class="release-kicker">Deepy 0.2.17</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.15 改进
-            OpenRouter reasoning 回传和 MiMo 工具 schema 兼容，让第三方 provider 的工具调用更稳定。
+            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.17 新增
+            后台任务管理，并让文件编辑工具在参数可恢复失败时更安静、更稳定。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#install">安装 Deepy</a>
@@ -46,18 +46,18 @@
             <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.15 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.17 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.15</dd>
+            <dd>0.2.17</dd>
           </div>
           <div>
             <dt>TUI</dt>
-            <dd>Scrollable Textual transcript and prompt surface</dd>
+            <dd>Background tasks and recoverable file-tool display</dd>
           </div>
           <div>
             <dt>Status</dt>
-            <dd>Usage, context window, and DeepSeek balance</dd>
+            <dd>Usage, context window, background tasks, and DeepSeek balance</dd>
           </div>
           <div>
             <dt>Exit</dt>
@@ -68,23 +68,24 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.15 的重点</h2>
+          <h2 id="capabilities-title">0.2.17 的重点</h2>
           <p>
             Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时增强
-            OpenRouter 和小米 MiMo provider 的 reasoning 与工具调用兼容。
+            长任务运行、工具输出管理和文件编辑恢复体验。
           </p>
         </div>
         <div class="capability-grid">
           <article>
-            <h3>第三方 provider 兼容</h3>
+            <h3>后台任务管理</h3>
             <p>
-              支持 OpenRouter 和小米 MiMo 模型选择，OpenRouter reasoning 可通过现有 replay 路径延续。
+              `shell` 可启动长时间运行的后台任务，`task_list`、`task_output` 和 `task_stop`
+              用于查看、等待输出和请求停止。
             </p>
           </article>
           <article>
-            <h3>MiMo 工具调用</h3>
+            <h3>文件工具恢复体验</h3>
             <p>
-              针对 MiMo 调整 model-visible tool schema，保持标准 OpenAI `tool_calls` 路径和运行时默认值。
+              文件编辑工具会保守修复高置信 malformed 参数，并在 UI 中将可重试参数错误和真正失败区分开。
             </p>
           </article>
           <article>
@@ -118,7 +119,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.15 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
+            TUI 仍是 opt-in 实验入口，但 0.2.17 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -192,7 +193,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.15 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.17 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -377,7 +378,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.15</span>
+      <span>Deepy 0.2.17</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

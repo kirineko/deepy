@@ -102,6 +102,7 @@ from deepy.ui.message_view import (
     render_shell_output_block,
     render_todo_board,
     render_tool_diff_preview,
+    tool_status_style,
 )
 from deepy.ui.markdown import render_markdown
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
@@ -3186,7 +3187,7 @@ def _print_stream_event(
         call = pending_tool_calls.pop(call_id, None) if pending_tool_calls is not None else None
         call_summary = call.summary if call is not None else ""
         summary = format_tool_progress_summary(call_summary, event.text)
-        console.print(_status_line(summary, status_style(view.ok, palette)))
+        console.print(_status_line(summary, tool_status_style(view, palette)))
         if _should_print_tool_output_debug(view):
             console.print(Text("Tool output JSON:", style=palette.muted))
             console.print(Text(_format_tool_output_debug(event.text), style=palette.muted))

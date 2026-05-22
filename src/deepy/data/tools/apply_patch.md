@@ -16,7 +16,8 @@ Supported operation types:
 
 - `create_file`: create a new text file with `file_path` and `content`.
 - `replace_file`: explicitly replace a whole existing file with `file_path`,
-  `content`, `overwrite=true`, and either `snapshot_id` or `expected_hash`.
+  `content`, `overwrite=true`, and either `snapshot_token`, `snapshot_id`, or
+  `expected_hash`.
 - `delete_file`: delete `file_path`.
 - `move_file`: move `file_path` to `destination_path`.
 - `replace_block`: replace exact `old_text` with `new_text`.
@@ -41,6 +42,7 @@ Example:
       "replace_all": null,
       "overwrite": null,
       "snapshot_id": null,
+      "snapshot_token": null,
       "expected_hash": null
     },
     {
@@ -55,6 +57,7 @@ Example:
       "replace_all": null,
       "overwrite": null,
       "snapshot_id": null,
+      "snapshot_token": null,
       "expected_hash": null
     }
   ]

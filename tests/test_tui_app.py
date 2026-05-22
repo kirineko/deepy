@@ -1343,6 +1343,201 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path) -> None:
+    retryable_output = json.dumps(
+        {
+            "ok": False,
+            "name": "write_file",
+            "output": "",
+            "error": "Invalid tool arguments JSON",
+            "metadata": {
+                "error_code": "invalid_arguments",
+                "retryable": True,
+                "recovery": "Pass valid JSON.",
+                "parse_error": "unexpected character",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    success_output = json.dumps(
+        {
+            "ok": True,
+            "name": "write_file",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {"path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="write_file",
+                payload={
+                    "call_id": "bad-1",
+                    "arguments": (
+                        '{"file_path":"src/app.py","content":SECRET,'
+                        '"overwrite":true,"snapshot_id":snapshot_1}'
+                    ),
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=retryable_output, payload={"call_id": "bad-1"})
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="write_file",
+                payload={
+                    "call_id": "good-1",
+                    "arguments": '{"file_path":"src/app.py","content":"new\\n"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=success_output, payload={"call_id": "good-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        tool_blocks = list(app.query(ToolBlock))
+        assert len(tool_blocks) == 1
+        block = tool_blocks[0]
+        assert block.title == "Write ok - src/app.py"
+        assert "Recovered after argument retry." in block.body
+        assert "SECRET" not in block.body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
+    blocking_output = json.dumps(
+        {
+            "ok": False,
+            "name": "write_file",
+            "output": "",
+            "error": "Existing file replacement requires a snapshot_id.",
+            "metadata": {"error_code": "stale_snapshot", "path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+    success_output = json.dumps(
+        {
+            "ok": True,
+            "name": "write_file",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {"path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="write_file",
+                payload={"call_id": "bad-1", "arguments": '{"file_path":"src/app.py"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=blocking_output, payload={"call_id": "bad-1"})
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="write_file",
+                payload={"call_id": "good-1", "arguments": '{"file_path":"src/app.py"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=success_output, payload={"call_id": "good-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        tool_blocks = list(app.query(ToolBlock))
+        assert len(tool_blocks) == 2
+        assert tool_blocks[0].title == "Write failed - src/app.py"
+        assert tool_blocks[1].title == "Write ok - src/app.py"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_retryable_tool_block_exposes_bounded_recovery_details(tmp_path) -> None:
+    retryable_output = json.dumps(
+        {
+            "ok": False,
+            "name": "write_file",
+            "output": "",
+            "error": "Invalid tool arguments JSON",
+            "metadata": {
+                "error_code": "invalid_arguments",
+                "retryable": True,
+                "recovery": "Pass valid JSON.",
+                "parse_error": "\n".join(f"parse line {index}" for index in range(20)),
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="write_file",
+                payload={
+                    "call_id": "bad-1",
+                    "arguments": '{"file_path":"src/app.py","content":SECRET}',
+                },
+            )
+        )
+        kwargs["emit_event"](
+            DeepyStreamEvent(kind="tool_output", text=retryable_output, payload={"call_id": "bad-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Write retryable"
+        assert "src/app.py (malformed args)" in block.body
+        assert "SECRET" not in block.body
+        assert "Pass valid JSON." in block.details
+        assert "parse line 6" in block.details
+        assert "parse line 8" not in block.details
+        app.exit()
+
+
+@pytest.mark.asyncio
 async def test_tui_ignores_final_message_after_text_delta_to_avoid_duplicate_output(
     tmp_path,
 ) -> None:

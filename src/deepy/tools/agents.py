@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import re
 from typing import TYPE_CHECKING, Any
 
 from deepy.utils import json as json_utils
@@ -28,54 +29,69 @@ def build_function_tools(
         return tool
 
     async def invoke_shell(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "shell")
+        args, error, repair_metadata = _tool_args(raw_input, "shell", SHELL_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.shell,
             _string_arg(args, "command"),
             timeout_ms=120_000,
             run_in_background=_bool_arg(args, "run_in_background", False),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_task_list(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "task_list")
+        args, error, repair_metadata = _tool_args(raw_input, "task_list", TASK_LIST_SCHEMA)
         if error is not None:
             return error
-        return runtime.task_list(
+        return _merge_tool_result_metadata(
+            runtime.task_list(
             active_only=_bool_arg(args, "active_only", False),
             limit=_int_arg(args, "limit", 20),
+            ),
+            repair_metadata,
         )
 
     async def invoke_task_output(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "task_output")
+        args, error, repair_metadata = _tool_args(raw_input, "task_output", TASK_OUTPUT_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.task_output,
             _string_arg(args, "task_id"),
             block=_bool_arg(args, "block", False),
             timeout=_int_arg(args, "timeout", 3),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_task_stop(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "task_stop")
+        args, error, repair_metadata = _tool_args(raw_input, "task_stop", TASK_STOP_SCHEMA)
         if error is not None:
             return error
-        return runtime.task_stop(_string_arg(args, "task_id"))
+        return _merge_tool_result_metadata(
+            runtime.task_stop(_string_arg(args, "task_id")),
+            repair_metadata,
+        )
 
     async def invoke_ask_user_question(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "AskUserQuestion")
+        args, error, repair_metadata = _tool_args(
+            raw_input,
+            "AskUserQuestion",
+            ASK_USER_QUESTION_SCHEMA,
+        )
         if error is not None:
             return error
         questions = args.get("questions")
-        return runtime.ask_user_question(questions if isinstance(questions, list) else [])
+        return _merge_tool_result_metadata(
+            runtime.ask_user_question(questions if isinstance(questions, list) else []),
+            repair_metadata,
+        )
 
     async def invoke_search(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "Search")
+        args, error, repair_metadata = _tool_args(raw_input, "Search", SEARCH_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.search,
             _string_arg(args, "query"),
             path=_string_arg(args, "path") or ".",
@@ -88,24 +104,26 @@ def build_function_tools(
             offset=_int_arg(args, "offset", 0),
             include_ignored=_bool_arg(args, "include_ignored", False),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_read_file(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "read_file")
+        args, error, repair_metadata = _tool_args(raw_input, "read_file", READ_FILE_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.read_file,
             _string_arg(args, "file_path"),
             start_line=_int_arg(args, "offset", 1),
             limit=_optional_int_arg(args, "limit"),
             pages=_optional_string_arg(args, "pages"),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_edit_text(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "edit_text")
+        args, error, repair_metadata = _tool_args(raw_input, "edit_text", EDIT_TEXT_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.edit_text,
             _optional_string_arg(args, "file_path"),
             _string_arg(args, "old_string"),
@@ -114,49 +132,59 @@ def build_function_tools(
             snippet_id=_optional_string_arg(args, "snippet_id"),
             expected_occurrences=_optional_int_arg(args, "expected_occurrences"),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_write_file(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "write_file")
+        args, error, repair_metadata = _tool_args(raw_input, "write_file", WRITE_FILE_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             runtime.write_file,
             _string_arg(args, "file_path"),
             args.get("content"),
             overwrite=_bool_arg(args, "overwrite", False),
             snapshot_id=_optional_string_arg(args, "snapshot_id"),
             expected_hash=_optional_string_arg(args, "expected_hash"),
+            snapshot_token=_optional_int_arg(args, "snapshot_token"),
         )
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_apply_patch(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "apply_patch")
+        args, error, repair_metadata = _tool_args(raw_input, "apply_patch", APPLY_PATCH_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(runtime.apply_patch, args.get("operations"))
+        result = await asyncio.to_thread(runtime.apply_patch, args.get("operations"))
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_web_search(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "WebSearch")
+        args, error, repair_metadata = _tool_args(raw_input, "WebSearch", WEB_SEARCH_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(runtime.web_search, _string_arg(args, "query"))
+        result = await asyncio.to_thread(runtime.web_search, _string_arg(args, "query"))
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_web_fetch(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "WebFetch")
+        args, error, repair_metadata = _tool_args(raw_input, "WebFetch", WEB_FETCH_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(runtime.web_fetch, _string_arg(args, "url"))
+        result = await asyncio.to_thread(runtime.web_fetch, _string_arg(args, "url"))
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_load_skill(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "load_skill")
+        args, error, repair_metadata = _tool_args(raw_input, "load_skill", LOAD_SKILL_SCHEMA)
         if error is not None:
             return error
-        return await asyncio.to_thread(runtime.load_skill, _string_arg(args, "name"))
+        result = await asyncio.to_thread(runtime.load_skill, _string_arg(args, "name"))
+        return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_todo_write(_context: object, raw_input: str) -> str:
-        args, error = _tool_args(raw_input, "todo_write")
+        args, error, repair_metadata = _tool_args(raw_input, "todo_write", TODO_WRITE_SCHEMA)
         if error is not None:
             return error
-        return runtime.todo_write(args.get("todos") if "todos" in args else None)
+        return _merge_tool_result_metadata(
+            runtime.todo_write(args.get("todos") if "todos" in args else None),
+            repair_metadata,
+        )
 
     web_search_description = (
         "Perform web searching using a natural language query. Use a small number of "
@@ -260,7 +288,7 @@ def build_function_tools(
             name="write_file",
             description=(
                 "Create a new text file or explicitly replace a whole file. Existing-file "
-                "replacement requires overwrite intent plus snapshot_id or expected_hash."
+                "replacement requires overwrite intent plus snapshot_id, snapshot_token, or expected_hash."
             ),
             params_json_schema=WRITE_FILE_SCHEMA,
             on_invoke_tool=invoke_write_file,
@@ -361,40 +389,245 @@ def _schema_type_allows_null(schema: dict[str, Any]) -> bool:
     return isinstance(schema_type, list) and "null" in schema_type
 
 
-def _tool_args(raw_input: str, tool_name: str) -> tuple[dict[str, Any], str | None]:
+def _tool_args(
+    raw_input: str,
+    tool_name: str,
+    schema: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, dict[str, Any]]:
     try:
         parsed = json_utils.loads(raw_input or "{}")
     except json_utils.JSONDecodeError as exc:
-        return {}, _invalid_tool_arguments_result(tool_name, exc)
+        repaired, repair_metadata = _repair_tool_arguments(raw_input or "")
+        if repaired is not None:
+            try:
+                parsed = json_utils.loads(repaired)
+            except json_utils.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                validation_error = _validate_args_against_schema(parsed, schema)
+                if validation_error is None:
+                    return parsed, None, repair_metadata
+        return {}, _invalid_tool_arguments_result(tool_name, exc, repair_metadata), {}
     if not isinstance(parsed, dict):
         return {}, ToolResult.error_result(
             tool_name,
             "Invalid tool arguments JSON: expected a JSON object matching the tool schema.",
             metadata={
                 "error_code": "invalid_arguments",
+                "retryable": True,
+                "recoverable": True,
+                "repairAttempted": False,
+                "repairApplied": False,
                 "recovery": "Pass exactly one JSON object as the tool arguments.",
             },
-        ).to_json()
-    return parsed, None
+        ).to_json(), {}
+    return parsed, None, {}
 
 
-def _invalid_tool_arguments_result(tool_name: str, exc: json_utils.JSONDecodeError) -> str:
+def _invalid_tool_arguments_result(
+    tool_name: str,
+    exc: json_utils.JSONDecodeError,
+    repair_metadata: dict[str, Any] | None = None,
+) -> str:
     return ToolResult.error_result(
         tool_name,
         "Invalid tool arguments JSON: "
         f"{exc.msg} at line {exc.lineno} column {exc.colno}.",
         metadata={
             "error_code": "invalid_arguments",
+            "retryable": True,
+            "recoverable": True,
             "parse_error": str(exc),
             "line": exc.lineno,
             "column": exc.colno,
             "position": exc.pos,
+            "repairAttempted": bool(repair_metadata),
+            "repairApplied": False,
+            **(repair_metadata or {}),
             "recovery": (
                 "Pass a valid JSON object matching the tool schema. "
                 'String values such as snapshot_id must be quoted, for example "snapshot_4".'
             ),
         },
     ).to_json()
+
+
+def _repair_tool_arguments(raw_input: str) -> tuple[str | None, dict[str, Any]]:
+    repaired = raw_input.strip()
+    if not repaired:
+        return None, {}
+    operations: list[str] = []
+    repaired, changed = _quote_known_unquoted_ids(repaired)
+    if changed:
+        operations.append("quote_tool_ids")
+    repaired, changed = _replace_unquoted_python_literals(repaired)
+    if changed:
+        operations.append("json_literals")
+    repaired, changed = _remove_trailing_commas(repaired)
+    if changed:
+        operations.append("trailing_commas")
+    if not operations:
+        return None, {}
+    return repaired, {
+        "argumentRepair": True,
+        "repairAttempted": True,
+        "repairApplied": True,
+        "repairOperations": operations,
+    }
+
+
+def _quote_known_unquoted_ids(value: str) -> tuple[str, bool]:
+    pattern = re.compile(
+        r'("(?P<key>snapshot_id|snippet_id)"\s*:\s*)'
+        r'(?P<id>(?:snapshot|snippet)_\d+)(?=\s*[,}\]])'
+    )
+    repaired, count = pattern.subn(r'\1"\g<id>"', value)
+    return repaired, count > 0
+
+
+def _replace_unquoted_python_literals(value: str) -> tuple[str, bool]:
+    replacements = {"None": "null", "True": "true", "False": "false"}
+    output: list[str] = []
+    changed = False
+    index = 0
+    in_string = False
+    escape = False
+    while index < len(value):
+        char = value[index]
+        if in_string:
+            output.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        replaced = False
+        for source, target in replacements.items():
+            end = index + len(source)
+            if (
+                value.startswith(source, index)
+                and (index == 0 or not _is_identifier_char(value[index - 1]))
+                and (end >= len(value) or not _is_identifier_char(value[end]))
+            ):
+                output.append(target)
+                index = end
+                changed = True
+                replaced = True
+                break
+        if not replaced:
+            output.append(char)
+            index += 1
+    return "".join(output), changed
+
+
+def _remove_trailing_commas(value: str) -> tuple[str, bool]:
+    output: list[str] = []
+    changed = False
+    index = 0
+    in_string = False
+    escape = False
+    while index < len(value):
+        char = value[index]
+        if in_string:
+            output.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        if char == ",":
+            next_index = index + 1
+            while next_index < len(value) and value[next_index].isspace():
+                next_index += 1
+            if next_index < len(value) and value[next_index] in "}]":
+                changed = True
+                index += 1
+                continue
+        output.append(char)
+        index += 1
+    return "".join(output), changed
+
+
+def _is_identifier_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
+
+
+def _validate_args_against_schema(args: dict[str, Any], schema: dict[str, Any]) -> str | None:
+    required = schema.get("required")
+    if isinstance(required, list):
+        for field in required:
+            if isinstance(field, str) and field not in args:
+                return f"Missing required field: {field}"
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    if schema.get("additionalProperties") is False:
+        extra = sorted(set(args) - set(properties))
+        if extra:
+            return f"Unsupported fields: {', '.join(extra)}"
+    for key, value in args.items():
+        field_schema = properties.get(key)
+        if isinstance(field_schema, dict) and not _schema_value_matches(value, field_schema):
+            return f"Invalid type for field: {key}"
+    return None
+
+
+def _schema_value_matches(value: Any, schema: dict[str, Any]) -> bool:
+    schema_type = schema.get("type")
+    allowed = schema_type if isinstance(schema_type, list) else [schema_type]
+    if value is None:
+        return "null" in allowed
+    if "string" in allowed and isinstance(value, str):
+        return _schema_enum_matches(value, schema)
+    if "boolean" in allowed and isinstance(value, bool):
+        return _schema_enum_matches(value, schema)
+    if "integer" in allowed and isinstance(value, int) and not isinstance(value, bool):
+        return _schema_enum_matches(value, schema)
+    if "number" in allowed and isinstance(value, int | float) and not isinstance(value, bool):
+        return _schema_enum_matches(value, schema)
+    if "array" in allowed and isinstance(value, list):
+        item_schema = schema.get("items")
+        return not isinstance(item_schema, dict) or all(_schema_value_matches(item, item_schema) for item in value)
+    if "object" in allowed and isinstance(value, dict):
+        nested_error = _validate_args_against_schema(value, schema)
+        return nested_error is None
+    return False
+
+
+def _schema_enum_matches(value: Any, schema: dict[str, Any]) -> bool:
+    enum = schema.get("enum")
+    return not isinstance(enum, list) or value in enum
+
+
+def _merge_tool_result_metadata(result: str, metadata: dict[str, Any]) -> str:
+    if not metadata:
+        return result
+    try:
+        payload = json_utils.loads(result)
+    except json_utils.JSONDecodeError:
+        return result
+    if not isinstance(payload, dict):
+        return result
+    result_metadata = payload.get("metadata")
+    merged = result_metadata if isinstance(result_metadata, dict) else {}
+    payload["metadata"] = {**merged, **metadata}
+    return json_utils.dumps(payload)
 
 
 def _string_arg(args: dict[str, Any], name: str) -> str:
@@ -694,12 +927,23 @@ WRITE_FILE_SCHEMA: dict[str, Any] = {
             "type": ["string", "null"],
             "description": "Snapshot id returned by read_file for existing-file replacement.",
         },
+        "snapshot_token": {
+            "type": ["integer", "null"],
+            "description": "Numeric snapshot token returned by read_file for existing-file replacement.",
+        },
         "expected_hash": {
             "type": ["string", "null"],
             "description": "Content hash returned by read_file for existing-file replacement.",
         },
     },
-    "required": ["file_path", "content", "overwrite", "snapshot_id", "expected_hash"],
+    "required": [
+        "file_path",
+        "content",
+        "overwrite",
+        "snapshot_id",
+        "snapshot_token",
+        "expected_hash",
+    ],
     "additionalProperties": False,
 }
 
@@ -760,6 +1004,10 @@ APPLY_PATCH_OPERATION_SCHEMA: dict[str, Any] = {
             "type": ["string", "null"],
             "description": "Snapshot id returned by read_file for replace_file.",
         },
+        "snapshot_token": {
+            "type": ["integer", "null"],
+            "description": "Numeric snapshot token returned by read_file for replace_file.",
+        },
         "expected_hash": {
             "type": ["string", "null"],
             "description": "Content hash returned by read_file for replace_file.",
@@ -777,6 +1025,7 @@ APPLY_PATCH_OPERATION_SCHEMA: dict[str, Any] = {
         "replace_all",
         "overwrite",
         "snapshot_id",
+        "snapshot_token",
         "expected_hash",
     ],
     "additionalProperties": False,

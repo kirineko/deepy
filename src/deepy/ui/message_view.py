@@ -26,6 +26,7 @@ MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
 DIFF_PREVIEW_TOOLS = {"edit_text", "write_file", "apply_patch"}
+FILE_MUTATION_TOOLS = {"edit_text", "write_file", "apply_patch"}
 SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
 SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_text", "text"}
 SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
@@ -108,6 +109,8 @@ def parse_tool_output(output: str) -> ToolOutputView:
     status = _status_text(ok_value)
     metadata = payload.get("metadata")
     metadata_dict = metadata if isinstance(metadata, dict) else {}
+    if _is_retryable_argument_failure(metadata_dict):
+        status = "retryable"
     path = _string_or_none(metadata_dict.get("path"))
     diff = _string_or_none(metadata_dict.get("diff"))
     diff_preview = _string_or_none(metadata_dict.get("diff_preview"))
@@ -125,6 +128,8 @@ def parse_tool_output(output: str) -> ToolOutputView:
         detail = _format_background_task_list_detail(metadata_dict, text_output)
     elif name in {"task_output", "task_stop"} and ok_value is True:
         detail = _string_or_none(metadata_dict.get("taskId")) or _first_nonempty_line(text_output)
+    elif status == "retryable":
+        detail = _string_or_none(metadata_dict.get("recovery")) or error or ""
     else:
         detail = (error or path or _first_nonempty_line(text_output) or "").strip()
     summary = f"{format_tool_display_label(name)} {status}" + (
@@ -172,6 +177,13 @@ def format_tool_progress_summary(
     base = call_summary.strip() or format_tool_display_label(view.name)
     detail = _tool_progress_detail(view)
     return f"{base}  {view.status}" + (f" - {detail}" if detail else "")
+
+
+def tool_status_style(view: ToolOutputView, palette: UiPalette | None = None) -> str:
+    palette = palette or DARK_PALETTE
+    if view.status == "retryable":
+        return palette.warning
+    return status_style(view.ok, palette)
 
 
 def format_tool_display_name(name: str) -> str:
@@ -506,6 +518,12 @@ def build_tool_params_snippet(
     try:
         parsed = json_utils.loads(args)
     except json_utils.JSONDecodeError:
+        if isinstance(tool_name, str) and tool_name in FILE_MUTATION_TOOLS:
+            return _format_malformed_file_tool_params_snippet(
+                tool_name,
+                args,
+                project_root=project_root,
+            )
         return args.strip()
     parsed_params = _string_key_dict(parsed)
     if parsed_params is None:
@@ -741,6 +759,8 @@ def _line_number_text(value: int | None) -> str:
 
 
 def _tool_progress_detail(view: ToolOutputView) -> str:
+    if view.status == "retryable" and view.metadata:
+        return _truncate(_string_or_none(view.metadata.get("recovery")) or view.error or "")
     if view.error:
         return _truncate(view.error)
     if view.metadata and view.metadata.get("kind") == "todo_list":
@@ -856,6 +876,61 @@ def _format_patch_params_snippet(args: dict[str, Any], *, project_root: str | No
         return f"{operation_count} {operation_label}, {len(paths)} {file_label}: {', '.join(labels)}"
 
     return "operations"
+
+
+def _format_malformed_file_tool_params_snippet(
+    tool_name: str,
+    arguments: str,
+    *,
+    project_root: str | None,
+) -> str:
+    path = _extract_json_like_string_field(arguments, "file_path")
+    path_text = _shorten_project_path(path, project_root=project_root) if path else "file"
+    if tool_name == "apply_patch":
+        paths = _extract_json_like_file_paths(arguments)
+        if paths:
+            labels = [_shorten_project_path(item, project_root=project_root) for item in paths[:3]]
+            suffix = "" if len(paths) <= 3 else f", +{len(paths) - 3} more"
+            file_label = "file" if len(paths) == 1 else "files"
+            operation_count = _count_json_like_operations(arguments)
+            op_label = f"{operation_count} malformed ops, " if operation_count else "malformed args, "
+            return f"{op_label}{len(paths)} {file_label}: {', '.join(labels)}{suffix}"
+        return "malformed args"
+    return f"{path_text} (malformed args)"
+
+
+def _extract_json_like_file_paths(arguments: str) -> list[str]:
+    paths: list[str] = []
+    for field in ("file_path", "destination_path"):
+        for match in _json_like_string_field_pattern(field).finditer(arguments):
+            value = _unescape_json_like_string(match.group("value"))
+            if value and value not in paths:
+                paths.append(value)
+    return paths
+
+
+def _extract_json_like_string_field(arguments: str, field: str) -> str | None:
+    match = _json_like_string_field_pattern(field).search(arguments)
+    if match is None:
+        return None
+    return _unescape_json_like_string(match.group("value"))
+
+
+def _json_like_string_field_pattern(field: str) -> re.Pattern[str]:
+    escaped = re.escape(field)
+    return re.compile(rf'"{escaped}"\s*:\s*"(?P<value>(?:\\.|[^"\\])*)"')
+
+
+def _unescape_json_like_string(value: str) -> str:
+    try:
+        parsed = json_utils.loads(f'"{value}"')
+    except json_utils.JSONDecodeError:
+        return value
+    return parsed if isinstance(parsed, str) else value
+
+
+def _count_json_like_operations(arguments: str) -> int:
+    return len(re.findall(r'"type"\s*:\s*"', arguments))
 
 
 def _format_search_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
@@ -1060,6 +1135,13 @@ def _status_text(ok: bool | None) -> str:
     if ok is False:
         return "failed"
     return "unknown"
+
+
+def _is_retryable_argument_failure(metadata: dict[str, Any]) -> bool:
+    return (
+        metadata.get("error_code") == "invalid_arguments"
+        and metadata.get("retryable") is True
+    )
 
 
 def _string_or_default(value: Any, default: str) -> str:

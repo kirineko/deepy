@@ -430,14 +430,20 @@ class ToolBlock(TranscriptBlock):
         details: str = "",
         waiting_for_user: bool = False,
         tool_name: str = "",
+        retryable: bool = False,
+        recovered_from_retry: bool = False,
     ) -> None:
         classes = "tool-block todo-block" if tool_name == "todo_write" else "tool-block"
+        if retryable:
+            classes += " -retryable"
         super().__init__(label, body, classes=classes)
         self.call_id = call_id
         self.arguments = arguments.strip()
         self.details = details.strip()
         self.waiting_for_user = waiting_for_user
         self.tool_name = tool_name
+        self.retryable = retryable
+        self.recovered_from_retry = recovered_from_retry
 
     @classmethod
     def from_call(cls, name: str, arguments: str, *, call_id: str) -> ToolBlock:
@@ -468,7 +474,27 @@ class ToolBlock(TranscriptBlock):
             details=_tool_output_details(view),
             waiting_for_user=view.await_user_response,
             tool_name=view.name,
+            retryable=view.status == "retryable",
         )
+
+    def update_from_call(self, name: str, arguments: str) -> None:
+        display_name = format_tool_display_name(name or "tool")
+        params = _tool_arguments_body(name or "tool", arguments)
+        self.tool_name = name or "tool"
+        self.arguments = params
+        self.title = f"{display_name} running"
+        self.body = f"Recovered after argument retry.\n\nParameters\n  {params}" if params else "Running"
+        self.details = ""
+        self.waiting_for_user = False
+        self.retryable = False
+        self.recovered_from_retry = True
+        self.query_one(".block-title", Label).update(self.title)
+        self.query_one(".block-body", Static).update(self.body)
+        details = self.query_one(".tool-details", Static)
+        details.update(self.details)
+        details.display = False
+        self.set_class(False, "-waiting")
+        self.set_class(False, "-retryable")
 
     def update_from_output(self, view: ToolOutputView) -> None:
         self.tool_name = view.name
@@ -476,10 +502,12 @@ class ToolBlock(TranscriptBlock):
         output_body = _tool_output_body(view)
         self.details = _tool_output_details(view)
         self.waiting_for_user = view.await_user_response
+        self.retryable = view.status == "retryable"
+        recovered_prefix = "Recovered after argument retry.\n\n" if self.recovered_from_retry and view.ok is True else ""
         self.body = (
-            f"Parameters\n  {self.arguments}\n\nOutput\n{_indent_block(output_body)}"
+            f"{recovered_prefix}Parameters\n  {self.arguments}\n\nOutput\n{_indent_block(output_body)}"
             if self.arguments and output_body and view.name != "todo_write"
-            else output_body
+            else f"{recovered_prefix}{output_body}"
         )
         self.query_one(".block-title", Label).update(self.title)
         self.query_one(".block-body", Static).update(self.body)
@@ -487,6 +515,7 @@ class ToolBlock(TranscriptBlock):
         details.update(self.details)
         details.display = bool(self.details and self.expanded)
         self.set_class(self.waiting_for_user, "-waiting")
+        self.set_class(self.retryable, "-retryable")
         self.set_class(view.name == "todo_write", "todo-block")
 
     def compose(self) -> ComposeResult:
@@ -821,6 +850,11 @@ def _tool_output_body(view: ToolOutputView) -> str:
 def _tool_output_details(view: ToolOutputView) -> str:
     if view.name == "AskUserQuestion":
         return ""
+    if view.status == "retryable" and view.metadata:
+        recovery = str(view.metadata.get("recovery") or "").strip()
+        parse_error = str(view.metadata.get("parse_error") or view.error or "").strip()
+        details = "\n".join(line for line in [recovery, parse_error] if line)
+        return _compact_text(details, max_lines=8) if details else ""
     text = view.error or view.output or ""
     if not text:
         return ""

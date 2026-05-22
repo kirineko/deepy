@@ -420,6 +420,7 @@ class PatchOperation:
     overwrite: bool = False
     snapshot_id: str | None = None
     expected_hash: str | None = None
+    snapshot_token: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1559,6 +1560,7 @@ class ToolRuntime:
             metadata.update(
                 {
                     "snapshot_id": snapshot.id,
+                    "snapshot_token": snapshot.token,
                     "content_hash": snapshot.content_hash,
                     "mtime_ns": snapshot.mtime_ns,
                     "size": snapshot.size,
@@ -1629,6 +1631,7 @@ class ToolRuntime:
         overwrite: bool = True,
         snapshot_id: str | None = None,
         expected_hash: str | None = None,
+        snapshot_token: int | None = None,
         name: str = "write",
     ) -> str:
         target, error, metadata = _resolve_mutation_target(self.cwd, path)
@@ -1651,6 +1654,17 @@ class ToolRuntime:
                         path=target,
                         expectedSnapshotId=snapshot_id,
                         actualSnapshotId=snapshot.id if snapshot else None,
+                    ),
+                ).to_json()
+            if snapshot_token is not None and (snapshot is None or snapshot.token != snapshot_token):
+                return ToolResult.error_result(
+                    name,
+                    "Snapshot token does not match the current managed snapshot.",
+                    metadata=_mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedSnapshotToken=snapshot_token,
+                        actualSnapshotToken=snapshot.token if snapshot else None,
                     ),
                 ).to_json()
             if expected_hash is not None and (snapshot is None or snapshot.content_hash != expected_hash):
@@ -1746,6 +1760,7 @@ class ToolRuntime:
                 **(
                     {
                         "snapshot_id": snapshot.id,
+                        "snapshot_token": snapshot.token,
                         "content_hash": snapshot.content_hash,
                     }
                     if snapshot is not None
@@ -1762,26 +1777,27 @@ class ToolRuntime:
         overwrite: bool = False,
         snapshot_id: str | None = None,
         expected_hash: str | None = None,
+        snapshot_token: int | None = None,
     ) -> str:
         target, _, _ = _resolve_mutation_target(self.cwd, path)
         if target is not None and target.exists() and not overwrite:
             return ToolResult.error_result(
                 "write_file",
-                "Existing file replacement requires overwrite=true and a fresh snapshot id or content hash.",
+                "Existing file replacement requires overwrite=true and a fresh snapshot id, snapshot token, or content hash.",
                 metadata=_mutation_error_metadata(
                     MutationErrorCode.INVALID_ARGUMENTS,
                     path=target,
                     recovery="Read the file first, then retry write_file with overwrite intent and snapshot metadata.",
                 ),
             ).to_json()
-        if target is not None and target.exists() and not snapshot_id and not expected_hash:
+        if target is not None and target.exists() and not snapshot_id and not expected_hash and snapshot_token is None:
             return ToolResult.error_result(
                 "write_file",
-                "Existing file replacement requires a snapshot_id or expected_hash.",
+                "Existing file replacement requires a snapshot_id, snapshot_token, or expected_hash.",
                 metadata=_mutation_error_metadata(
                     MutationErrorCode.STALE_SNAPSHOT,
                     path=target,
-                    recovery="Read the file first and pass the returned snapshot_id or content_hash.",
+                    recovery="Read the file first and pass the returned snapshot_id, snapshot_token, or content_hash.",
                 ),
             ).to_json()
         return self.write(
@@ -1790,6 +1806,7 @@ class ToolRuntime:
             overwrite=overwrite,
             snapshot_id=snapshot_id,
             expected_hash=expected_hash,
+            snapshot_token=snapshot_token,
             name="write_file",
         )
 
@@ -2063,6 +2080,7 @@ class ToolRuntime:
         }
         if snapshot is not None:
             metadata["snapshot_id"] = snapshot.id
+            metadata["snapshot_token"] = snapshot.token
             metadata["content_hash"] = snapshot.content_hash
         if auto_read_before_edit:
             metadata["autoReadBeforeEdit"] = True
@@ -2197,6 +2215,7 @@ class ToolRuntime:
                             "path": str(target),
                             "destination": str(plan.new_target),
                             "snapshot_id": snapshot.id if snapshot else None,
+                            "snapshot_token": snapshot.token if snapshot else None,
                             **backup_metadata,
                         }
                     )
@@ -2225,9 +2244,10 @@ class ToolRuntime:
                         "operation": operation.kind,
                         "path": str(target),
                         "destination": str(destination),
-                        "snapshot_id": snapshot.id if snapshot else None,
-                        **(
-                            {"actualOccurrences": plan.occurrences}
+                            "snapshot_id": snapshot.id if snapshot else None,
+                            "snapshot_token": snapshot.token if snapshot else None,
+                            **(
+                                {"actualOccurrences": plan.occurrences}
                             if plan.occurrences is not None
                             else {}
                         ),
@@ -2416,14 +2436,14 @@ class ToolRuntime:
                     "replace_file requires overwrite=true.",
                     _mutation_error_metadata(MutationErrorCode.INVALID_ARGUMENTS, path=target),
                 )
-            if not operation.snapshot_id and not operation.expected_hash:
+            if not operation.snapshot_id and not operation.expected_hash and operation.snapshot_token is None:
                 return (
                     None,
-                    "replace_file requires snapshot_id or expected_hash.",
+                    "replace_file requires snapshot_id, snapshot_token, or expected_hash.",
                     _mutation_error_metadata(
                         MutationErrorCode.STALE_SNAPSHOT,
                         path=target,
-                        recovery="Read the file first and pass the returned snapshot_id or content_hash.",
+                        recovery="Read the file first and pass the returned snapshot_id, snapshot_token, or content_hash.",
                     ),
                 )
             snapshot = self.file_state.get_snapshot(target)
@@ -2436,6 +2456,19 @@ class ToolRuntime:
                         path=target,
                         expectedSnapshotId=operation.snapshot_id,
                         actualSnapshotId=snapshot.id if snapshot else None,
+                    ),
+                )
+            if operation.snapshot_token is not None and (
+                snapshot is None or snapshot.token != operation.snapshot_token
+            ):
+                return (
+                    None,
+                    "Snapshot token does not match the current managed snapshot.",
+                    _mutation_error_metadata(
+                        MutationErrorCode.STALE_SNAPSHOT,
+                        path=target,
+                        expectedSnapshotToken=operation.snapshot_token,
+                        actualSnapshotToken=snapshot.token if snapshot else None,
                     ),
                 )
             if operation.expected_hash is not None and (
@@ -3294,6 +3327,7 @@ STRUCTURED_PATCH_OPERATION_FIELDS = {
     "replace_all",
     "overwrite",
     "snapshot_id",
+    "snapshot_token",
     "expected_hash",
 }
 
@@ -3369,6 +3403,9 @@ def _parse_structured_patch_operation(
     overwrite = value.get("overwrite")
     overwrite_bool = bool(overwrite) if isinstance(overwrite, bool) else False
     snapshot_id = _optional_string_value(value.get("snapshot_id"))
+    snapshot_token, snapshot_token_error = _optional_non_negative_int(value.get("snapshot_token"))
+    if snapshot_token_error is not None:
+        return None, snapshot_token_error, {"operation": kind, "path": file_path}
     expected_hash = _optional_string_value(value.get("expected_hash"))
 
     if kind == "create_file":
@@ -3391,6 +3428,7 @@ def _parse_structured_patch_operation(
                 content=content,
                 overwrite=overwrite_bool,
                 snapshot_id=snapshot_id,
+                snapshot_token=snapshot_token,
                 expected_hash=expected_hash,
             ),
             None,
@@ -3459,6 +3497,7 @@ def _unexpected_structured_patch_fields(kind: str, value: dict[str, object]) -> 
             "content",
             "overwrite",
             "snapshot_id",
+            "snapshot_token",
             "expected_hash",
         },
         "delete_file": {"type", "file_path"},
@@ -3521,6 +3560,16 @@ def _optional_positive_int(value: object) -> tuple[int | None, str | None]:
         return None, "expected_occurrences must be an integer or null."
     if value < 1:
         return None, "expected_occurrences must be greater than zero."
+    return value, None
+
+
+def _optional_non_negative_int(value: object) -> tuple[int | None, str | None]:
+    if value is None:
+        return None, None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None, "snapshot_token must be an integer or null."
+    if value < 0:
+        return None, "snapshot_token must be greater than or equal to zero."
     return value, None
 
 

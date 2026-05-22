@@ -580,6 +580,55 @@ def test_print_stream_event_merges_tool_call_and_output():
     assert "tool output:" not in rendered
 
 
+def test_print_stream_event_renders_retryable_invalid_arguments_quietly():
+    console = Console(record=True)
+    pending = {}
+    large_content = "SECRET_CONTENT" * 20
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="write_file",
+            payload={
+                "call_id": "call-1",
+                "arguments": (
+                    '{"file_path":"/repo/app/page.tsx","content":'
+                    f"{large_content},\"overwrite\":true,\"snapshot_id\":snapshot_4}}"
+                ),
+            },
+        ),
+        project_root="/repo",
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": False,
+                    "name": "write_file",
+                    "output": "",
+                    "error": "Invalid tool arguments JSON",
+                    "metadata": {
+                        "error_code": "invalid_arguments",
+                        "retryable": True,
+                        "recovery": "Pass valid JSON.",
+                    },
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "[Write] app/page.tsx (malformed args)  retryable - Pass valid JSON." in rendered
+    assert "SECRET_CONTENT" not in rendered
+
+
 def test_print_stream_event_hides_tool_call_until_output():
     console = Console(record=True)
     pending = {}

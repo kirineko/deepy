@@ -12,6 +12,7 @@ SnapshotStatus = Literal["missing", "full", "partial", "deleted", "stale"]
 @dataclass
 class FileSnapshot:
     id: str
+    token: int
     mtime_ns: int
     size: int
     content_hash: str
@@ -50,6 +51,7 @@ class FileState:
         self._next_snapshot_id += 1
         snapshot = FileSnapshot(
             id=f"snapshot_{self._next_snapshot_id}",
+            token=self._next_snapshot_id,
             mtime_ns=stat.st_mtime_ns,
             size=stat.st_size,
             content_hash=_file_sha256(resolved),
@@ -119,6 +121,12 @@ class FileState:
     def get_snapshot_path(self, snapshot_id: str) -> Path | None:
         for path, snapshot in self._snapshots.items():
             if snapshot.id == snapshot_id:
+                return path
+        return None
+
+    def get_snapshot_token_path(self, snapshot_token: int) -> Path | None:
+        for path, snapshot in self._snapshots.items():
+            if snapshot.token == snapshot_token:
                 return path
         return None
 

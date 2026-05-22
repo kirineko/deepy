@@ -124,7 +124,35 @@ def test_build_function_tools_registers_todo_write(tmp_path):
     ]
 
 
-def test_function_tool_reports_invalid_json_arguments(tmp_path):
+def test_function_tool_repairs_unquoted_snapshot_id_arguments(tmp_path):
+    target = tmp_path / "index.html"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    read_payload = decode(runtime.read_file("index.html"))
+    tool = next(tool for tool in build_function_tools(runtime) if tool.name == "write_file")
+
+    payload = decode(
+        asyncio.run(
+            tool.on_invoke_tool(
+                None,
+                (
+                    '{"file_path":"index.html","content":"new\\n","overwrite":true,'
+                    f'"snapshot_id":{read_payload["metadata"]["snapshot_id"]},'
+                    '"snapshot_token":null,"expected_hash":null}'
+                ),
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["name"] == "write_file"
+    assert payload["metadata"]["argumentRepair"] is True
+    assert payload["metadata"]["repairApplied"] is True
+    assert "quote_tool_ids" in payload["metadata"]["repairOperations"]
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_function_tool_rejects_unsafe_malformed_content_arguments(tmp_path):
     target = tmp_path / "index.html"
     target.write_text("old\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -134,20 +162,17 @@ def test_function_tool_reports_invalid_json_arguments(tmp_path):
         asyncio.run(
             tool.on_invoke_tool(
                 None,
-                (
-                    '{"file_path":"index.html","content":"new\\n","overwrite":true,'
-                    '"snapshot_id":snapshot_4,"expected_hash":null}'
-                ),
+                '{"file_path":"index.html","content":new\\n,"overwrite":true,'
+                '"snapshot_id":null,"snapshot_token":null,"expected_hash":null}',
             )
         )
     )
 
     assert payload["ok"] is False
     assert payload["name"] == "write_file"
-    assert "Invalid tool arguments JSON" in payload["error"]
-    assert "file_path is required" not in payload["error"]
     assert payload["metadata"]["error_code"] == "invalid_arguments"
-    assert "snapshot_id must be quoted" in payload["metadata"]["recovery"]
+    assert payload["metadata"]["retryable"] is True
+    assert payload["metadata"]["repairApplied"] is False
     assert target.read_text(encoding="utf-8") == "old\n"
 
 
@@ -823,17 +848,39 @@ def test_write_file_requires_overwrite_intent_and_snapshot_for_existing_file(tmp
     assert denied["metadata"]["error_code"] == "invalid_arguments"
 
     read_payload = decode(runtime.read_file("existing.txt"))
+    assert isinstance(read_payload["metadata"]["snapshot_token"], int)
     replaced = decode(
         runtime.write_file(
             "existing.txt",
             "changed\n",
             overwrite=True,
-            snapshot_id=read_payload["metadata"]["snapshot_id"],
+            snapshot_token=read_payload["metadata"]["snapshot_token"],
         )
     )
 
     assert replaced["ok"] is True
     assert target.read_text(encoding="utf-8") == "changed\n"
+
+
+def test_write_file_rejects_mismatched_snapshot_token(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    read_payload = decode(runtime.read_file("existing.txt"))
+
+    rejected = decode(
+        runtime.write_file(
+            "existing.txt",
+            "changed\n",
+            overwrite=True,
+            snapshot_token=read_payload["metadata"]["snapshot_token"] + 1,
+        )
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["metadata"]["error_code"] == "stale_snapshot"
+    assert rejected["metadata"]["expectedSnapshotToken"] == read_payload["metadata"]["snapshot_token"] + 1
+    assert target.read_text(encoding="utf-8") == "old\n"
 
 
 def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path):
@@ -1403,7 +1450,7 @@ def test_apply_patch_replace_file_requires_freshness_token(tmp_path):
                     "file_path": "README.md",
                     "content": "new\n",
                     "overwrite": True,
-                    "snapshot_id": read_payload["metadata"]["snapshot_id"],
+                    "snapshot_token": read_payload["metadata"]["snapshot_token"],
                 }
             ]
         )
@@ -2478,7 +2525,7 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "Preferred tool for small single-file exact/string edits" in edit_tool.description
     write_tool = tools[8]
     assert write_tool.name == "write_file"
-    assert "snapshot_id or expected_hash" in write_tool.description
+    assert "snapshot_id, snapshot_token, or expected_hash" in write_tool.description
     patch_tool = tools[9]
     assert patch_tool.name == "apply_patch"
     assert "multiple edits in one file" in patch_tool.description
@@ -2556,6 +2603,7 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
         "content",
         "overwrite",
         "snapshot_id",
+        "snapshot_token",
         "expected_hash",
     ]
     assert tools["apply_patch"].params_json_schema["required"] == ["operations"]
@@ -2573,6 +2621,7 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
         "replace_all",
         "overwrite",
         "snapshot_id",
+        "snapshot_token",
         "expected_hash",
     ]
     assert tools["WebSearch"].params_json_schema["required"] == ["query"]

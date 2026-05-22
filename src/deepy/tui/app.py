@@ -327,6 +327,14 @@ class DeepyTuiApp(App[None]):
         border-left: solid $warning;
     }
 
+    .tool-block.-retryable {
+        border-left: solid $warning;
+    }
+
+    .tool-block.-retryable .block-title {
+        color: $warning;
+    }
+
     .todo-block {
         border-left: solid $success;
     }
@@ -390,6 +398,7 @@ class DeepyTuiApp(App[None]):
         self._assistant_block: AssistantBlock | None = None
         self._thinking_block: ThinkingBlock | None = None
         self._tool_blocks: dict[str, ToolBlock] = {}
+        self._retryable_tool_blocks: dict[tuple[str, str], ToolBlock] = {}
         self._focused_block_index = -1
         self._pending_question_answers: OrderedDict[str, str] = OrderedDict()
         self._new_output_available = False
@@ -1433,14 +1442,20 @@ class DeepyTuiApp(App[None]):
         if event.kind == "tool_call":
             self._thinking_block = None
             call_id = str(event.payload.get("call_id") or "")
-            block = ToolBlock.from_call(
-                event.name or "tool",
-                str(event.payload.get("arguments") or ""),
-                call_id=call_id,
-            )
+            tool_name = event.name or "tool"
+            arguments = str(event.payload.get("arguments") or "")
+            params = ToolBlock.from_call(tool_name, arguments, call_id=call_id).arguments
+            retry_key = _recoverable_tool_key(tool_name, params)
+            block = self._retryable_tool_blocks.pop(retry_key, None) if retry_key is not None else None
+            if block is not None:
+                block.call_id = call_id
+                block.update_from_call(tool_name, arguments)
+            else:
+                block = ToolBlock.from_call(tool_name, arguments, call_id=call_id)
             if call_id:
                 self._tool_blocks[call_id] = block
-            await self._append_block(block)
+            if block.parent is None:
+                await self._append_block(block)
             self._update_status(f"Tool {event.name or 'tool'}")
             return
         if event.kind == "tool_output":
@@ -1457,6 +1472,11 @@ class DeepyTuiApp(App[None]):
                 anchored = self._transcript_is_anchored_now()
                 block.update_from_output(view)
                 self._scroll_transcript_to_end(force=anchored)
+            retry_key = _recoverable_tool_key(view.name, block.arguments)
+            if view.status == "retryable" and retry_key is not None:
+                self._retryable_tool_blocks[retry_key] = block
+            elif view.ok is True and retry_key is not None:
+                self._retryable_tool_blocks.pop(retry_key, None)
             if view.name == "todo_write":
                 self._todo_text = block.body
                 self._update_status(self.state.status)
@@ -1921,6 +1941,31 @@ def _tool_call_arguments(item: dict[str, Any]) -> str:
 def _item_type(item: dict[str, Any]) -> str:
     value = item.get("type")
     return value if isinstance(value, str) else ""
+
+
+def _recoverable_tool_key(name: str, argument_summary: str) -> tuple[str, str] | None:
+    if name not in {"write_file", "edit_text", "apply_patch"}:
+        return None
+    target = _recoverable_tool_target(argument_summary)
+    if not target:
+        return None
+    return name, target
+
+
+def _recoverable_tool_target(argument_summary: str) -> str:
+    text = " ".join(argument_summary.strip().split())
+    if not text:
+        return ""
+    if ":" in text:
+        text = text.rsplit(":", 1)[1].strip()
+    if "," in text:
+        text = text.split(",", 1)[0].strip()
+    if " (" in text:
+        text = text.split(" (", 1)[0].strip()
+    for prefix in ("malformed args, ", "file: ", "files: "):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text
 
 
 def _role(item: dict[str, Any]) -> str:
