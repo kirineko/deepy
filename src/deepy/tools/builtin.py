@@ -20,8 +20,14 @@ from difflib import unified_diff
 from fnmatch import fnmatch
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
+from deepy.background_tasks import (
+    BackgroundTaskLimitError,
+    BackgroundTaskManager,
+    BackgroundTaskOutput,
+    BackgroundTaskSnapshot,
+)
 from deepy.config import DEFAULT_WEB_SEARCH_SEARXNG_URL, Settings, mask_secret
 from deepy.todos import TodoItem, normalize_todo_items, todo_counts, todo_items_to_payload
 from deepy.types.tool_payloads import AskUserOption, AskUserQuestion
@@ -1429,6 +1435,8 @@ class ToolRuntime:
     platform_name: str = field(default_factory=lambda: sys.platform)
     file_state: FileState = field(default_factory=FileState)
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
+    background_tasks: BackgroundTaskManager = field(default_factory=BackgroundTaskManager)
+    should_interrupt: Callable[[], bool] | None = None
     web_search_calls: int = 0
     todo_items: list[TodoItem] = field(default_factory=list)
 
@@ -2552,7 +2560,16 @@ class ToolRuntime:
             {},
         )
 
-    def shell(self, command: str, timeout_ms: int = 120_000) -> str:
+    def shell(
+        self,
+        command: str,
+        timeout_ms: int = 120_000,
+        *,
+        run_in_background: bool = False,
+    ) -> str:
+        if run_in_background:
+            return self._shell_background(command)
+
         name = "shell"
         timeout = max(timeout_ms, 1) / 1000
         marker = f"__DEEPY_CWD_{uuid.uuid4().hex}__"
@@ -2578,9 +2595,8 @@ class ToolRuntime:
                     "startTime": _now_iso(),
                     "command": command,
                 }
-                try:
-                    process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
+                interrupted = self._wait_for_shell_process(process, timeout=timeout)
+                if interrupted:
                     _terminate_process(process)
                     process.wait()
                     stdout, stdout_encoding, stdout_capture_truncated = _read_captured_output(
@@ -2607,7 +2623,9 @@ class ToolRuntime:
                     )
                     return ToolResult.error_result(
                         name,
-                        f"Command timed out after {timeout_ms}ms.",
+                        "Command interrupted by user."
+                        if self._should_interrupt()
+                        else f"Command timed out after {timeout_ms}ms.",
                         output=output,
                         metadata=metadata,
                     ).to_json()
@@ -2651,6 +2669,132 @@ class ToolRuntime:
             f"Command exited with code {returncode}.",
             output=output,
             metadata=metadata,
+        ).to_json()
+
+    def _wait_for_shell_process(self, process: subprocess.Popen[bytes], *, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            if process.poll() is not None:
+                return False
+            if self._should_interrupt():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.05, remaining))
+
+    def _should_interrupt(self) -> bool:
+        return bool(self.should_interrupt and self.should_interrupt())
+
+    def _shell_background(self, command: str) -> str:
+        name = "shell"
+        shell_invocation = _build_background_shell_command(
+            command,
+            platform_name=self.platform_name,
+        )
+        try:
+            snapshot = self.background_tasks.start(
+                command=command,
+                argv=[shell_invocation.shell_path, *shell_invocation.args],
+                cwd=self.cwd,
+                env=shell_invocation.env,
+            )
+        except BackgroundTaskLimitError as exc:
+            return ToolResult.error_result(
+                name,
+                str(exc),
+                metadata={
+                    "kind": "background_task_launch",
+                    "error_code": "background_task_limit",
+                    "runningCount": self.background_tasks.running_count(),
+                },
+            ).to_json()
+        except Exception as exc:
+            return ToolResult.error_result(
+                name,
+                f"Failed to start background task: {exc}",
+                metadata={
+                    "kind": "background_task_launch",
+                    "error_code": "background_task_launch_failed",
+                },
+            ).to_json()
+        output = (
+            f"Started background task {snapshot.id}.\n"
+            f'Use task_output with task_id="{snapshot.id}" to inspect output, '
+            "or task_stop to stop it."
+        )
+        metadata = _background_task_metadata(snapshot, shell_invocation=shell_invocation)
+        return ToolResult.ok_result(name, output, metadata=metadata).to_json()
+
+    def task_list(self, *, active_only: bool = False, limit: int = 20) -> str:
+        snapshots = self.background_tasks.list(active_only=active_only, limit=max(1, limit))
+        if snapshots:
+            lines = [
+                _format_background_task_line(snapshot)
+                for snapshot in snapshots
+            ]
+            output = "\n".join(lines)
+        elif active_only:
+            output = "No running background tasks."
+        else:
+            output = "No background tasks."
+        return ToolResult.ok_result(
+            "task_list",
+            output,
+            metadata={
+                "kind": "background_task_list",
+                "activeOnly": active_only,
+                "tasks": [_background_task_payload(snapshot) for snapshot in snapshots],
+            },
+        ).to_json()
+
+    def task_output(
+        self,
+        task_id: str,
+        *,
+        block: bool = False,
+        timeout: int = 3,
+    ) -> str:
+        name = "task_output"
+        if block:
+            self.background_tasks.wait_for_output(task_id, timeout_seconds=max(0, min(timeout, 5)))
+        output = self.background_tasks.read_output(task_id)
+        if output is None:
+            return ToolResult.error_result(
+                name,
+                f"Background task not found: {task_id}",
+                metadata={
+                    "kind": "background_task_output",
+                    "error_code": "background_task_not_found",
+                    "taskId": task_id,
+                },
+            ).to_json()
+        return ToolResult.ok_result(
+            name,
+            _format_background_task_output(output),
+            metadata=_background_task_output_metadata(output),
+        ).to_json()
+
+    def task_stop(self, task_id: str) -> str:
+        name = "task_stop"
+        snapshot = self.background_tasks.stop(task_id)
+        if snapshot is None:
+            return ToolResult.error_result(
+                name,
+                f"Background task not found: {task_id}",
+                metadata={
+                    "kind": "background_task_stop",
+                    "error_code": "background_task_not_found",
+                    "taskId": task_id,
+                },
+            ).to_json()
+        return ToolResult.ok_result(
+            name,
+            f"Stop requested for background task {snapshot.id} ({snapshot.status}).",
+            metadata={
+                "kind": "background_task_stop",
+                "task": _background_task_payload(snapshot),
+            },
         ).to_json()
 
     def ask_user_question(self, questions: object) -> str:
@@ -3727,6 +3871,44 @@ def _build_shell_command(
     )
 
 
+def _build_background_shell_command(
+    command: str,
+    *,
+    shell_path: str | None = None,
+    env: dict[str, str] | None = None,
+    platform_name: str | None = None,
+    os_name: str | None = None,
+) -> ShellInvocation:
+    resolved_shell = shell_path or _resolve_shell_path(env=env, os_name=os_name)
+    runtime_environment = detect_runtime_environment(
+        shell_path=resolved_shell,
+        env=env,
+        platform_name=platform_name,
+        os_name=os_name,
+    )
+    process_env = _build_shell_process_env(runtime_environment, env)
+    if runtime_environment.command_dialect == "powershell":
+        return ShellInvocation(
+            shell_path=resolved_shell,
+            args=_build_background_powershell_args(command),
+            runtime_environment=runtime_environment,
+            env=process_env,
+        )
+    if runtime_environment.command_dialect == "cmd":
+        return ShellInvocation(
+            shell_path=resolved_shell,
+            args=_build_background_cmd_args(command),
+            runtime_environment=runtime_environment,
+            env=process_env,
+        )
+    return ShellInvocation(
+        shell_path=resolved_shell,
+        args=_build_background_posix_shell_args(command, resolved_shell),
+        runtime_environment=runtime_environment,
+        env=process_env,
+    )
+
+
 def _build_shell_process_env(
     runtime_environment: RuntimeEnvironment,
     env: dict[str, str] | None = None,
@@ -3750,6 +3932,20 @@ def _build_posix_shell_args(command: str, marker: str, shell_path: str) -> list[
             "__deepy_exit=$?",
             f'printf \'\\n{marker}CWD=%s\\n{marker}EXIT=%s\\n\' "$PWD" "$__deepy_exit"',
             "exit $__deepy_exit",
+        )
+        if part
+    ]
+    return ["-c", "{ " + "; ".join(parts) + "; } < /dev/null"]
+
+
+def _build_background_posix_shell_args(command: str, shell_path: str) -> list[str]:
+    normalized_command = rewrite_windows_null_redirect(command)
+    parts = [
+        part
+        for part in (
+            build_shell_init_command(shell_path),
+            build_disable_extglob_command(shell_path),
+            normalized_command,
         )
         if part
     ]
@@ -3785,6 +3981,18 @@ def _build_powershell_args(command: str, marker: str) -> list[str]:
     return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
+def _build_background_powershell_args(command: str) -> list[str]:
+    script = "\n".join(
+        [
+            "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+            command,
+            "exit $LASTEXITCODE",
+        ]
+    )
+    return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
+
+
 def _build_cmd_args(command: str, marker: str) -> list[str]:
     script = "\r\n".join(
         [
@@ -3797,6 +4005,10 @@ def _build_cmd_args(command: str, marker: str) -> list[str]:
         ]
     )
     return ["/d", "/s", "/c", script]
+
+
+def _build_background_cmd_args(command: str) -> list[str]:
+    return ["/d", "/s", "/c", command]
 
 
 def _resolve_shell_path(
@@ -3851,6 +4063,86 @@ def _shell_metadata(
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _format_background_time(timestamp: float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+
+
+def _background_task_payload(snapshot: BackgroundTaskSnapshot) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": snapshot.id,
+        "command": snapshot.command,
+        "cwd": snapshot.cwd,
+        "status": snapshot.status,
+        "startTime": _format_background_time(snapshot.start_time),
+        "outputPath": str(snapshot.output_path),
+        "stopRequested": snapshot.stop_requested,
+    }
+    if snapshot.pid is not None:
+        payload["pid"] = snapshot.pid
+    if snapshot.end_time is not None:
+        payload["endTime"] = _format_background_time(snapshot.end_time)
+    if snapshot.exit_code is not None:
+        payload["exitCode"] = snapshot.exit_code
+    if snapshot.error:
+        payload["error"] = snapshot.error
+    return payload
+
+
+def _background_task_metadata(
+    snapshot: BackgroundTaskSnapshot,
+    *,
+    shell_invocation: ShellInvocation,
+) -> dict[str, object]:
+    metadata = _background_task_payload(snapshot)
+    metadata.update(
+        {
+            "kind": "background_task_launch",
+            "taskId": snapshot.id,
+            "task": _background_task_payload(snapshot),
+            "runInBackground": True,
+            "shellPath": shell_invocation.shell_path,
+            "shellKind": shell_invocation.runtime_environment.shell_kind,
+            "commandDialect": shell_invocation.runtime_environment.command_dialect,
+            "pathStyle": shell_invocation.runtime_environment.path_style,
+            "osFamily": shell_invocation.runtime_environment.os_family,
+        }
+    )
+    return metadata
+
+
+def _format_background_task_line(snapshot: BackgroundTaskSnapshot) -> str:
+    pid = f" pid={snapshot.pid}" if snapshot.pid is not None else ""
+    exit_code = f" exit={snapshot.exit_code}" if snapshot.exit_code is not None else ""
+    stopped = " stop_requested" if snapshot.stop_requested else ""
+    return f"{snapshot.id}\t{snapshot.status}{pid}{exit_code}{stopped}\t{snapshot.command}"
+
+
+def _format_background_task_output(output: BackgroundTaskOutput) -> str:
+    lines = [
+        _format_background_task_line(output.task),
+        f"Output: {output.output_preview_bytes}/{output.output_size_bytes} bytes",
+    ]
+    if output.more_available:
+        lines.append("Showing the most recent output only; more output is available.")
+    lines.append("")
+    lines.append(output.output if output.output else "[No output captured yet.]")
+    return "\n".join(lines).rstrip()
+
+
+def _background_task_output_metadata(output: BackgroundTaskOutput) -> dict[str, object]:
+    return {
+        "kind": "background_task_output",
+        "taskId": output.task.id,
+        "task": _background_task_payload(output.task),
+        "outputSizeBytes": output.output_size_bytes,
+        "outputPreviewBytes": output.output_preview_bytes,
+        "outputTruncated": output.output_truncated,
+        "moreAvailable": output.more_available,
+    }
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:

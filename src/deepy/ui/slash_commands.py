@@ -22,6 +22,8 @@ BUILTIN_SLASH_COMMANDS = (
     SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
     SlashCommandItem("init", "init", "/init", "Create or update project AGENTS.md"),
     SlashCommandItem("mcp", "mcp", "/mcp", "Show MCP server status and tools"),
+    SlashCommandItem("ps", "ps", "/ps", "Show background tasks"),
+    SlashCommandItem("stop", "stop", "/stop", "Choose background tasks to stop"),
     SlashCommandItem("status", "status", "/status", "Show status, usage, and DeepSeek balance"),
     SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue"),
     SlashCommandItem("compact", "compact", "/compact", "Compact the active conversation context"),

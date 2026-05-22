@@ -4,7 +4,7 @@ import asyncio
 import shutil
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,8 +15,10 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import var
+from textual.widget import MountError
 from textual.widgets import Footer, Header, Label, Static
 
+from deepy.background_tasks import BackgroundTaskManager, BackgroundTaskSnapshot
 from deepy.config import (
     PROVIDER_CATALOG,
     Settings,
@@ -393,6 +395,7 @@ class DeepyTuiApp(App[None]):
         self._new_output_available = False
         self._todo_text = ""
         self._local_command_sequence = 0
+        self.background_tasks = BackgroundTaskManager()
         self.exit_summary_text: str | None = None
         self._pending_session_cost_start: dict[str, Any] | None = None
 
@@ -480,6 +483,8 @@ class DeepyTuiApp(App[None]):
             "model",
             "input-suggestion",
             "reset",
+            "ps",
+            "stop",
         }:
             self.invoke_tui_command(slash.name, slash.argument)
             return True
@@ -531,6 +536,17 @@ class DeepyTuiApp(App[None]):
             return
         if name == "mcp":
             self.push_screen(InfoScreen("Deepy TUI MCP", self._mcp_markdown()))
+            return
+        if name == "ps":
+            self.push_screen(
+                InfoScreen(
+                    "Deepy TUI Background Tasks",
+                    self._background_tasks_markdown(),
+                )
+            )
+            return
+        if name == "stop":
+            await self._stop_background_tasks(argument.strip())
             return
         if name == "new":
             await self._new_session()
@@ -618,6 +634,81 @@ class DeepyTuiApp(App[None]):
         for key, value in report.mcp.items():
             lines.append(f"- {key}: `{value}`")
         return "\n".join(lines)
+
+    def _background_tasks_markdown(self) -> str:
+        tasks = self.background_tasks.list()
+        if not tasks:
+            return "# Background Tasks\n\nNo background tasks."
+        lines = ["# Background Tasks", ""]
+        for task in tasks:
+            lines.append(f"- `{task.id}` {task.status}: `{task.command}`")
+            details = _format_tui_background_task_details(task)
+            if details:
+                lines.append(f"  - {details}")
+        return "\n".join(lines)
+
+    async def _stop_background_tasks(self, selection: str = "") -> None:
+        running_tasks = self.background_tasks.list(active_only=True)
+        if not running_tasks:
+            await self._append_block(InfoBlock("No running background tasks."))
+            self._update_status("Idle")
+            return
+        target = await self._resolve_background_stop_target(running_tasks, selection)
+        if target is None:
+            self._update_status("Stop cancelled")
+            return
+        if target == "__invalid__":
+            await self._append_block(ErrorBlock("Invalid background task selection."))
+            self._update_status("Idle")
+            return
+        if target == "all":
+            summary = self.background_tasks.stop_all(force_after_grace=True)
+            count = len(summary.stopped)
+            task_label = "task" if count == 1 else "tasks"
+            await self._append_block(InfoBlock(f"Stop requested for {count} background {task_label}."))
+            self._update_status("Idle")
+            return
+        snapshot = self.background_tasks.stop(target, force_after_grace=True)
+        if snapshot is None:
+            await self._append_block(ErrorBlock(f"Background task not found: {target}"))
+            self._update_status("Idle")
+            return
+        await self._append_block(InfoBlock(f"Stop requested for background task {snapshot.id}."))
+        self._update_status("Idle")
+
+    async def _resolve_background_stop_target(
+        self,
+        running_tasks: Sequence[BackgroundTaskSnapshot],
+        selection: str,
+    ) -> str | None:
+        if selection:
+            return _parse_tui_background_stop_selection(running_tasks, selection)
+        choices = [
+            Choice(
+                f"{index}. {task.id} {task.status}",
+                task.id,
+                task.command,
+            )
+            for index, task in enumerate(running_tasks, start=1)
+        ]
+        choices.append(
+            Choice(
+                f"{len(running_tasks) + 1}. all",
+                "all",
+                "Stop all running background tasks",
+            )
+        )
+        choices.append(
+            Choice(
+                f"{len(running_tasks) + 2}. cancel",
+                "cancel",
+                "Return without stopping tasks",
+            )
+        )
+        selected = await self.push_screen_wait(ChoiceScreen("Stop background task", choices))
+        if not selected:
+            return None
+        return _parse_tui_background_stop_selection(running_tasks, selected)
 
     async def _new_session(self) -> None:
         self.state = set_session_id(set_pending_questions(reset_turn_buffers(self.state), []), None)
@@ -1208,6 +1299,7 @@ class DeepyTuiApp(App[None]):
                 should_interrupt=lambda: self.state.interrupt_requested,
                 session_id=self.state.session_id,
                 skill_names=skill_names,
+                background_tasks=self.background_tasks,
             )
         except Exception as exc:
             self.post_message(TurnFailedMessage(exc))
@@ -1387,9 +1479,17 @@ class DeepyTuiApp(App[None]):
             self._update_status(event.text)
 
     async def _append_block(self, block: Any) -> None:
-        transcript = self.query_one("#transcript", VerticalScroll)
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+        except NoMatches:
+            return
+        if not transcript.is_attached:
+            return
         anchored = self._transcript_is_anchored(transcript)
-        await transcript.mount(block)
+        try:
+            await transcript.mount(block)
+        except MountError:
+            return
         self._scroll_transcript_to_end(force=anchored)
 
     async def _clear_transcript(self) -> None:
@@ -1519,6 +1619,7 @@ class DeepyTuiApp(App[None]):
             self.state.session_id,
             project_root=self.project_root,
             settings=self.settings,
+            background_tasks=self.background_tasks,
         )
 
     def action_confirm_quit(self) -> None:
@@ -1532,7 +1633,11 @@ class DeepyTuiApp(App[None]):
     def _exit_with_summary(self) -> None:
         self._record_session_cost_end()
         self.exit_summary_text = self._build_exit_summary_text()
+        self._cleanup_background_tasks()
         self.exit()
+
+    def _cleanup_background_tasks(self) -> None:
+        self.background_tasks.stop_all(force_after_grace=True)
 
     def _build_exit_summary_text(self) -> str:
         session_entry: SessionEntry | None = None
@@ -1880,6 +1985,7 @@ def _build_tui_status_context(
     *,
     project_root: Path,
     settings: Settings,
+    background_tasks: BackgroundTaskManager | None = None,
 ) -> str:
     segments = [
         f"provider {settings.model.provider}",
@@ -1891,6 +1997,10 @@ def _build_tui_status_context(
     mcp_count = _configured_mcp_server_count(settings, project_root)
     if mcp_count > 0:
         segments.append(f"mcp {mcp_count}")
+    if background_tasks is not None:
+        running = background_tasks.running_count()
+        if running:
+            segments.append(f"bg {running}")
     segments.append(
         _format_tui_context_window_status(
             _tui_session_entry(project_root, session_id),
@@ -1912,6 +2022,42 @@ def _configured_mcp_server_count(settings: Settings, project_root: Path) -> int:
         return len(load_mcp_config(settings, project_root=project_root).definitions)
     except Exception:
         return 0
+
+
+def _format_tui_background_task_details(task: BackgroundTaskSnapshot) -> str:
+    details: list[str] = []
+    if task.pid is not None:
+        details.append(f"pid `{task.pid}`")
+    if task.exit_code is not None:
+        details.append(f"exit `{task.exit_code}`")
+    if task.stop_requested:
+        details.append("stop requested")
+    return ", ".join(details)
+
+
+def _parse_tui_background_stop_selection(
+    running_tasks: Sequence[BackgroundTaskSnapshot],
+    selection: str,
+) -> str | None:
+    normalized = selection.strip()
+    if not normalized:
+        return None
+    if normalized.lower() in {"cancel", "c", "q", "quit"}:
+        return None
+    if normalized.lower() in {"all", "a", "*"}:
+        return "all"
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if index == len(running_tasks):
+            return "all"
+        if index == len(running_tasks) + 1:
+            return None
+        if 0 <= index < len(running_tasks):
+            return running_tasks[index].id
+        return "__invalid__"
+    if any(task.id == normalized for task in running_tasks):
+        return normalized
+    return "__invalid__"
 
 
 def _format_tui_context_window_status(

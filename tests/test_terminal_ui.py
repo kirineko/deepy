@@ -14,6 +14,7 @@ import pytest
 from rich.cells import cell_len
 from rich.console import Console
 
+from deepy.background_tasks import BackgroundTaskManager
 from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig, load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
@@ -1568,6 +1569,8 @@ def test_help_slash_command_includes_model(tmp_path):
     assert "/model" in rendered
     assert "/init" in rendered
     assert "/mcp" in rendered
+    assert "/ps" in rendered
+    assert "/stop" in rendered
     assert "/input-suggestion" in rendered
     assert "/compact [focus]" in rendered
 
@@ -1645,6 +1648,170 @@ def test_mcp_slash_command_shows_active_server_and_preferred_tool(tmp_path):
     assert next_session == "s1"
     assert "tavily (active)" in rendered
     assert "mcp_tavily__tavily_search *web-search*" in rendered
+
+
+def test_ps_slash_command_shows_no_background_tasks(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+
+    next_session = _handle_slash_command(
+        SlashCommand("ps"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+    )
+
+    assert next_session == "s1"
+    assert "No background tasks." in console.export_text()
+
+
+def test_ps_and_stop_slash_commands_manage_background_tasks(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+    task = manager.start(
+        command="sleep",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("ps"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+    )
+    stopped_session = _handle_slash_command(
+        SlashCommand("stop"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+    )
+
+    manager.stop_all(force_after_grace=True)
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert stopped_session == "s1"
+    assert task.id in rendered
+    assert "running" in rendered
+    assert "Stop requested for 1 background task." in rendered
+
+
+def test_stop_slash_command_can_select_single_background_task(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+    first = manager.start(
+        command="first",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+    second = manager.start(
+        command="second",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("stop"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+        input_func=lambda prompt: second.id,
+    )
+
+    manager.wait(second.id, timeout_seconds=1)
+    manager.stop_all(force_after_grace=True)
+    rendered = console.export_text()
+    assert next_session == "s1"
+    assert first.id in rendered
+    assert second.id in rendered
+    assert "3. all" in rendered
+    assert "4. cancel" in rendered
+    assert f"Stop requested for background task {second.id}." in rendered
+
+
+def test_stop_slash_command_can_cancel_with_empty_selection(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+    manager.start(
+        command="first",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("stop"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+        input_func=lambda prompt: "",
+    )
+
+    manager.stop_all(force_after_grace=True)
+    assert next_session == "s1"
+    assert "Stop canceled." in console.export_text()
+
+
+def test_stop_slash_command_can_cancel_with_number_selection(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+    manager.start(
+        command="first",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("stop"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+        input_func=lambda prompt: "3",
+    )
+
+    assert next_session == "s1"
+    assert manager.running_count() == 1
+    manager.stop_all(force_after_grace=True)
+    assert "Stop canceled." in console.export_text()
+
+
+def test_stop_slash_command_accepts_all_argument(tmp_path):
+    console = Console(record=True)
+    manager = BackgroundTaskManager(base_dir=tmp_path / "bg")
+    manager.start(
+        command="first",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+    manager.start(
+        command="second",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    next_session = _handle_slash_command(
+        SlashCommand("stop", "all"),
+        console,
+        tmp_path,
+        "s1",
+        background_tasks=manager,
+    )
+
+    assert next_session == "s1"
+    assert manager.running_count() == 0
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(),
+        background_tasks=manager,
+    )
+    assert "bg " not in toolbar
+    assert "Stop requested for 2 background tasks." in console.export_text()
 
 
 def test_run_interactive_init_routes_to_model_prompt(tmp_path, monkeypatch):
@@ -2533,11 +2700,13 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
             model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
         ),
         mcp_runtime=runtime,
+        background_tasks=SimpleNamespace(running_count=lambda: 2),  # type: ignore[arg-type]
         active_work="thinking 3s",
     )
 
     assert footer.plain.startswith("provider deepseek · thinking 3s · model deepseek-v4-pro[max]")
     assert "mcp 1" in footer.plain
+    assert "bg 2" in footer.plain
     assert "[AGENTS.md]" in footer.plain
     assert "MCP" not in footer.plain
     assert "mcp:" not in footer.plain
@@ -2545,6 +2714,7 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
     assert footer.to_prompt_toolkit()[0] == ("class:toolbar.title", "provider")
     assert ("class:toolbar.active", "thinking 3s") in footer.to_prompt_toolkit()
     assert ("class:toolbar.title", "mcp") in footer.to_prompt_toolkit()
+    assert ("class:toolbar.title", "bg") in footer.to_prompt_toolkit()
     assert ("class:toolbar.loaded", "[AGENTS.md]") in footer.to_prompt_toolkit()
 
 
@@ -2554,7 +2724,16 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     calls: list[dict[str, object]] = []
 
     async def fake_run_once(prompt, **kwargs):
-        calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
+        calls.append(
+            {
+                "prompt": prompt,
+                "session_id": kwargs.get("session_id"),
+                "background_tasks": isinstance(
+                    kwargs.get("background_tasks"),
+                    BackgroundTaskManager,
+                ),
+            }
+        )
         session_id = "s1" if prompt == "first" else "s2"
         usage = TokenUsage(
             prompt_tokens=900 if prompt == "first" else 50,
@@ -2583,8 +2762,8 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     rendered = console.export_text()
     assert result == 0
     assert calls == [
-        {"prompt": "first", "session_id": None},
-        {"prompt": "second", "session_id": None},
+        {"prompt": "first", "session_id": None, "background_tasks": True},
+        {"prompt": "second", "session_id": None, "background_tasks": True},
     ]
     assert "Started a new session." in rendered
     assert "context used" not in rendered
@@ -2985,6 +3164,55 @@ def test_run_interactive_requires_two_ctrl_d_to_exit(tmp_path, monkeypatch):
     assert result == 0
     assert "Press Ctrl+D again to exit." in rendered
     assert "Deepy Session Summary" in rendered
+
+
+def test_run_interactive_exit_stops_background_tasks_before_mcp_cleanup(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    events: list[str] = []
+
+    class FakeBackgroundTaskManager:
+        def __init__(self):
+            self.running = 1
+
+        def running_count(self):
+            return self.running
+
+        def stop_all(self, *, force_after_grace=True):
+            events.append("stop_all")
+            self.running = 0
+            return SimpleNamespace(stopped=(object(),))
+
+        def list(self, *, active_only=False):
+            return []
+
+    class FakeMcpRuntime:
+        active_servers = []
+        statuses = []
+
+        def __init__(self, settings, *, project_root):
+            pass
+
+        async def connect(self):
+            events.append("connect")
+
+        async def cleanup(self):
+            events.append("cleanup")
+
+    monkeypatch.setattr(terminal, "BackgroundTaskManager", FakeBackgroundTaskManager)
+    monkeypatch.setattr(terminal, "DeepyMcpRuntime", FakeMcpRuntime)
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: "/exit")
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert events == ["connect", "stop_all", "cleanup"]
+    assert "Stopped 1 background task." in console.export_text()
 
 
 def test_run_interactive_exit_summary_includes_session_cost(tmp_path, monkeypatch):

@@ -222,6 +222,8 @@ Inside an interactive Deepy session:
 ```text
 /model       Select provider, model, and thinking mode
 /status      Show usage, context pressure, and DeepSeek balance
+/ps          Show managed background shell tasks
+/stop        Choose background shell tasks to stop
 /resume      Resume a previous project session
 /new         Start a fresh session
 /compact     Compact the active session context
@@ -238,6 +240,10 @@ Typical usage:
 Ask Deepy to inspect a bug, edit files, run tests, and summarize what changed.
 Use @ to reference files precisely.
 Use ! for commands you want to run directly without model mediation.
+For long-running servers or watchers, Deepy can run shell commands as managed
+background tasks. Their output is captured separately; use `/ps`, `/stop` to
+choose one task or all tasks, or use the model-facing `task_output` tool to
+inspect and manage them.
 Use /resume when returning to a project later.
 Use /compact when a long session needs a durable summary.
 ```
@@ -344,6 +350,8 @@ Inside the interactive terminal:
 /skill:<name> [request] Invoke a skill directly
 /init                   Create or update project AGENTS.md
 /mcp                    Show MCP server status and tools
+/ps                     Show managed background shell tasks
+/stop                   Choose background shell tasks to stop
 /status                 Show usage, context pressure, and DeepSeek balance
 ```
 

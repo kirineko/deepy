@@ -13,6 +13,7 @@ from deepy.sessions.jsonl import DeepyJsonlSession
 from deepy.skills import find_skill
 from deepy.mcp import DeepyMcpRuntime
 from deepy.todos import normalize_todo_items
+from deepy.background_tasks import BackgroundTaskManager
 from deepy.tools import ToolRuntime
 from deepy.usage import TokenUsage, merge_usage, normalize_usage, usage_from_run_result
 from deepy.utils import json as json_utils
@@ -56,6 +57,7 @@ async def run_prompt_once(
     session_id: str | None = None,
     skill_names: list[str] | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
+    background_tasks: BackgroundTaskManager | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
 ) -> RunSummary:
@@ -73,6 +75,8 @@ async def run_prompt_once(
     runtime = ToolRuntime(
         cwd=root,
         settings=resolved_settings,
+        background_tasks=background_tasks or BackgroundTaskManager(),
+        should_interrupt=should_interrupt,
         todo_items=initial_todos or [],
     )
     created_mcp_runtime: DeepyMcpRuntime | None = None

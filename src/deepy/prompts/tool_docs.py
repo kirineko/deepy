@@ -5,6 +5,9 @@ from importlib import resources
 
 TOOL_DOC_FILES = (
     "shell.md",
+    "task_list.md",
+    "task_output.md",
+    "task_stop.md",
     "Search.md",
     "read_file.md",
     "edit_text.md",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -126,6 +127,8 @@ def test_tui_help_markdown_advertises_ctrl_j_newline(tmp_path) -> None:
     help_markdown = app._help_markdown()
 
     assert "- **Ctrl+J** - insert newline" in help_markdown
+    assert "**/ps**" in help_markdown
+    assert "**/stop**" in help_markdown
     assert "Shift+Enter" not in help_markdown
 
 
@@ -139,6 +142,11 @@ async def test_tui_exit_slash_command_exits_without_model_turn(tmp_path, monkeyp
         return RunSummary(output="unexpected", session_id="s1", complete=True)
 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app.background_tasks.start(
+        command="sleep",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -152,6 +160,7 @@ async def test_tui_exit_slash_command_exits_without_model_turn(tmp_path, monkeyp
         assert calls == []
         assert app.exit_summary_text is not None
         assert "Deepy Session Summary" in app.exit_summary_text
+        assert app.background_tasks.running_count() == 0
 
 
 @pytest.mark.asyncio
@@ -320,11 +329,11 @@ def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_tui_reuses_session_id_between_turns(tmp_path) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, bool]] = []
 
     async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
         session_id = kwargs.get("session_id")
-        calls.append((prompt, session_id))
+        calls.append((prompt, session_id, kwargs.get("background_tasks") is app.background_tasks))
         return RunSummary(output=f"answer: {prompt}", session_id=session_id or "s1", complete=True)
 
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
@@ -342,7 +351,7 @@ async def test_tui_reuses_session_id_between_turns(tmp_path) -> None:
         await pilot.press("enter")
         await pilot.pause(0.2)
 
-        assert calls == [("first", None), ("second", "s1")]
+        assert calls == [("first", None, True), ("second", "s1", True)]
         app.exit()
 
 
@@ -1167,6 +1176,11 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
 
     async with app.run_test(size=(120, 32)) as pilot:
         await pilot.pause(0.01)
+        app.background_tasks.start(
+            command="worker",
+            argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+            cwd=tmp_path,
+        )
         app.state = app.state.__class__(session_id="s1")
         app._update_status("Idle")
         await pilot.pause(0.1)
@@ -1175,8 +1189,10 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         assert "model deepseek-v4-pro[max]" in left
         assert "cwd" in left
         assert "mcp 1" in left
+        assert "bg 1" in left
         assert "ctx 900/1K" in left
         assert "compact next" in left
+        app.background_tasks.stop_all(force_after_grace=True)
         app.exit()
 
 
@@ -1686,6 +1702,56 @@ async def test_tui_help_command_opens_info_screen(tmp_path) -> None:
 
         assert isinstance(app.screen, InfoScreen)
         assert "Deepy TUI Commands" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ps_command_opens_background_task_screen(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.background_tasks.start(
+        command="worker",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/ps"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, InfoScreen)
+        assert "Background Tasks" in app.screen.markdown
+        assert "worker" in app.screen.markdown
+        app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_stop_command_requests_background_task_stop(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.background_tasks.start(
+        command="worker",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/stop"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, ChoiceScreen)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        blocks = list(app.query(InfoBlock))
+        assert any("Stop requested for background task" in block.body for block in blocks)
+        left = str(app.query_one("#status-left", Label).content)
+        assert "bg " not in left
         app.exit()
 
 

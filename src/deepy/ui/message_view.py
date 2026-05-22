@@ -40,6 +40,9 @@ TOOL_DISPLAY_LABELS = {
     "write_file": "Write",
     "read_file": "Read",
     "shell": "Shell",
+    "task_list": "Tasks",
+    "task_output": "Task Output",
+    "task_stop": "Stop Task",
     "todo_write": "Todo",
     "load_skill": "Load Skill",
 }
@@ -116,6 +119,12 @@ def parse_tool_output(output: str) -> ToolOutputView:
         detail = _string_or_none(metadata_dict.get("name")) or path or ""
     elif name == "Search" and ok_value is True:
         detail = _format_search_output_detail(metadata_dict, text_output)
+    elif metadata_dict.get("kind") == "background_task_launch" and ok_value is True:
+        detail = _string_or_none(metadata_dict.get("taskId")) or _first_nonempty_line(text_output)
+    elif name == "task_list" and ok_value is True:
+        detail = _format_background_task_list_detail(metadata_dict, text_output)
+    elif name in {"task_output", "task_stop"} and ok_value is True:
+        detail = _string_or_none(metadata_dict.get("taskId")) or _first_nonempty_line(text_output)
     else:
         detail = (error or path or _first_nonempty_line(text_output) or "").strip()
     summary = f"{format_tool_display_label(name)} {status}" + (
@@ -890,6 +899,22 @@ def _format_search_output_detail(metadata: dict[str, Any], output: str) -> str:
         details.append("timed out")
     if details:
         return " ".join(details)
+    return _first_nonempty_line(output) or ""
+
+
+def _format_background_task_list_detail(metadata: dict[str, Any], output: str) -> str:
+    tasks = metadata.get("tasks")
+    if isinstance(tasks, list):
+        running = sum(
+            1
+            for item in tasks
+            if isinstance(item, dict) and item.get("status") == "running"
+        )
+        task_label = "task" if len(tasks) == 1 else "tasks"
+        if running:
+            running_label = "running" if running == 1 else "running"
+            return f"{len(tasks)} {task_label}, {running} {running_label}"
+        return f"{len(tasks)} {task_label}"
     return _first_nonempty_line(output) or ""
 
 

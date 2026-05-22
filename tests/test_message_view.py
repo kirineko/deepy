@@ -74,6 +74,40 @@ def test_format_tool_output_summary_summarizes_search_metadata():
     )
 
 
+def test_format_tool_output_summary_summarizes_background_tasks():
+    launch = json.dumps(
+        {
+            "ok": True,
+            "name": "shell",
+            "output": "Started background task bg-1.",
+            "metadata": {"kind": "background_task_launch", "taskId": "bg-1"},
+        }
+    )
+    listing = json.dumps(
+        {
+            "ok": True,
+            "name": "task_list",
+            "output": "bg-1\trunning\tserver",
+            "metadata": {
+                "kind": "background_task_list",
+                "tasks": [{"id": "bg-1", "status": "running"}],
+            },
+        }
+    )
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "task_output",
+            "output": "bg-1\trunning\tserver\n\nready",
+            "metadata": {"kind": "background_task_output", "taskId": "bg-1"},
+        }
+    )
+
+    assert format_tool_output_summary(launch) == "[Shell] ok - bg-1"
+    assert format_tool_output_summary(listing) == "[Tasks] ok - 1 task, 1 running"
+    assert format_tool_output_summary(output) == "[Task Output] ok - bg-1"
+
+
 def test_format_tool_output_summary_uses_error_detail():
     output = (
         '{"ok":false,"name":"shell","output":"stderr","error":"Command exited with code 1.",'

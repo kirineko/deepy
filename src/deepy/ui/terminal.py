@@ -10,7 +10,7 @@ import select
 import shutil
 import threading
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -19,8 +19,11 @@ from rich.cells import cell_len
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.text import Text
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 from deepy import __version__
+from deepy.background_tasks import BackgroundTaskManager, BackgroundTaskSnapshot
 from deepy.config import (
     PROVIDER_CATALOG,
     Settings,
@@ -215,12 +218,14 @@ def run_interactive(
     )
     async_runner = asyncio.Runner()
     mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
+    background_tasks = BackgroundTaskManager()
     async_runner.run(mcp_runtime.connect())
     context_footer = _build_status_footer(
         session_id,
         project_root=root,
         settings=settings,
         mcp_runtime=mcp_runtime,
+        background_tasks=background_tasks,
     )
     output.print(
         build_welcome_panel(
@@ -289,6 +294,7 @@ def run_interactive(
                     project_root=root,
                     settings=settings,
                     mcp_runtime=mcp_runtime,
+                    background_tasks=background_tasks,
                 )
                 continue
 
@@ -314,6 +320,7 @@ def run_interactive(
                         palette=palette,
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
                         anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
@@ -342,6 +349,7 @@ def run_interactive(
                             palette=palette,
                             async_runner=async_runner,
                             mcp_runtime=mcp_runtime,
+                            background_tasks=background_tasks,
                             anchor_status_output=True,
                         )
                         session_id = summary.session_id
@@ -360,6 +368,7 @@ def run_interactive(
                         project_root=root,
                         settings=settings,
                         mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
                     )
                     continue
                 if slash.name == "init":
@@ -376,6 +385,7 @@ def run_interactive(
                         palette=palette,
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
                         anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
@@ -394,6 +404,7 @@ def run_interactive(
                         project_root=root,
                         settings=settings,
                         mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
                     )
                     continue
                 next_session = _handle_slash_command(
@@ -403,8 +414,10 @@ def run_interactive(
                     session_id,
                     loaded_skill_names,
                     settings=settings,
+                    input_func=_prompt_for_background_stop_selection,
                     palette=palette,
                     mcp_runtime=mcp_runtime,
+                    background_tasks=background_tasks,
                 )
                 if next_session == "__exit__":
                     return 0
@@ -423,12 +436,24 @@ def run_interactive(
                         input_suggestions=input_suggestions,
                     )
                 session_id = next_session
-                if slash.name in {"new", "resume", "reset", "model", "compact", "skills", "theme", "mcp"}:
+                if slash.name in {
+                    "new",
+                    "resume",
+                    "reset",
+                    "model",
+                    "compact",
+                    "skills",
+                    "theme",
+                    "mcp",
+                    "ps",
+                    "stop",
+                }:
                     context_footer = _build_status_footer(
                         session_id,
                         project_root=root,
                         settings=settings,
                         mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
                     )
                 continue
 
@@ -445,6 +470,7 @@ def run_interactive(
                 palette=palette,
                 async_runner=async_runner,
                 mcp_runtime=mcp_runtime,
+                background_tasks=background_tasks,
                 anchor_status_output_lines=1 if anchor_status_output else 0,
             )
             session_id = summary.session_id
@@ -473,6 +499,7 @@ def run_interactive(
                     palette=palette,
                     async_runner=async_runner,
                     mcp_runtime=mcp_runtime,
+                    background_tasks=background_tasks,
                     anchor_status_output=True,
                 )
                 session_id = summary.session_id
@@ -491,8 +518,10 @@ def run_interactive(
                 project_root=root,
                 settings=settings,
                 mcp_runtime=mcp_runtime,
+                background_tasks=background_tasks,
             )
     finally:
+        _cleanup_background_tasks(output, background_tasks, palette=palette)
         async_runner.run(mcp_runtime.cleanup())
         async_runner.close()
 
@@ -611,6 +640,7 @@ def _run_once_with_status(
         project_root=project_root if isinstance(project_root, Path) else None,
         settings=settings if isinstance(settings, Settings) else None,
         mcp_runtime=kwargs.get("mcp_runtime"),
+        background_tasks=kwargs.get("background_tasks"),
     )
     renderer: TerminalStreamRenderer | None = None
     started_at = time.monotonic()
@@ -743,6 +773,143 @@ def _handle_local_command(
         console.print(f"[{palette.error}]Failed to persist local command transcript:[/] {exc}")
         return current_session_id
     return session.session_id
+
+
+def _format_background_tasks_for_terminal(
+    background_tasks: BackgroundTaskManager | None,
+    *,
+    active_only: bool = False,
+) -> str:
+    if background_tasks is None:
+        return "Background task management is not available in this UI."
+    tasks = background_tasks.list(active_only=active_only)
+    if not tasks:
+        return "No running background tasks." if active_only else "No background tasks."
+    return "\n".join(_format_background_task_for_terminal(task) for task in tasks)
+
+
+def _format_background_task_for_terminal(task: BackgroundTaskSnapshot) -> str:
+    pid = f" pid={task.pid}" if task.pid is not None else ""
+    exit_code = f" exit={task.exit_code}" if task.exit_code is not None else ""
+    stopped = " stop_requested" if task.stop_requested else ""
+    return f"{task.id}\t{task.status}{pid}{exit_code}{stopped}\t{task.command}"
+
+
+def _stop_background_tasks_for_terminal(
+    background_tasks: BackgroundTaskManager | None,
+    *,
+    selection: str = "",
+    input_func: InputFunc | None = None,
+    console: Console | None = None,
+) -> str:
+    if background_tasks is None:
+        return "Background task management is not available in this UI."
+    running_tasks = background_tasks.list(active_only=True)
+    if not running_tasks:
+        return "No running background tasks."
+    resolved_selection = _resolve_background_stop_selection(
+        running_tasks,
+        selection=selection,
+        input_func=input_func,
+        console=console,
+    )
+    if resolved_selection is None:
+        return "Stop canceled."
+    if resolved_selection == "__invalid__":
+        return "Invalid background task selection."
+    if resolved_selection == "all":
+        return _stop_all_background_tasks_for_terminal(background_tasks)
+    snapshot = background_tasks.stop(resolved_selection, force_after_grace=True)
+    if snapshot is None:
+        return f"Background task not found: {resolved_selection}"
+    return f"Stop requested for background task {snapshot.id}."
+
+
+def _resolve_background_stop_selection(
+    running_tasks: Sequence[BackgroundTaskSnapshot],
+    *,
+    selection: str = "",
+    input_func: InputFunc | None = None,
+    console: Console | None = None,
+) -> str | None:
+    selected = selection.strip()
+    if selected:
+        return _parse_background_stop_selection(running_tasks, selected)
+    if input_func is None:
+        return "all"
+    choices = ["Running background tasks:"]
+    choices.extend(
+        f"{index}. {_format_background_task_for_terminal(task)}"
+        for index, task in enumerate(running_tasks, start=1)
+    )
+    choices.append(f"{len(running_tasks) + 1}. all\tStop all running background tasks")
+    choices.append(f"{len(running_tasks) + 2}. cancel\tReturn without stopping tasks")
+    if console is not None:
+        console.print("\n".join(choices))
+    prompt = "Stop background task number, id, or Esc to cancel"
+    response = input_func(prompt)
+    return _parse_background_stop_selection(running_tasks, response.strip())
+
+
+def _parse_background_stop_selection(
+    running_tasks: Sequence[BackgroundTaskSnapshot],
+    selection: str,
+) -> str | None:
+    normalized = selection.strip()
+    if not normalized:
+        return None
+    if normalized.lower() in {"cancel", "c", "q", "quit"}:
+        return None
+    if normalized.lower() in {"all", "a", "*"}:
+        return "all"
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if index == len(running_tasks):
+            return "all"
+        if index == len(running_tasks) + 1:
+            return None
+        if 0 <= index < len(running_tasks):
+            return running_tasks[index].id
+        return "__invalid__"
+    if any(task.id == normalized for task in running_tasks):
+        return normalized
+    return "__invalid__"
+
+
+def _stop_all_background_tasks_for_terminal(background_tasks: BackgroundTaskManager) -> str:
+    summary = background_tasks.stop_all(force_after_grace=True)
+    count = len(summary.stopped)
+    task_label = "task" if count == 1 else "tasks"
+    return f"Stop requested for {count} background {task_label}."
+
+
+def _prompt_for_background_stop_selection(prompt: str) -> str:
+    bindings = KeyBindings()
+
+    @bindings.add("escape", eager=True)
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        event.app.exit(result="")
+
+    session: PromptSession[str] = PromptSession(key_bindings=bindings)
+    try:
+        return session.prompt(f"{prompt}: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return ""
+
+
+def _cleanup_background_tasks(
+    console: Console,
+    background_tasks: BackgroundTaskManager,
+    *,
+    palette: UiPalette,
+) -> None:
+    running = background_tasks.running_count()
+    if running == 0:
+        return
+    summary = background_tasks.stop_all(force_after_grace=True)
+    count = len(summary.stopped)
+    task_label = "task" if count == 1 else "tasks"
+    console.print(f"[{palette.muted}]Stopped {count} background {task_label}.[/]")
 
 
 @contextlib.contextmanager
@@ -929,6 +1096,7 @@ def _handle_slash_command(
     input_func: InputFunc | None = None,
     palette: UiPalette | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
+    background_tasks: BackgroundTaskManager | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
@@ -944,6 +1112,8 @@ def _handle_slash_command(
         console.print("/skill:NAME  Invoke a skill")
         console.print("/init      Create or update project AGENTS.md")
         console.print("/mcp       Show MCP server status and tools")
+        console.print("/ps        Show background tasks")
+        console.print("/stop      Choose background tasks to stop")
         console.print("/model      Select model and thinking strength")
         console.print("/input-suggestion Toggle input suggestions")
         console.print("/status     Show status, usage, and DeepSeek balance")
@@ -1019,6 +1189,19 @@ def _handle_slash_command(
     if command.name == "mcp":
         statuses = mcp_runtime.statuses if mcp_runtime is not None else []
         console.print(format_mcp_status(statuses))
+        return current_session_id
+    if command.name == "ps":
+        console.print(_format_background_tasks_for_terminal(background_tasks, active_only=False))
+        return current_session_id
+    if command.name == "stop":
+        console.print(
+            _stop_background_tasks_for_terminal(
+                background_tasks,
+                selection=command.argument,
+                input_func=input_func,
+                console=console,
+            )
+        )
         return current_session_id
     if command.name == "compact":
         return _handle_compact_command(
@@ -2363,12 +2546,14 @@ def _format_context_footer(
     project_root: Path | None = None,
     settings: Settings | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
+    background_tasks: BackgroundTaskManager | None = None,
 ) -> str:
     return _build_status_footer(
         session_id,
         project_root=project_root,
         settings=settings,
         mcp_runtime=mcp_runtime,
+        background_tasks=background_tasks,
     ).plain
 
 
@@ -2378,6 +2563,7 @@ def _build_status_footer(
     project_root: Path | None = None,
     settings: Settings | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
+    background_tasks: BackgroundTaskManager | None = None,
     active_work: str | None = None,
 ) -> StatusFooter:
     if settings is None:
@@ -2396,6 +2582,10 @@ def _build_status_footer(
             segments.append(StatusFooterSegment("[AGENTS.md]", "loaded"))
         if mcp_runtime is not None and mcp_runtime.active_servers:
             segments.append(StatusFooterSegment(f"mcp {len(mcp_runtime.active_servers)}", "loaded"))
+        if background_tasks is not None:
+            running_background_tasks = background_tasks.running_count()
+            if running_background_tasks:
+                segments.append(StatusFooterSegment(f"bg {running_background_tasks}", "loaded"))
     else:
         segments.append(StatusFooterSegment("cwd unknown", "metadata"))
 

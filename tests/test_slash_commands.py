@@ -30,6 +30,8 @@ def test_build_slash_commands_prefixes_skills_before_builtins():
         "new",
         "init",
         "mcp",
+        "ps",
+        "stop",
         "status",
         "resume",
         "compact",
@@ -81,6 +83,8 @@ def test_find_exact_slash_command_returns_builtins():
     assert find_exact_slash_command(items, "/model").kind == "model"
     assert find_exact_slash_command(items, "/input-suggestion").kind == "input-suggestion"
     assert find_exact_slash_command(items, "/mcp").kind == "mcp"
+    assert find_exact_slash_command(items, "/ps").kind == "ps"
+    assert find_exact_slash_command(items, "/stop").kind == "stop"
     assert find_exact_slash_command(items, "/status").kind == "status"
     assert find_exact_slash_command(items, "/theme").kind == "theme"
     assert find_exact_slash_command(items, "/reset").kind == "reset"

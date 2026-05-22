@@ -32,6 +32,8 @@ TUI_COMMANDS: tuple[TuiCommand, ...] = (
     TuiCommand("init", "/init", "Create or update project AGENTS.md", "System"),
     TuiCommand("reset", "/reset", "Reset config and run TUI setup", "System"),
     TuiCommand("mcp", "/mcp", "Show MCP status", "Tools"),
+    TuiCommand("ps", "/ps", "Show background tasks", "Tools"),
+    TuiCommand("stop", "/stop", "Choose background tasks to stop", "Tools"),
     TuiCommand("exit", "/exit", "Quit Deepy TUI", "System"),
 )
 

@@ -7,8 +7,10 @@ import json
 import os
 import shlex
 import sys
+import time
 
 import deepy.tools.search as search_module
+from deepy.background_tasks import BackgroundTaskLimitError
 from deepy.config import Settings
 from deepy.config.settings import (
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
@@ -2071,6 +2073,147 @@ def test_shell_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
     assert runtime.running_processes == {}
 
 
+def test_shell_interrupt_terminates_running_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), should_interrupt=lambda: True)
+
+    started = time.monotonic()
+    payload = decode(runtime.shell("sleep 5", timeout_ms=10_000))
+    elapsed = time.monotonic() - started
+
+    assert payload["ok"] is False
+    assert payload["error"] == "Command interrupted by user."
+    assert payload["metadata"]["interrupted"] is True
+    assert runtime.running_processes == {}
+    assert elapsed < 1
+
+
+def test_shell_background_launch_returns_task_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.shell(
+            f"{shlex.quote(sys.executable)} -c \"import time; print('ready', flush=True); time.sleep(.2)\"",
+            run_in_background=True,
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["name"] == "shell"
+    assert payload["metadata"]["kind"] == "background_task_launch"
+    assert payload["metadata"]["runInBackground"] is True
+    assert payload["metadata"]["taskId"].startswith("bg-")
+    assert "Started background task" in payload["output"]
+    output = decode(runtime.task_output(payload["metadata"]["taskId"], block=True, timeout=1))
+    assert output["ok"] is True
+    assert "ready" in output["output"]
+
+
+def test_task_list_output_and_stop_background_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    launched = decode(
+        runtime.shell(
+            f"{shlex.quote(sys.executable)} -c \"import time; print('tick', flush=True); time.sleep(5)\"",
+            run_in_background=True,
+        )
+    )
+    task_id = launched["metadata"]["taskId"]
+
+    tasks = decode(runtime.task_list(active_only=True))
+    assert tasks["ok"] is True
+    assert tasks["metadata"]["kind"] == "background_task_list"
+    assert tasks["metadata"]["tasks"][0]["id"] == task_id
+    assert tasks["metadata"]["tasks"][0]["status"] == "running"
+
+    output = decode(runtime.task_output(task_id))
+    assert output["ok"] is True
+    assert output["metadata"]["kind"] == "background_task_output"
+    assert output["metadata"]["taskId"] == task_id
+
+    stopped = decode(runtime.task_stop(task_id))
+    assert stopped["ok"] is True
+    assert stopped["metadata"]["kind"] == "background_task_stop"
+    runtime.background_tasks.stop_all(force_after_grace=True)
+
+
+def test_task_output_block_waits_for_output_not_completion(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    launched = decode(
+        runtime.shell(
+            f"{shlex.quote(sys.executable)} -c \"import time; print('started', flush=True); time.sleep(5)\"",
+            run_in_background=True,
+        )
+    )
+    task_id = launched["metadata"]["taskId"]
+    started = time.monotonic()
+
+    output = decode(runtime.task_output(task_id, block=True, timeout=5))
+    elapsed = time.monotonic() - started
+    runtime.background_tasks.stop_all(force_after_grace=True)
+
+    assert output["ok"] is True
+    assert "started" in output["output"]
+    assert output["metadata"]["task"]["status"] == "running"
+    assert elapsed < 1
+
+
+def test_task_output_and_stop_report_unknown_task_id(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    output = decode(runtime.task_output("bg-missing"))
+    stopped = decode(runtime.task_stop("bg-missing"))
+
+    assert output["ok"] is False
+    assert output["metadata"]["error_code"] == "background_task_not_found"
+    assert stopped["ok"] is False
+    assert stopped["metadata"]["error_code"] == "background_task_not_found"
+
+
+def test_shell_background_launch_limit_and_failure_are_structured(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    def reject_start(**_kwargs):
+        raise BackgroundTaskLimitError("Background task limit reached (1 running).")
+
+    monkeypatch.setattr(runtime.background_tasks, "start", reject_start)
+    limited = decode(runtime.shell("sleep 5", run_in_background=True))
+
+    assert limited["ok"] is False
+    assert limited["metadata"]["error_code"] == "background_task_limit"
+
+    def fail_start(**_kwargs):
+        raise OSError("launch failed")
+
+    monkeypatch.setattr(runtime.background_tasks, "start", fail_start)
+    failed = decode(runtime.shell("sleep 5", run_in_background=True))
+
+    assert failed["ok"] is False
+    assert failed["metadata"]["error_code"] == "background_task_launch_failed"
+
+
+def test_shell_function_tool_accepts_background_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    shell_tool = next(tool for tool in build_function_tools(runtime) if tool.name == "shell")
+
+    payload = decode(
+        asyncio.run(
+            shell_tool.on_invoke_tool(
+                None,
+                json.dumps({"command": "sleep .2", "run_in_background": True}),
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["kind"] == "background_task_launch"
+    runtime.background_tasks.stop_all(force_after_grace=True)
+
+
 def test_ask_user_question_sets_wait_flag(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
@@ -2288,6 +2431,9 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
 
     assert [tool.name for tool in tools] == [
         "shell",
+        "task_list",
+        "task_output",
+        "task_stop",
         "AskUserQuestion",
         "Search",
         "read_file",
@@ -2304,26 +2450,36 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert shell_tool.name == "shell"
     assert "current runtime shell" in shell_tool.description
     assert "command dialect" in shell_tool.description
+    assert "run_in_background" in shell_tool.description
     assert "persistent bash session" not in shell_tool.description
-    ask_tool = tools[1]
+    task_list_tool = tools[1]
+    assert task_list_tool.name == "task_list"
+    assert "background shell tasks" in task_list_tool.description
+    task_output_tool = tools[2]
+    assert task_output_tool.name == "task_output"
+    assert "captured output" in task_output_tool.description
+    task_stop_tool = tools[3]
+    assert task_stop_tool.name == "task_stop"
+    assert "termination" in task_stop_tool.description
+    ask_tool = tools[4]
     assert ask_tool.name == "AskUserQuestion"
     assert "偏好" in ask_tool.description
     assert "for Chinese requests, ask in Chinese" in ask_tool.description
     assert "low-impact details" in ask_tool.description
-    search_tool = tools[2]
+    search_tool = tools[5]
     assert search_tool.name == "Search"
     assert "without shell grep or rg" in search_tool.description
     assert "Defaults to literal content search" in search_tool.description
-    read_tool = tools[3]
+    read_tool = tools[6]
     assert read_tool.name == "read_file"
     assert "managed text snapshots" in read_tool.description
-    edit_tool = tools[4]
+    edit_tool = tools[7]
     assert edit_tool.name == "edit_text"
     assert "Preferred tool for small single-file exact/string edits" in edit_tool.description
-    write_tool = tools[5]
+    write_tool = tools[8]
     assert write_tool.name == "write_file"
     assert "snapshot_id or expected_hash" in write_tool.description
-    patch_tool = tools[6]
+    patch_tool = tools[9]
     assert patch_tool.name == "apply_patch"
     assert "multiple edits in one file" in patch_tool.description
     assert "operations array" in patch_tool.description
@@ -2340,7 +2496,21 @@ def test_function_tool_schemas_match_shell_tool(tmp_path):
     tools = {tool.name: tool for tool in build_function_tools(runtime)}
 
     assert tools["shell"].params_json_schema["required"] == ["command"]
-    assert list(tools["shell"].params_json_schema["properties"]) == ["command", "description"]
+    assert list(tools["shell"].params_json_schema["properties"]) == [
+        "command",
+        "description",
+        "run_in_background",
+    ]
+    assert tools["task_list"].params_json_schema["required"] == []
+    assert list(tools["task_list"].params_json_schema["properties"]) == ["active_only", "limit"]
+    assert tools["task_output"].params_json_schema["required"] == ["task_id"]
+    assert list(tools["task_output"].params_json_schema["properties"]) == [
+        "task_id",
+        "block",
+        "timeout",
+    ]
+    assert tools["task_stop"].params_json_schema["required"] == ["task_id"]
+    assert list(tools["task_stop"].params_json_schema["properties"]) == ["task_id"]
     assert tools["AskUserQuestion"].params_json_schema["required"] == ["questions"]
     assert list(tools["AskUserQuestion"].params_json_schema["properties"]) == ["questions"]
     assert tools["Search"].params_json_schema["required"] == [

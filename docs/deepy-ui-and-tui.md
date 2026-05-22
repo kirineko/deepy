@@ -20,8 +20,10 @@ Deepy UI 是稳定界面，基于 Rich 和 prompt-toolkit。
 - `shell`、`read`、`modify`、`todo_write`、`AskUserQuestion`、Web、MCP 等工具输出。
 - `/new`、`/resume`、`/sessions`、`/compact` 等 session/context 命令。
 - `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/status`、`/skills` 等管理命令。
+- `/ps` 查看模型启动的后台 shell 任务，`/stop` 可选择停止单个任务或全部运行中的后台任务。
 - `/status` 会显示用量、上下文窗口和 DeepSeek 余额；余额接口只在显式运行 `/status` 时调用。
 - `/exit`、`/quit` 和 Ctrl+D 连按两次会输出统一的 session summary。
+- 退出 Deepy 时会先清理仍在运行的后台任务，再清理 MCP runtime。
 - `!command` 本地命令模式。
 - slash 命令补全和 `@file` 文件补全。
 - prompt history。
@@ -42,6 +44,7 @@ Deepy TUI 是实验界面，基于 Textual。
 - AskUserQuestion 支持单选、多选、自定义回答、取消和同 session 继续。
 - `/new`、`/resume`、`/sessions`、`/compact` 已支持。
 - `/init`、`/reset`、`/model`、`/theme`、`/mcp`、`/status`、`/skills` 已支持。
+- `/ps`、`/stop` 已支持，用于查看后台 shell 任务，并选择停止单个任务或全部任务。
 - `/status` 会显示用量、上下文窗口和 DeepSeek 余额；余额接口只在显式运行 `/status` 时调用。
 - `/exit`、`/quit` 和 Ctrl+D 连按两次会在退出后输出与稳定 UI 一致的 session summary。
 - `!command` 本地命令模式已支持，并复用 shell 工具块显示结果。
@@ -73,8 +76,10 @@ Deepy TUI 是实验界面，基于 Textual。
 | `/theme` | 支持 | 支持 | 已对齐 |
 | `/mcp` | 支持 | 支持 | 已对齐 |
 | `/status` | 支持 | 支持 | 已对齐，只在显式调用时查询余额 |
+| `/ps` / `/stop` | 支持 | 支持 | 已对齐，管理后台 shell 任务 |
 | `/skills` market | 支持 | 支持 | 已对齐 |
 | 退出 summary | 支持 | 支持 | 已对齐，覆盖 `/exit`、`/quit`、Ctrl+D |
+| 退出时清理后台任务 | 支持 | 支持 | 已对齐 |
 | 删除 user/project skill | 支持 | 支持 | 已对齐 |
 | built-in skill 管理显示 | 不显示 | 不显示 | 已对齐 |
 | `!command` | 支持 | 支持 | 已对齐 |

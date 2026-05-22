@@ -31,7 +31,38 @@ def build_function_tools(
         args, error = _tool_args(raw_input, "shell")
         if error is not None:
             return error
-        return runtime.shell(_string_arg(args, "command"), timeout_ms=120_000)
+        return await asyncio.to_thread(
+            runtime.shell,
+            _string_arg(args, "command"),
+            timeout_ms=120_000,
+            run_in_background=_bool_arg(args, "run_in_background", False),
+        )
+
+    async def invoke_task_list(_context: object, raw_input: str) -> str:
+        args, error = _tool_args(raw_input, "task_list")
+        if error is not None:
+            return error
+        return runtime.task_list(
+            active_only=_bool_arg(args, "active_only", False),
+            limit=_int_arg(args, "limit", 20),
+        )
+
+    async def invoke_task_output(_context: object, raw_input: str) -> str:
+        args, error = _tool_args(raw_input, "task_output")
+        if error is not None:
+            return error
+        return await asyncio.to_thread(
+            runtime.task_output,
+            _string_arg(args, "task_id"),
+            block=_bool_arg(args, "block", False),
+            timeout=_int_arg(args, "timeout", 3),
+        )
+
+    async def invoke_task_stop(_context: object, raw_input: str) -> str:
+        args, error = _tool_args(raw_input, "task_stop")
+        if error is not None:
+            return error
+        return runtime.task_stop(_string_arg(args, "task_id"))
 
     async def invoke_ask_user_question(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "AskUserQuestion")
@@ -62,7 +93,8 @@ def build_function_tools(
         args, error = _tool_args(raw_input, "read_file")
         if error is not None:
             return error
-        return runtime.read_file(
+        return await asyncio.to_thread(
+            runtime.read_file,
             _string_arg(args, "file_path"),
             start_line=_int_arg(args, "offset", 1),
             limit=_optional_int_arg(args, "limit"),
@@ -73,7 +105,8 @@ def build_function_tools(
         args, error = _tool_args(raw_input, "edit_text")
         if error is not None:
             return error
-        return runtime.edit_text(
+        return await asyncio.to_thread(
+            runtime.edit_text,
             _optional_string_arg(args, "file_path"),
             _string_arg(args, "old_string"),
             _string_arg(args, "new_string"),
@@ -86,7 +119,8 @@ def build_function_tools(
         args, error = _tool_args(raw_input, "write_file")
         if error is not None:
             return error
-        return runtime.write_file(
+        return await asyncio.to_thread(
+            runtime.write_file,
             _string_arg(args, "file_path"),
             args.get("content"),
             overwrite=_bool_arg(args, "overwrite", False),
@@ -98,25 +132,25 @@ def build_function_tools(
         args, error = _tool_args(raw_input, "apply_patch")
         if error is not None:
             return error
-        return runtime.apply_patch(args.get("operations"))
+        return await asyncio.to_thread(runtime.apply_patch, args.get("operations"))
 
     async def invoke_web_search(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "WebSearch")
         if error is not None:
             return error
-        return runtime.web_search(_string_arg(args, "query"))
+        return await asyncio.to_thread(runtime.web_search, _string_arg(args, "query"))
 
     async def invoke_web_fetch(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "WebFetch")
         if error is not None:
             return error
-        return runtime.web_fetch(_string_arg(args, "url"))
+        return await asyncio.to_thread(runtime.web_fetch, _string_arg(args, "url"))
 
     async def invoke_load_skill(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "load_skill")
         if error is not None:
             return error
-        return runtime.load_skill(_string_arg(args, "name"))
+        return await asyncio.to_thread(runtime.load_skill, _string_arg(args, "name"))
 
     async def invoke_todo_write(_context: object, raw_input: str) -> str:
         args, error = _tool_args(raw_input, "todo_write")
@@ -143,10 +177,38 @@ def build_function_tools(
             name="shell",
             description=(
                 "Execute commands in the current runtime shell. Match the runtime context's "
-                "command dialect and path style."
+                "command dialect and path style. Set run_in_background only for long-running "
+                "servers, watchers, or jobs that should continue while the assistant responds."
             ),
             params_json_schema=SHELL_SCHEMA,
             on_invoke_tool=invoke_shell,
+            strict_json_schema=False,
+        ),
+        make_function_tool(
+            name="task_list",
+            description=(
+                "List background shell tasks started with shell run_in_background. Use this to "
+                "find task ids and current status before inspecting or stopping a task."
+            ),
+            params_json_schema=TASK_LIST_SCHEMA,
+            on_invoke_tool=invoke_task_list,
+            strict_json_schema=False,
+        ),
+        make_function_tool(
+            name="task_output",
+            description=(
+                "Read the captured output for a background shell task. Use block=true when you "
+                "need to wait briefly for completion or new output."
+            ),
+            params_json_schema=TASK_OUTPUT_SCHEMA,
+            on_invoke_tool=invoke_task_output,
+            strict_json_schema=False,
+        ),
+        make_function_tool(
+            name="task_stop",
+            description="Request termination for a background shell task by task id.",
+            params_json_schema=TASK_STOP_SCHEMA,
+            on_invoke_tool=invoke_task_stop,
             strict_json_schema=False,
         ),
         make_function_tool(
@@ -383,8 +445,63 @@ SHELL_SCHEMA: dict[str, Any] = {
                 'words like "complex" or "risk" in the description - just describe what it does.'
             ),
         },
+        "run_in_background": {
+            "type": "boolean",
+            "description": (
+                "Run the command as a managed background task and return immediately. Use only "
+                "for long-running commands such as servers, watchers, or jobs to inspect later."
+            ),
+        },
     },
     "required": ["command"],
+    "additionalProperties": False,
+}
+
+TASK_LIST_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "active_only": {
+            "type": "boolean",
+            "description": "When true, return only currently running background tasks.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Maximum number of background tasks to return.",
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+TASK_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "description": "Background task id returned by shell run_in_background or task_list.",
+        },
+        "block": {
+            "type": "boolean",
+            "description": "Wait briefly before reading output, useful for short jobs that may finish soon.",
+        },
+        "timeout": {
+            "type": "integer",
+            "description": "Maximum seconds to wait when block is true, capped by Deepy for responsiveness.",
+        },
+    },
+    "required": ["task_id"],
+    "additionalProperties": False,
+}
+
+TASK_STOP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "description": "Background task id to stop.",
+        },
+    },
+    "required": ["task_id"],
     "additionalProperties": False,
 }
 ASK_USER_QUESTION_SCHEMA: dict[str, Any] = {
