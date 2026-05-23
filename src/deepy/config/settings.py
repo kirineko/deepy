@@ -323,6 +323,12 @@ def _as_str(value: Any, default: str = "") -> str:
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
+def _as_string_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     provider: str = DEFAULT_PROVIDER
@@ -469,12 +475,29 @@ class WebSearchToolConfig:
 
 
 @dataclass(frozen=True)
-class ToolsConfig:
-    web_search: WebSearchToolConfig = field(default_factory=WebSearchToolConfig)
+class TestShellToolConfig:
+    allow_patterns: tuple[str, ...] = ()
+    approval_required_patterns: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
-        return cls(web_search=WebSearchToolConfig.from_mapping(_as_mapping(raw.get("web_search"))))
+        return cls(
+            allow_patterns=_as_string_tuple(raw.get("allow_patterns")),
+            approval_required_patterns=_as_string_tuple(raw.get("approval_required_patterns")),
+        )
+
+
+@dataclass(frozen=True)
+class ToolsConfig:
+    web_search: WebSearchToolConfig = field(default_factory=WebSearchToolConfig)
+    test_shell: TestShellToolConfig = field(default_factory=TestShellToolConfig)
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
+        return cls(
+            web_search=WebSearchToolConfig.from_mapping(_as_mapping(raw.get("web_search"))),
+            test_shell=TestShellToolConfig.from_mapping(_as_mapping(raw.get("test_shell"))),
+        )
 
 
 @dataclass(frozen=True)

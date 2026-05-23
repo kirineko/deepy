@@ -546,3 +546,20 @@ def test_update_config_model_settings_rejects_invalid_values_without_changing_co
     )
 
     assert config.read_text(encoding="utf-8") == '[model]\nname = "deepseek-v4-pro"\n'
+
+
+def test_load_settings_reads_test_shell_policy_patterns(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[tools.test_shell]
+allow_patterns = ["custom-test *"]
+approval_required_patterns = ["seed-db *"]
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.tools.test_shell.allow_patterns == ("custom-test *",)
+    assert settings.tools.test_shell.approval_required_patterns == ("seed-db *",)

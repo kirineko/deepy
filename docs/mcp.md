@@ -217,6 +217,28 @@ allow_project_config = true
 Only enable project MCP config for repositories you trust. A project-level stdio
 server can start local commands.
 
+## Subagent Search Inheritance
+
+The built-in `explore` subagent may inherit only MCP tools that Deepy has
+identified as preferred web/search tools. Deepy keeps deterministic
+server-prefixed names such as `mcp_tavily__tavily_search` and does not pass
+non-search MCP tools to subagents by default.
+
+Custom subagents can opt out:
+
+```md
+---
+name: docs-research
+description: Search docs and summarize references.
+mcp:
+  inherit_search: false
+---
+
+Read-only research instructions.
+```
+
+This inheritance does not expose MCP secrets in status output.
+
 ## Troubleshooting
 
 Use `/mcp` inside Deepy to inspect server state, tool names, and validation

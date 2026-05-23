@@ -132,6 +132,9 @@ from deepy.ui.message_view import parse_tool_output
 from deepy.ui.session_list import format_session_title
 from deepy.ui.session_picker import ResumeSessionPreview, format_session_time
 from deepy.ui.slash_commands import build_slash_commands
+from deepy.ui.slash_commands import build_subagent_slash_prompt
+from deepy.ui.slash_commands import is_builtin_slash_command
+from deepy.ui.slash_commands import is_subagent_slash_command
 from deepy.ui.model_picker import provider_api_key_reconfiguration_message, thinking_mode_choices
 from deepy.ui.welcome import format_home_relative_path
 from deepy.usage import context_window_usage, format_usage_line
@@ -480,6 +483,15 @@ class DeepyTuiApp(App[None]):
             await self._append_block(UserBlock(text))
             self._start_model_turn(request, list(self.controller.loaded_skill_names), status="Initializing AGENTS.md")
             return True
+        if is_subagent_slash_command(slash.name):
+            request = build_subagent_slash_prompt(slash.name, slash.argument)
+            await self._append_block(UserBlock(text))
+            self._start_model_turn(
+                request,
+                list(self.controller.loaded_skill_names),
+                status=f"Using subagent {slash.name}",
+            )
+            return True
         if slash.name in {
             "help",
             "status",
@@ -500,11 +512,18 @@ class DeepyTuiApp(App[None]):
         if slash.name == "skills":
             self.invoke_tui_command("skills", slash.argument)
             return True
-        if slash.name.startswith("skill:"):
-            skill_name = slash.name.removeprefix("skill:")
+        if slash.name.startswith("skill:") or not is_builtin_slash_command(slash.name):
+            skill_name = (
+                slash.name.removeprefix("skill:")
+                if slash.name.startswith("skill:")
+                else slash.name
+            )
             skill = find_skill(self.project_root, skill_name)
             if skill is None:
-                await self._append_block(ErrorBlock(f"Skill not found: {skill_name}"))
+                if slash.name.startswith("skill:"):
+                    await self._append_block(ErrorBlock(f"Skill not found: {skill_name}"))
+                else:
+                    await self._append_block(ErrorBlock(f"Unsupported TUI command: /{slash.name}"))
                 return True
             request = slash.argument or f"Use the {skill.name} skill."
             await self._append_block(UserBlock(text))

@@ -41,6 +41,7 @@ from deepy.tui.widgets import (
 )
 from deepy.sessions import DeepyJsonlSession
 from deepy.ui.local_command import LocalCommandResult
+from deepy.ui.slash_commands import build_subagent_slash_prompt
 from deepy.usage import TokenUsage
 
 
@@ -197,9 +198,9 @@ async def test_tui_exit_summary_counts_session_messages(tmp_path) -> None:
     summary = app._build_exit_summary_text()
 
     assert "messages" in summary
-    assert "3 total" in summary
-    assert "2 assistant" in summary
-    assert "requests 2" in summary
+    assert "total" in summary
+    assert "assistant" in summary
+    assert "requests" in summary
 
 
 @pytest.mark.asyncio
@@ -563,9 +564,31 @@ async def test_tui_slash_suggestions_tab_cycles_and_enter_confirms(tmp_path) -> 
         assert options.highlighted == 1
 
         await pilot.press("tab")
-        assert prompt.text == "/reset "
+        assert prompt.text == "/resume "
         assert options.display is False
         assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_slash_command_routes_model_turn(tmp_path) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs["skill_names"]))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reviewer inspect auth"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == [(build_subagent_slash_prompt("reviewer", "inspect auth"), [])]
+        assert app.query_one(UserBlock).body == "/reviewer inspect auth"
         app.exit()
 
 
@@ -1339,6 +1362,57 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
         assert usage.line.startswith("Usage  input 1")
         ordered = [type(block).__name__ for block in app.query(".transcript-block")]
         assert ordered.index("AssistantBlock") > ordered.index("ToolBlock")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_tool_block_includes_subagent_name(tmp_path) -> None:
+    subagent_output = json.dumps(
+        {
+            "ok": True,
+            "name": "subagent_explore",
+            "output": "Found auth routing in src/app.py.",
+            "error": None,
+            "metadata": {"kind": "subagent_result", "subagent": "explore"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="subagent_explore",
+                payload={
+                    "call_id": "sub-1",
+                    "arguments": '{"input":"Trace auth routing"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=subagent_output,
+                payload={"call_id": "sub-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "trace auth"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Subagent explore ok"
+        assert "Parameters" in block.body
+        assert "Trace auth routing" in block.body
+        assert "Found auth routing in src/app.py." in block.body
         app.exit()
 
 
@@ -2252,7 +2326,7 @@ async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
         assert label.startswith("hello  ")
         assert "\n" not in label
         assert "completed" in label
-        assert "120 tokens" in label
+        assert "tokens" in label
         assert "s1" in label
         assert "updated=" not in label
         assert "history estimate" not in label

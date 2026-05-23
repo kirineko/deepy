@@ -17,6 +17,7 @@ from typing import Any
 
 from rich.cells import cell_len
 from rich.console import Console
+from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 from prompt_toolkit import PromptSession
@@ -120,6 +121,9 @@ from deepy.ui.skill_picker import (
     show_skill_detail_view,
 )
 from deepy.ui.slash_commands import build_slash_commands
+from deepy.ui.slash_commands import build_subagent_slash_prompt
+from deepy.ui.slash_commands import is_builtin_slash_command
+from deepy.ui.slash_commands import is_subagent_slash_command
 from deepy.ui.status_footer import StatusFooter, StatusFooterSegment
 from deepy.ui.styles import (
     DARK_PALETTE,
@@ -301,23 +305,17 @@ def run_interactive(
 
             slash = parse_slash_command(text)
             if slash is not None:
-                if slash.name.startswith("skill:"):
-                    skill_name = slash.name.removeprefix("skill:")
-                    skill = find_skill(root, skill_name)
-                    if skill is None:
-                        output.print(f"[{palette.error}]Skill not found:[/] {skill_name}")
-                        continue
-                    request = slash.argument or f"Use the {skill.name} skill."
+                if is_subagent_slash_command(slash.name):
                     anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
                     cost_start = _capture_session_cost_start(root, session_id, settings)
                     summary = _run_once_with_status(
                         output,
                         run_once,
-                        request,
+                        build_subagent_slash_prompt(slash.name, slash.argument),
                         project_root=root,
                         settings=settings,
                         session_id=session_id,
-                        skill_names=[skill.name],
+                        skill_names=list(loaded_skill_names),
                         palette=palette,
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
@@ -326,35 +324,6 @@ def run_interactive(
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
-                    clarification_rounds = 0
-                    while summary.status == "waiting_for_user":
-                        if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
-                            output.print(
-                                f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
-                                "clarification rounds. Please continue with a narrower request.[/]"
-                            )
-                            break
-                        response = _collect_pending_question_response(output, summary.pending_questions)
-                        if not response:
-                            break
-                        clarification_rounds += 1
-                        cost_start = _capture_session_cost_start(root, session_id, settings)
-                        summary = _run_once_with_status(
-                            output,
-                            run_once,
-                            response,
-                            project_root=root,
-                            settings=settings,
-                            session_id=session_id,
-                            skill_names=[skill.name],
-                            palette=palette,
-                            async_runner=async_runner,
-                            mcp_runtime=mcp_runtime,
-                            background_tasks=background_tasks,
-                            anchor_status_output=True,
-                        )
-                        session_id = summary.session_id
-                        _record_session_cost_start(root, session_id, cost_start)
                     _print_assistant_output(output, summary.output, palette=palette)
                     _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
                     _prepare_input_suggestion(
@@ -372,6 +341,83 @@ def run_interactive(
                         background_tasks=background_tasks,
                     )
                     continue
+                if slash.name.startswith("skill:") or not is_builtin_slash_command(slash.name):
+                    skill_name = (
+                        slash.name.removeprefix("skill:")
+                        if slash.name.startswith("skill:")
+                        else slash.name
+                    )
+                    skill = find_skill(root, skill_name)
+                    if skill is None:
+                        if slash.name.startswith("skill:"):
+                            output.print(f"[{palette.error}]Skill not found:[/] {skill_name}")
+                            continue
+                    else:
+                        request = slash.argument or f"Use the {skill.name} skill."
+                        anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                        cost_start = _capture_session_cost_start(root, session_id, settings)
+                        summary = _run_once_with_status(
+                            output,
+                            run_once,
+                            request,
+                            project_root=root,
+                            settings=settings,
+                            session_id=session_id,
+                            skill_names=[skill.name],
+                            palette=palette,
+                            async_runner=async_runner,
+                            mcp_runtime=mcp_runtime,
+                            background_tasks=background_tasks,
+                            anchor_status_output_lines=1 if anchor_status_output else 0,
+                        )
+                        session_id = summary.session_id
+                        _record_session_cost_start(root, session_id, cost_start)
+                        clarification_rounds = 0
+                        while summary.status == "waiting_for_user":
+                            if clarification_rounds >= MAX_CLARIFICATION_ROUNDS_PER_TURN:
+                                output.print(
+                                    f"[{palette.muted}]Stopped after {MAX_CLARIFICATION_ROUNDS_PER_TURN} "
+                                    "clarification rounds. Please continue with a narrower request.[/]"
+                                )
+                                break
+                            response = _collect_pending_question_response(output, summary.pending_questions)
+                            if not response:
+                                break
+                            clarification_rounds += 1
+                            cost_start = _capture_session_cost_start(root, session_id, settings)
+                            summary = _run_once_with_status(
+                                output,
+                                run_once,
+                                response,
+                                project_root=root,
+                                settings=settings,
+                                session_id=session_id,
+                                skill_names=[skill.name],
+                                palette=palette,
+                                async_runner=async_runner,
+                                mcp_runtime=mcp_runtime,
+                                background_tasks=background_tasks,
+                                anchor_status_output=True,
+                            )
+                            session_id = summary.session_id
+                            _record_session_cost_start(root, session_id, cost_start)
+                        _print_assistant_output(output, summary.output, palette=palette)
+                        _print_usage_footer(output, summary, settings=settings, project_root=root, palette=palette)
+                        _prepare_input_suggestion(
+                            async_runner,
+                            input_suggestions,
+                            root,
+                            settings,
+                            summary,
+                        )
+                        context_footer = _build_status_footer(
+                            summary.session_id,
+                            project_root=root,
+                            settings=settings,
+                            mcp_runtime=mcp_runtime,
+                            background_tasks=background_tasks,
+                        )
+                        continue
                 if slash.name == "init":
                     anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
                     cost_start = _capture_session_cost_start(root, session_id, settings)
@@ -1110,7 +1156,10 @@ def _handle_slash_command(
         console.print("/skills     Manage skills")
         console.print("/skills show NAME")
         console.print("/skills use NAME")
-        console.print("/skill:NAME  Invoke a skill")
+        console.print("/explore    Delegate investigation to the explore subagent")
+        console.print("/reviewer   Delegate review to the reviewer subagent")
+        console.print("/tester     Delegate verification to the tester subagent")
+        console.print("/NAME       Invoke a skill by name")
         console.print("/init      Create or update project AGENTS.md")
         console.print("/mcp       Show MCP server status and tools")
         console.print("/ps        Show background tasks")
@@ -3164,20 +3213,32 @@ def _print_stream_event(
     if event.kind == "tool_call":
         if reasoning_sink is not None:
             reasoning_sink.flush()
-        summary = format_tool_call_summary(
-            event.name or "tool",
-            _string_payload(event.payload.get("arguments")),
-            project_root=project_root,
+        tool_name = event.name or "tool"
+        arguments = _string_payload(event.payload.get("arguments"))
+        is_subagent = tool_name.startswith("subagent_")
+        summary = (
+            format_tool_display_label(tool_name)
+            if is_subagent
+            else format_tool_call_summary(
+                tool_name,
+                arguments,
+                project_root=project_root,
+            )
         )
         if pending_tool_calls is not None:
             call_id = _string_payload(event.payload.get("call_id"))
             if call_id:
                 pending_tool_calls[call_id] = ToolCallDisplay(
                     summary=summary,
-                    name=event.name or "tool",
+                    name=tool_name,
                 )
                 if reasoning_sink is not None:
                     reasoning_sink.set_tool_status(summary)
+        if is_subagent:
+            console.print(_status_line(f"{summary} started", palette.info))
+            task = _subagent_input_markdown(arguments)
+            if task:
+                console.print(_subagent_input_panel(task, palette=palette, width=console.width))
         return
     if event.kind == "tool_output":
         if reasoning_sink is not None:
@@ -3212,6 +3273,40 @@ def _print_stream_event(
 
 def _string_payload(value: object) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _subagent_input_markdown(arguments: str) -> str:
+    if not arguments.strip():
+        return ""
+    try:
+        parsed = json_utils.loads(arguments)
+    except json_utils.JSONDecodeError:
+        return arguments.strip()
+    if not isinstance(parsed, dict):
+        return arguments.strip()
+    for key in ("input", "task", "prompt", "request"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for value in parsed.values():
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _subagent_input_panel(
+    text: str,
+    *,
+    palette: UiPalette,
+    width: int,
+) -> Panel:
+    return Panel(
+        render_markdown(text, palette=palette, width=max(24, width - 6)),
+        title="Subagent Parameters",
+        border_style=palette.info,
+        padding=(0, 1),
+        expand=False,
+    )
 
 
 def _should_print_tool_output_debug(view: object) -> bool:

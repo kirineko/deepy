@@ -27,6 +27,7 @@ import deepy.ui.terminal as terminal
 from deepy.ui import SlashCommand, parse_slash_command
 from deepy.ui.local_command import LocalCommandResult
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
+from deepy.ui.slash_commands import build_subagent_slash_prompt
 from deepy.ui.skill_picker import SkillMenuAction
 from deepy.ui.terminal import _collect_pending_question_response
 from deepy.ui.terminal import _build_status_footer
@@ -578,6 +579,52 @@ def test_print_stream_event_merges_tool_call_and_output():
     assert "[Read] README.md  ok" in rendered
     assert "tool call:" not in rendered
     assert "tool output:" not in rendered
+
+
+def test_print_stream_event_renders_subagent_lifecycle():
+    console = Console(record=True)
+    pending = {}
+    task = """Please review the project.
+
+## Scope
+- HTML
+- CSS
+"""
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="subagent_explore",
+            payload={"call_id": "sub-1", "arguments": json_utils.dumps({"input": task})},
+        ),
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "sub-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "subagent_explore",
+                    "output": "Found auth routing in src/app.py.",
+                    "metadata": {"kind": "subagent_result", "subagent": "explore"},
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "[Subagent] explore started" in rendered
+    assert "Subagent Parameters" in rendered
+    assert "Please review the project." in rendered
+    assert "Scope" in rendered
+    assert "[Subagent] explore  ok" in rendered
+    assert "[Subagent] explore Please review" not in rendered
 
 
 def test_print_stream_event_renders_retryable_invalid_arguments_quietly():
@@ -3135,9 +3182,38 @@ def test_run_interactive_refreshes_skill_completion_after_market_install(tmp_pat
     )
 
     assert result == 0
-    assert "/skill:demo" not in slash_command_labels[0]
-    assert "/skill:demo" in slash_command_labels[1]
+    assert "/demo" not in slash_command_labels[0]
+    assert "/demo" in slash_command_labels[1]
     assert "Installed skill: demo" in console.export_text()
+
+
+def test_run_interactive_subagent_slash_command_routes_model_turn(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(
+        [
+            "/tester run focused tests",
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+            CTRL_D_EXIT_CONFIRM_SIGNAL,
+        ]
+    )
+    calls: list[tuple[str, list[str]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs):
+        calls.append((prompt, kwargs["skill_names"]))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert calls == [(build_subagent_slash_prompt("tester", "run focused tests"), [])]
 
 
 def test_print_stream_event_suppresses_usage_event_to_avoid_duplicate_footer():

@@ -187,6 +187,8 @@ def tool_status_style(view: ToolOutputView, palette: UiPalette | None = None) ->
 
 
 def format_tool_display_name(name: str) -> str:
+    if name.startswith("subagent_"):
+        return "Subagent"
     if name in TOOL_DISPLAY_LABELS:
         return TOOL_DISPLAY_LABELS[name]
     stripped = name.strip()
@@ -196,6 +198,9 @@ def format_tool_display_name(name: str) -> str:
 
 
 def format_tool_display_label(name: str) -> str:
+    if name.startswith("subagent_"):
+        subagent_name = name.removeprefix("subagent_").replace("_", "-")
+        return f"[Subagent] {subagent_name}"
     return f"[{format_tool_display_name(name)}]"
 
 

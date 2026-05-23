@@ -447,7 +447,7 @@ class ToolBlock(TranscriptBlock):
 
     @classmethod
     def from_call(cls, name: str, arguments: str, *, call_id: str) -> ToolBlock:
-        display_name = format_tool_display_name(name or "tool")
+        display_name = _tool_title_name(name or "tool")
         params = _tool_arguments_body(name or "tool", arguments)
         body = (
             "Waiting for user input."
@@ -478,7 +478,7 @@ class ToolBlock(TranscriptBlock):
         )
 
     def update_from_call(self, name: str, arguments: str) -> None:
-        display_name = format_tool_display_name(name or "tool")
+        display_name = _tool_title_name(name or "tool")
         params = _tool_arguments_body(name or "tool", arguments)
         self.tool_name = name or "tool"
         self.arguments = params
@@ -808,8 +808,15 @@ def _tool_output_title(view: ToolOutputView) -> str:
     if view.name == "load_skill" and view.metadata:
         detail = str(view.metadata.get("name") or detail)
     status = view.status
-    name = format_tool_display_name(view.name)
+    name = _tool_title_name(view.name)
     return f"{name} {status}" + (f" - {detail}" if detail else "")
+
+
+def _tool_title_name(name: str) -> str:
+    if name.startswith("subagent_"):
+        subagent_name = name.removeprefix("subagent_").replace("_", "-")
+        return f"Subagent {subagent_name}"
+    return format_tool_display_name(name)
 
 
 def _tool_arguments_body(name: str, arguments: str) -> str:

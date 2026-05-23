@@ -93,6 +93,7 @@ async def run_prompt_once(
         loaded_skills=loaded_skills,
         mcp_servers=mcp_runtime.active_servers,
         preferred_mcp_web_search_tools=mcp_runtime.preferred_web_search_tools,
+        emit_event=emit_event,
     )
     started_at = time.time()
     try:

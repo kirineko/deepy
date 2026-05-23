@@ -28,6 +28,9 @@ def test_build_deepy_agent_passes_mcp_servers_and_search_guidance(tmp_path):
     assert agent.mcp_config["include_server_in_tool_names"] is True
     assert "mcp_tavily__tavily_search" in agent.instructions
     assert any(tool.name == "WebSearch" for tool in agent.tools)
+    assert {"subagent_explore", "subagent_reviewer", "subagent_tester"}.issubset(
+        {tool.name for tool in agent.tools}
+    )
 
 
 def test_mimo_tool_schema_compatibility_detection():
@@ -122,3 +125,22 @@ def test_build_deepy_agent_preserves_tool_schema_for_non_mimo_models(tmp_path):
         "limit",
         "pages",
     ]
+
+
+def test_build_deepy_agent_exposes_subagents_without_raw_shell_in_tester(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    agent = build_deepy_agent(
+        Settings(),
+        runtime,
+        project_root=tmp_path,
+        provider=ProviderBundle(
+            client=object(),
+            model="test-model",
+            model_settings=ModelSettings(),
+        ),
+    )
+
+    subagent_names = {tool.name for tool in agent.tools if tool.name.startswith("subagent_")}
+
+    assert subagent_names == {"subagent_explore", "subagent_reviewer", "subagent_tester"}
+    assert "test_shell" not in {tool.name for tool in agent.tools}

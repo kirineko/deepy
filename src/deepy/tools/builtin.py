@@ -42,6 +42,7 @@ from .shell_utils import build_disable_extglob_command
 from .shell_utils import build_shell_init_command
 from .shell_utils import detect_runtime_environment
 from .shell_utils import rewrite_windows_null_redirect
+from .test_shell import TestShellPolicy, run_test_shell_command
 
 
 DEFAULT_LINE_LIMIT = 2_000
@@ -1440,6 +1441,7 @@ class ToolRuntime:
     should_interrupt: Callable[[], bool] | None = None
     web_search_calls: int = 0
     todo_items: list[TodoItem] = field(default_factory=list)
+    test_shell_approvals: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         raw_items = [
@@ -2703,6 +2705,29 @@ class ToolRuntime:
             output=output,
             metadata=metadata,
         ).to_json()
+
+    def test_shell(
+        self,
+        command: str,
+        timeout_ms: int = 120_000,
+        *,
+        approval_token: str | None = None,
+    ) -> str:
+        return run_test_shell_command(
+            command,
+            cwd=self.cwd,
+            policy=TestShellPolicy(
+                allow_patterns=self.settings.tools.test_shell.allow_patterns,
+                approval_required_patterns=(
+                    self.settings.tools.test_shell.approval_required_patterns
+                ),
+            ),
+            platform_name=self.platform_name,
+            timeout_ms=timeout_ms,
+            should_interrupt=self.should_interrupt,
+            approval_token=approval_token,
+            approved_commands=self.test_shell_approvals,
+        )
 
     def _wait_for_shell_process(self, process: subprocess.Popen[bytes], *, timeout: float) -> bool:
         deadline = time.monotonic() + timeout

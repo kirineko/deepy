@@ -8,6 +8,7 @@ TOOL_DOC_FILES = (
     "task_list.md",
     "task_output.md",
     "task_stop.md",
+    "test_shell.md",
     "Search.md",
     "read_file.md",
     "edit_text.md",

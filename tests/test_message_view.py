@@ -10,6 +10,7 @@ from deepy.ui.message_view import format_tool_output_summary
 from deepy.ui.message_view import format_tool_progress_summary
 from deepy.ui.message_view import format_tool_call_summary
 from deepy.ui.message_view import format_tool_display_label
+from deepy.utils import json as json_utils
 from deepy.ui.message_view import build_thinking_summary
 from deepy.ui.message_view import build_tool_params_snippet
 from deepy.ui.message_view import build_tool_result_snippet
@@ -163,6 +164,23 @@ def test_format_tool_display_label_normalizes_protocol_names():
     assert format_tool_display_label("edit_text") == "[Edit]"
     assert format_tool_display_label("todo_write") == "[Todo]"
     assert format_tool_display_label("load_skill") == "[Load Skill]"
+    assert format_tool_display_label("subagent_tester") == "[Subagent] tester"
+
+
+def test_format_tool_output_summary_renders_subagent_result():
+    output = json_utils.dumps(
+        {
+            "ok": True,
+            "name": "subagent_explore",
+            "output": "Found auth routing in src/app.py.",
+            "metadata": {"kind": "subagent_result", "subagent": "explore"},
+        }
+    )
+
+    assert (
+        format_tool_output_summary(output)
+        == "[Subagent] explore ok - Found auth routing in src/app.py."
+    )
 
 
 def test_todo_tool_params_snippet_hides_raw_json():

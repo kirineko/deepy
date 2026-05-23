@@ -19,6 +19,7 @@ def build_function_tools(
     *,
     mimo_schema_compatibility: bool = False,
     preferred_mcp_web_search_tools: list[str] | None = None,
+    include_tools: set[str] | frozenset[str] | None = None,
 ) -> list[Tool]:
     from agents.tool import FunctionTool
 
@@ -37,6 +38,18 @@ def build_function_tools(
             _string_arg(args, "command"),
             timeout_ms=120_000,
             run_in_background=_bool_arg(args, "run_in_background", False),
+        )
+        return _merge_tool_result_metadata(result, repair_metadata)
+
+    async def invoke_test_shell(_context: object, raw_input: str) -> str:
+        args, error, repair_metadata = _tool_args(raw_input, "test_shell", TEST_SHELL_SCHEMA)
+        if error is not None:
+            return error
+        result = await asyncio.to_thread(
+            runtime.test_shell,
+            _string_arg(args, "command"),
+            _int_arg(args, "timeout_ms", 120_000),
+            approval_token=_optional_string_arg(args, "approval_token"),
         )
         return _merge_tool_result_metadata(result, repair_metadata)
 
@@ -200,7 +213,7 @@ def build_function_tools(
             "explicitly requests Deepy's built-in search. Prefer WebFetch for exact URLs."
         )
 
-    return [
+    tools = [
         make_function_tool(
             name="shell",
             description=(
@@ -211,6 +224,17 @@ def build_function_tools(
             params_json_schema=SHELL_SCHEMA,
             on_invoke_tool=invoke_shell,
             strict_json_schema=False,
+        ),
+        make_function_tool(
+            name="test_shell",
+            description=(
+                "Run constrained development verification commands for tester subagents. "
+                "The command is parsed without an unrestricted shell, classified by policy, "
+                "and may return approval_required instead of executing."
+            ),
+            params_json_schema=TEST_SHELL_SCHEMA,
+            on_invoke_tool=invoke_test_shell,
+            strict_json_schema=True,
         ),
         make_function_tool(
             name="task_list",
@@ -343,6 +367,10 @@ def build_function_tools(
             strict_json_schema=False,
         ),
     ]
+    if include_tools is not None:
+        allowed = set(include_tools)
+        return [tool for tool in tools if tool.name in allowed]
+    return [tool for tool in tools if tool.name != "test_shell"]
 
 
 def make_mimo_compatible_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -683,6 +711,32 @@ SHELL_SCHEMA: dict[str, Any] = {
             "description": (
                 "Run the command as a managed background task and return immediately. Use only "
                 "for long-running commands such as servers, watchers, or jobs to inspect later."
+            ),
+        },
+    },
+    "required": ["command"],
+    "additionalProperties": False,
+}
+
+TEST_SHELL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "The verification command to classify and execute if allowed.",
+        },
+        "description": {
+            "type": "string",
+            "description": "Short description of the verification purpose.",
+        },
+        "timeout_ms": {
+            "type": "integer",
+            "description": "Maximum runtime in milliseconds, capped by Deepy.",
+        },
+        "approval_token": {
+            "type": ["string", "null"],
+            "description": (
+                "Approval token returned by a prior approval_required result for the same command."
             ),
         },
     },
