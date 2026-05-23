@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -246,19 +247,18 @@ def _split_frontmatter(text: str) -> tuple[str, str, str | None]:
 def _parse_tools(tools_value: object, disallowed_value: object) -> tuple[tuple[str, ...], str | None]:
     if tools_value is None:
         tools = list(DEFAULT_CUSTOM_TOOLS)
-    elif isinstance(tools_value, list) and all(isinstance(item, str) for item in tools_value):
-        tools = [_canonical_tool_name(item) for item in tools_value]
     else:
-        return (), "tools must be a list of supported tool names."
+        raw_tools = _string_list(tools_value)
+        if raw_tools is None:
+            return (), "tools must be a list of supported tool names."
+        tools = [_canonical_tool_name(item) for item in raw_tools]
 
     disallowed: set[str] = set()
     if disallowed_value is not None:
-        if not (
-            isinstance(disallowed_value, list)
-            and all(isinstance(item, str) for item in disallowed_value)
-        ):
+        raw_disallowed = _string_list(disallowed_value)
+        if raw_disallowed is None:
             return (), "disallowedTools must be a list of tool names."
-        disallowed = {_canonical_tool_name(item) for item in disallowed_value}
+        disallowed = {_canonical_tool_name(item) for item in raw_disallowed}
 
     unsupported = sorted(
         {
@@ -283,16 +283,28 @@ def _parse_tools(tools_value: object, disallowed_value: object) -> tuple[tuple[s
 def _parse_mcp(value: object) -> tuple[SubagentMcpConfig, str | None]:
     if value is None:
         return SubagentMcpConfig(), None
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return SubagentMcpConfig(), "mcp must be a mapping."
+    mcp = {str(key): item for key, item in value.items()}
     allowed_keys = {"inherit_search"}
-    unknown = sorted(str(key) for key in value if key not in allowed_keys)
+    unknown = sorted(key for key in mcp if key not in allowed_keys)
     if unknown:
         return SubagentMcpConfig(), "Unsupported mcp options: " + ", ".join(unknown)
-    inherit = value.get("inherit_search", False)
+    inherit = mcp.get("inherit_search", False)
     if not isinstance(inherit, bool):
         return SubagentMcpConfig(), "mcp.inherit_search must be true or false."
     return SubagentMcpConfig(inherit_search=inherit), None
+
+
+def _string_list(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        result.append(item)
+    return result
 
 
 def _canonical_tool_name(value: str) -> str:
