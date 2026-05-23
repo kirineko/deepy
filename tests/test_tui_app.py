@@ -374,10 +374,18 @@ async def test_tui_prompt_newline_slash_and_file_suggestions(tmp_path) -> None:
 
         panel.refresh_suggestions("/")
         assert any(suggestion.startswith("/model") for suggestion in panel.suggestions)
+        assert any(suggestion.startswith("/reviewer") for suggestion in panel.suggestions)
+        assert any(suggestion.startswith("/skill-creator") for suggestion in panel.suggestions)
 
         panel.refresh_suggestions("/re")
         assert panel.suggestions
-        assert all(suggestion.split(maxsplit=1)[0].startswith("/re") for suggestion in panel.suggestions)
+        assert [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions[:3]] == [
+            "/resume",
+            "/reviewer",
+            "/reset",
+        ]
+        panel.refresh_suggestions("/skill:")
+        assert any(suggestion.startswith("/skill:skill-creator") for suggestion in panel.suggestions)
 
         panel.refresh_suggestions("@src/")
         assert "@src/app.py" in panel.suggestions
@@ -553,20 +561,57 @@ async def test_tui_slash_suggestions_tab_cycles_and_enter_confirms(tmp_path) -> 
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause(0.01)
         prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
         options = app.query_one("#prompt-suggestions", OptionList)
 
         prompt.text = "/re"
         await pilot.pause(0.01)
         assert options.display is True
         assert options.highlighted == 0
+        assert [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions[:3]] == [
+            "/resume",
+            "/reviewer",
+            "/reset",
+        ]
 
         await pilot.press("down")
         assert options.highlighted == 1
 
         await pilot.press("tab")
-        assert prompt.text == "/resume "
+        assert prompt.text == "/reviewer "
         assert options.display is False
         assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_bare_slash_suggestions_expose_subagents_and_skills_beyond_visible_rows(
+    tmp_path,
+) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        prompt.text = "/"
+        await pilot.pause(0.01)
+
+        labels = [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions]
+        assert options.option_count == len(panel.suggestions)
+        assert options.option_count > 8
+        assert "/reviewer" in labels
+        assert "/skill-creator" in labels
+
+        reviewer_index = labels.index("/reviewer")
+        for _ in range(reviewer_index):
+            await pilot.press("down")
+        assert options.highlighted == reviewer_index
+
+        await pilot.press("tab")
+        assert prompt.text == "/reviewer "
         app.exit()
 
 
@@ -1904,6 +1949,7 @@ async def test_tui_command_provider_discovers_and_searches_commands(tmp_path) ->
         provider = DeepyCommandProvider(app.screen)
 
         discovered = [hit async for hit in provider.discover()]
+        assert [hit.text for hit in discovered[:3]] == ["/help", "/new", "/resume"]
         assert any(hit.text == "/help" and hit.help == "Help: Show commands, keybindings, and TUI state" for hit in discovered)
 
         help_hit = next(hit for hit in discovered if hit.text == "/help")

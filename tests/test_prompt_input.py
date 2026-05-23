@@ -179,6 +179,47 @@ def test_create_prompt_session_combines_slash_and_file_mention_completion(tmp_pa
     assert "src/" in _completion_texts(session.completer, "see @")
 
 
+def test_create_prompt_session_slash_completions_include_metadata_and_ranking(tmp_path):
+    (tmp_path / "src").mkdir()
+    session = create_prompt_session(
+        slash_commands=[
+            SlashCommandItem("reset", "reset", "/reset", "Reset config"),
+            SlashCommandItem("resume", "resume", "/resume", "Resume session"),
+            SlashCommandItem("subagent", "reviewer", "/reviewer", "Review the current change"),
+            SlashCommandItem(
+                "skill",
+                "fresh",
+                "/fresh",
+                "Fresh skill",
+                SkillInfo("fresh", Path("/skills/fresh"), "Fresh skill"),
+            ),
+            SlashCommandItem(
+                "skill",
+                "loaded",
+                "/loaded",
+                "Loaded skill",
+                SkillInfo("loaded", Path("/skills/loaded"), "Loaded skill", is_loaded=True),
+            ),
+        ],
+        history_path=tmp_path / "history.txt",
+        project_root=tmp_path,
+    )
+
+    completions = _completions(session.completer, "/")
+    texts = [completion.text for completion in completions]
+    assert texts[:2] == ["/resume", "/reviewer"]
+    assert texts.index("/loaded") < texts.index("/fresh")
+    loaded = next(completion for completion in completions if completion.text == "/loaded")
+    assert loaded.display_text == "/loaded *"
+    assert loaded.display_meta_text == "Loaded skill"
+    legacy = _completions(session.completer, "/skill:")[0]
+    assert legacy.text == "/skill:loaded"
+    assert legacy.display_text == "/skill:loaded *"
+
+    assert "src/" not in texts
+    assert all(not text.startswith("/") for text in _completion_texts(session.completer, "see @"))
+
+
 def test_create_prompt_session_suppresses_completion_menu_when_input_suggestion_visible(tmp_path):
     controller = InputSuggestionController()
     controller.set_suggestion("run tests")

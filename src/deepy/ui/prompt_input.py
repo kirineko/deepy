@@ -7,7 +7,7 @@ from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
-from prompt_toolkit.completion import Completer, CompleteEvent, WordCompleter, merge_completers
+from prompt_toolkit.completion import Completer, CompleteEvent, Completion, merge_completers
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
 from prompt_toolkit.history import FileHistory
@@ -18,7 +18,13 @@ from deepy.input_suggestions import InputSuggestionController
 from deepy.skills import SkillInfo
 from deepy.ui.file_mentions import FileMentionCompleter
 from deepy.ui.prompt_buffer import PromptBufferState
-from deepy.ui.slash_commands import SlashCommandItem
+from deepy.ui.slash_commands import (
+    SlashCommandItem,
+    find_exact_slash_command,
+    format_slash_command_completion_label,
+    format_slash_command_description,
+    rank_slash_commands,
+)
 from deepy.ui.status_footer import StatusFooter
 from deepy.ui.styles import DARK_PALETTE, UiPalette
 
@@ -52,11 +58,10 @@ def create_prompt_session(
     path = history_path or DEFAULT_PROMPT_HISTORY
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
-    labels = [item.label for item in slash_commands or []]
     root = project_root or Path.cwd()
     completer = merge_completers(
         [
-            WordCompleter(labels, ignore_case=True, sentence=True),
+            SlashCommandCompleter(slash_commands or []),
             FileMentionCompleter(root),
         ],
         deduplicate=True,
@@ -107,6 +112,38 @@ class InputSuggestionAwareCompleter(Completer):
         if state.text and not document.text:
             return
         yield from self.completer.get_completions(document, complete_event)
+
+
+class SlashCommandCompleter(Completer):
+    def __init__(self, slash_commands: list[SlashCommandItem]) -> None:
+        self.slash_commands = slash_commands
+
+    def get_completions(self, document: Document, complete_event: CompleteEvent):
+        del complete_event
+        token = _slash_token_before_cursor(document)
+        if token is None:
+            return
+        if find_exact_slash_command(self.slash_commands, token) is not None:
+            return
+        for item in rank_slash_commands(self.slash_commands, token):
+            label = format_slash_command_completion_label(item, token)
+            yield Completion(
+                label.removesuffix(" *"),
+                start_position=-len(token),
+                display=label,
+                display_meta=format_slash_command_description(item.description),
+            )
+
+
+def _slash_token_before_cursor(document: Document) -> str | None:
+    before = document.text_before_cursor
+    start = len(before)
+    while start > 0 and not before[start - 1].isspace():
+        start -= 1
+    token = before[start:]
+    if not token.startswith("/") or not token:
+        return None
+    return token
 
 
 def build_prompt_key_bindings(

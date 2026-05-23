@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
+from deepy.ui.slash_commands import slash_command_priority
+
 if TYPE_CHECKING:
     from deepy.tui.app import DeepyTuiApp
 
@@ -59,24 +61,34 @@ def command_by_name(name: str) -> TuiCommand | None:
     return next((command for command in TUI_COMMANDS if command.name == name), None)
 
 
+def ranked_tui_commands() -> list[TuiCommand]:
+    return sorted(TUI_COMMANDS, key=lambda command: (slash_command_priority(command.name), command.name))
+
+
 class DeepyCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
         app = self.app
-        for command in TUI_COMMANDS:
+        matches = []
+        for command in ranked_tui_commands():
             candidate = f"{command.label} {command.description} {command.group}"
             score = matcher.match(candidate)
             if score > 0:
-                yield Hit(
-                    score,
-                    matcher.highlight(command.label),
-                    partial(app.invoke_tui_command, command.name),
-                    help=f"{command.group}: {command.description}",
-                )
+                matches.append((score, command))
+        for score, command in sorted(
+            matches,
+            key=lambda item: (-item[0], slash_command_priority(item[1].name), item[1].name),
+        ):
+            yield Hit(
+                score,
+                matcher.highlight(command.label),
+                partial(app.invoke_tui_command, command.name),
+                help=f"{command.group}: {command.description}",
+            )
 
     async def discover(self) -> Hits:
         app = self.app
-        for command in TUI_COMMANDS:
+        for command in ranked_tui_commands():
             yield DiscoveryHit(
                 command.label,
                 partial(app.invoke_tui_command, command.name),

@@ -54,24 +54,58 @@ def test_filter_slash_commands_matches_partial_tokens():
 
     assert [item.name for item in filter_slash_commands(items, "/skil")] == [
         "skills",
+        "code-review",
         "skill-writer",
     ]
 
 
-def test_filter_slash_commands_only_matches_command_prefixes():
+def test_filter_slash_commands_ranks_prefixes_before_weaker_matches():
     items = build_slash_commands(SKILLS)
 
-    assert [item.name for item in filter_slash_commands(items, "/re")] == [
-        "reset",
+    names = [item.name for item in filter_slash_commands(items, "/re")]
+    assert names[:3] == [
         "resume",
         "reviewer",
+        "reset",
     ]
+    assert "code-review" in names
 
 
-def test_filter_slash_commands_returns_all_on_bare_slash():
+def test_filter_slash_commands_ranks_bare_slash_by_user_intent():
     items = build_slash_commands(SKILLS)
 
-    assert filter_slash_commands(items, "/") == items
+    ranked = filter_slash_commands(items, "/")
+    names = [item.name for item in ranked]
+    assert names[:9] == [
+        "help",
+        "new",
+        "resume",
+        "model",
+        "skills",
+        "status",
+        "compact",
+        "mcp",
+        "exit",
+    ]
+    assert names[9:12] == ["explore", "reviewer", "tester"]
+    assert names.index("skill-writer") < names.index("reset")
+    assert names.index("code-review") < names.index("reset")
+
+
+def test_filter_slash_commands_ranks_loaded_skills_first():
+    items = build_slash_commands(SKILLS, loaded_skill_names=["skill-writer"])
+
+    skills = [item.name for item in filter_slash_commands(items, "/") if item.kind == "skill"]
+    assert skills == ["skill-writer", "code-review"]
+
+
+def test_filter_slash_commands_supports_legacy_skill_prefix():
+    items = build_slash_commands(SKILLS)
+
+    assert [item.name for item in filter_slash_commands(items, "/skill:")] == [
+        "code-review",
+        "skill-writer",
+    ]
 
 
 def test_filter_slash_commands_returns_nothing_for_non_slash_tokens():

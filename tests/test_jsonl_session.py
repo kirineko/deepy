@@ -459,7 +459,7 @@ async def test_context_token_state_reestimates_when_history_is_shortened(tmp_pat
     assert state.active_tokens < 9_000
     assert state.last_usage_tokens is None
     assert state.last_usage_record_count is None
-    assert entry.latest_context_window_tokens == state.active_tokens
+    assert entry.latest_context_window_tokens == 9_010
 
 
 @pytest.mark.asyncio

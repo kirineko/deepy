@@ -35,7 +35,7 @@ from deepy.ui.message_view import (
 from deepy.ui.slash_commands import (
     SlashCommandItem,
     filter_slash_commands,
-    format_slash_command_label,
+    format_slash_command_completion_label,
 )
 
 
@@ -244,7 +244,7 @@ class PromptPanel(Vertical):
             self._refresh_input_suggestion_display()
             return
         option_list.display = True
-        option_list.add_options([Option(suggestion, id=suggestion) for suggestion in suggestions[:8]])
+        option_list.add_options([Option(suggestion, id=suggestion) for suggestion in suggestions])
         option_list.highlighted = 0
         self._refresh_input_suggestion_display()
 
@@ -308,10 +308,14 @@ class PromptPanel(Vertical):
             and token == text
             and not any(char.isspace() for char in token)
         ):
-            if any(item.label == token for item in self.slash_commands):
+            if any(
+                item.label == token
+                or (item.kind == "skill" and f"/skill:{item.name}" == token)
+                for item in self.slash_commands
+            ):
                 return []
             return [
-                f"{format_slash_command_label(item)}  {item.description}"
+                f"{format_slash_command_completion_label(item, token)}  {item.description}"
                 for item in filter_slash_commands(self.slash_commands, token)
             ]
         mention = extract_file_mention_fragment(text)

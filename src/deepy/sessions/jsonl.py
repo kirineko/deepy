@@ -143,7 +143,6 @@ class DeepyJsonlSession:
         state = self.context_token_state(records)
         self._touch_index(
             active_tokens=state.active_tokens,
-            latest_context_window_tokens=state.active_tokens,
             last_usage_tokens=state.last_usage_tokens,
             pending_tokens=state.pending_tokens,
             last_usage_record_count=state.last_usage_record_count,
