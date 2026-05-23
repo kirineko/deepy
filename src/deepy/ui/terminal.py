@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Coroutine, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,136 @@ MAX_CLARIFICATION_ROUNDS_PER_TURN = 5
 RUNTIME_STATUS_REFRESH_SECONDS = 1.0
 
 
+class _AsyncRuntimeWorker:
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run_loop, name="deepy-async-runtime", daemon=True)
+        self._closed = False
+        self._thread.start()
+        self._ready.wait()
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._ready.set()
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
+
+    def submit(self, coroutine: Coroutine[Any, Any, Any]) -> Future[Any]:
+        if self._closed:
+            raise RuntimeError("async runtime is closed")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+
+    def run(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+        return self.submit(coroutine).result()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=2)
+
+
+@dataclass(frozen=True)
+class _StartupSnapshot:
+    update_pending: bool
+    version_update: VersionUpdate | None
+    update_reported: bool
+    update_notice_pending: bool
+    mcp_pending: bool
+    mcp_failed: bool
+
+
+class _StartupState:
+    def __init__(self, *, update_pending: bool = False, mcp_pending: bool = False) -> None:
+        self._lock = threading.RLock()
+        self._update_pending = update_pending
+        self._version_update: VersionUpdate | None = None
+        self._update_reported = False
+        self._update_notice_pending = False
+        self._prompt_started = False
+        self._mcp_pending = mcp_pending
+        self._mcp_failed = False
+
+    def snapshot(self) -> _StartupSnapshot:
+        with self._lock:
+            return _StartupSnapshot(
+                update_pending=self._update_pending,
+                version_update=self._version_update,
+                update_reported=self._update_reported,
+                update_notice_pending=self._update_notice_pending,
+                mcp_pending=self._mcp_pending,
+                mcp_failed=self._mcp_failed,
+            )
+
+    def mark_prompt_started(self) -> None:
+        with self._lock:
+            self._prompt_started = True
+            if self._version_update is not None and not self._update_reported:
+                self._update_notice_pending = True
+
+    def mark_welcome_rendered(self, version_update: VersionUpdate | None) -> None:
+        if version_update is None:
+            return
+        with self._lock:
+            if self._version_update == version_update:
+                self._update_reported = True
+                self._update_notice_pending = False
+
+    def mark_update_complete(self, version_update: VersionUpdate | None) -> None:
+        with self._lock:
+            self._update_pending = False
+            self._version_update = version_update
+            if version_update is not None and self._prompt_started and not self._update_reported:
+                self._update_notice_pending = True
+
+    def mark_update_failed(self) -> None:
+        with self._lock:
+            self._update_pending = False
+
+    def mark_mcp_complete(self) -> None:
+        with self._lock:
+            self._mcp_pending = False
+            self._mcp_failed = False
+
+    def mark_mcp_failed(self) -> None:
+        with self._lock:
+            self._mcp_pending = False
+            self._mcp_failed = True
+
+    def take_update_notice(self) -> VersionUpdate | None:
+        with self._lock:
+            if not self._update_notice_pending or self._version_update is None:
+                return None
+            self._update_notice_pending = False
+            self._update_reported = True
+            return self._version_update
+
+
+class _McpStartupHandle:
+    def __init__(self, future: Future[Any], startup_state: _StartupState) -> None:
+        self._future = future
+        self._startup_state = startup_state
+
+    def wait(self) -> None:
+        try:
+            self._future.result()
+        except Exception:
+            self._startup_state.mark_mcp_failed()
+
+    def cancel(self) -> None:
+        if not self._future.done():
+            self._future.cancel()
+
+
 @dataclass(frozen=True)
 class SlashCommand:
     name: str
@@ -200,17 +331,15 @@ def run_interactive(
     root = (project_root or Path.cwd()).resolve()
     output = console or Console()
     session_id: str | None = None
-    version_update = _check_startup_version_update(version_update_checker)
     settings = _ensure_interactive_theme(settings)
     palette = resolve_ui_palette(settings.ui.theme)
+    startup_state = _StartupState(
+        update_pending=version_update_checker is not None,
+        mcp_pending=True,
+    )
 
     loaded_skill_names: list[str] = []
     ctrl_d_exit_pending = False
-    context_footer = _build_status_footer(
-        session_id,
-        project_root=root,
-        settings=settings,
-    )
     input_suggestions = InputSuggestionController(
         enabled=settings.ui.input_suggestions_enabled
     )
@@ -220,17 +349,19 @@ def run_interactive(
         loaded_skill_names,
         input_suggestions=input_suggestions,
     )
-    async_runner = asyncio.Runner()
+    async_runner = _AsyncRuntimeWorker()
     mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
     background_tasks = BackgroundTaskManager()
-    async_runner.run(mcp_runtime.connect())
-    context_footer = _build_status_footer(
-        session_id,
-        project_root=root,
-        settings=settings,
-        mcp_runtime=mcp_runtime,
-        background_tasks=background_tasks,
+    mcp_startup = _McpStartupHandle(
+        async_runner.submit(_connect_mcp_for_startup(mcp_runtime, startup_state)),
+        startup_state,
     )
+    version_check_thread = _start_background_version_update_check(
+        version_update_checker,
+        startup_state,
+    )
+    _settle_startup_version_update_for_welcome(version_check_thread)
+    welcome_version_update = startup_state.snapshot().version_update
     output.print(
         build_welcome_panel(
             provider=settings.model.provider,
@@ -241,19 +372,29 @@ def run_interactive(
             project_root=root,
             skills=discover_skills(root),
             current_version=__version__,
-            version_update=version_update,
+            version_update=welcome_version_update,
             theme=settings.ui.theme,
             resolved_theme=palette.name,
             palette=palette,
         )
     )
+    startup_state.mark_welcome_rendered(welcome_version_update)
 
     try:
         while True:
             try:
+                startup_state.mark_prompt_started()
+                _flush_startup_notifications(output, startup_state, palette=palette)
                 text = prompt_for_input(
                     prompt_session,
-                    bottom_toolbar=build_prompt_toolbar(context_footer),
+                    bottom_toolbar=_build_prompt_toolbar_provider(
+                        session_id,
+                        project_root=root,
+                        settings=settings,
+                        mcp_runtime=mcp_runtime,
+                        background_tasks=background_tasks,
+                        startup_state=startup_state,
+                    ),
                     input_suggestions=input_suggestions,
                 )
                 input_suggestions.dismiss()
@@ -293,13 +434,6 @@ def run_interactive(
                     palette=palette,
                     mcp_runtime=mcp_runtime,
                 )
-                context_footer = _build_status_footer(
-                    session_id,
-                    project_root=root,
-                    settings=settings,
-                    mcp_runtime=mcp_runtime,
-                    background_tasks=background_tasks,
-                )
                 continue
 
             slash = parse_slash_command(text)
@@ -319,6 +453,8 @@ def run_interactive(
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
                         background_tasks=background_tasks,
+                        startup_state=startup_state,
+                        mcp_startup=mcp_startup,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -330,13 +466,6 @@ def run_interactive(
                         root,
                         settings,
                         summary,
-                    )
-                    context_footer = _build_status_footer(
-                        summary.session_id,
-                        project_root=root,
-                        settings=settings,
-                        mcp_runtime=mcp_runtime,
-                        background_tasks=background_tasks,
                     )
                     continue
                 if slash.name.startswith("skill:") or not is_builtin_slash_command(slash.name):
@@ -366,6 +495,8 @@ def run_interactive(
                             async_runner=async_runner,
                             mcp_runtime=mcp_runtime,
                             background_tasks=background_tasks,
+                            startup_state=startup_state,
+                            mcp_startup=mcp_startup,
                         )
                         session_id = summary.session_id
                         _record_session_cost_start(root, session_id, cost_start)
@@ -394,6 +525,8 @@ def run_interactive(
                                 async_runner=async_runner,
                                 mcp_runtime=mcp_runtime,
                                 background_tasks=background_tasks,
+                                startup_state=startup_state,
+                                mcp_startup=mcp_startup,
                             )
                             session_id = summary.session_id
                             _record_session_cost_start(root, session_id, cost_start)
@@ -405,13 +538,6 @@ def run_interactive(
                             root,
                             settings,
                             summary,
-                        )
-                        context_footer = _build_status_footer(
-                            summary.session_id,
-                            project_root=root,
-                            settings=settings,
-                            mcp_runtime=mcp_runtime,
-                            background_tasks=background_tasks,
                         )
                         continue
                 if slash.name == "init":
@@ -429,6 +555,8 @@ def run_interactive(
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
                         background_tasks=background_tasks,
+                        startup_state=startup_state,
+                        mcp_startup=mcp_startup,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -440,13 +568,6 @@ def run_interactive(
                         root,
                         settings,
                         summary,
-                    )
-                    context_footer = _build_status_footer(
-                        summary.session_id,
-                        project_root=root,
-                        settings=settings,
-                        mcp_runtime=mcp_runtime,
-                        background_tasks=background_tasks,
                     )
                     continue
                 next_session = _handle_slash_command(
@@ -460,6 +581,7 @@ def run_interactive(
                     palette=palette,
                     mcp_runtime=mcp_runtime,
                     background_tasks=background_tasks,
+                    startup_state=startup_state,
                 )
                 if next_session == "__exit__":
                     return 0
@@ -478,25 +600,6 @@ def run_interactive(
                         input_suggestions=input_suggestions,
                     )
                 session_id = next_session
-                if slash.name in {
-                    "new",
-                    "resume",
-                    "reset",
-                    "model",
-                    "compact",
-                    "skills",
-                    "theme",
-                    "mcp",
-                    "ps",
-                    "stop",
-                }:
-                    context_footer = _build_status_footer(
-                        session_id,
-                        project_root=root,
-                        settings=settings,
-                        mcp_runtime=mcp_runtime,
-                        background_tasks=background_tasks,
-                    )
                 continue
 
             _print_submitted_user_input(output, text, palette=palette)
@@ -513,6 +616,8 @@ def run_interactive(
                 async_runner=async_runner,
                 mcp_runtime=mcp_runtime,
                 background_tasks=background_tasks,
+                startup_state=startup_state,
+                mcp_startup=mcp_startup,
             )
             session_id = summary.session_id
             _record_session_cost_start(root, session_id, cost_start)
@@ -541,6 +646,8 @@ def run_interactive(
                     async_runner=async_runner,
                     mcp_runtime=mcp_runtime,
                     background_tasks=background_tasks,
+                    startup_state=startup_state,
+                    mcp_startup=mcp_startup,
                 )
                 session_id = summary.session_id
                 _record_session_cost_start(root, session_id, cost_start)
@@ -553,17 +660,13 @@ def run_interactive(
                 settings,
                 summary,
             )
-            context_footer = _build_status_footer(
-                summary.session_id,
-                project_root=root,
-                settings=settings,
-                mcp_runtime=mcp_runtime,
-                background_tasks=background_tasks,
-            )
     finally:
         _cleanup_background_tasks(output, background_tasks, palette=palette)
-        async_runner.run(mcp_runtime.cleanup())
-        async_runner.close()
+        mcp_startup.cancel()
+        try:
+            async_runner.run(mcp_runtime.cleanup())
+        finally:
+            async_runner.close()
 
 def _create_interactive_prompt_session(
     root: Path,
@@ -583,7 +686,7 @@ def _create_interactive_prompt_session(
 
 
 def _prepare_input_suggestion(
-    async_runner: asyncio.Runner,
+    async_runner: Any,
     controller: InputSuggestionController,
     project_root: Path,
     settings: Settings,
@@ -637,6 +740,68 @@ def _check_startup_version_update(
         return None
 
 
+def _start_background_version_update_check(
+    version_update_checker: VersionUpdateChecker | None,
+    startup_state: _StartupState,
+) -> threading.Thread | None:
+    if version_update_checker is None:
+        startup_state.mark_update_complete(None)
+        return None
+
+    def worker() -> None:
+        try:
+            startup_state.mark_update_complete(
+                _check_startup_version_update(version_update_checker)
+            )
+        except Exception:
+            startup_state.mark_update_failed()
+
+    thread = threading.Thread(target=worker, name="deepy-version-check", daemon=True)
+    thread.start()
+    return thread
+
+
+def _settle_startup_version_update_for_welcome(thread: threading.Thread | None) -> None:
+    if thread is None:
+        return
+    thread.join(timeout=0.02)
+
+
+async def _connect_mcp_for_startup(
+    mcp_runtime: DeepyMcpRuntime,
+    startup_state: _StartupState,
+) -> None:
+    try:
+        await mcp_runtime.connect()
+    except Exception:
+        startup_state.mark_mcp_failed()
+        return
+    startup_state.mark_mcp_complete()
+
+
+def _print_startup_update_notice(
+    console: Console,
+    update: VersionUpdate,
+    *,
+    palette: UiPalette,
+) -> None:
+    console.print(
+        f"[{palette.warning}]Update available:[/] "
+        f"{update.current_version} -> {update.latest_version} ({update.install_hint})"
+    )
+
+
+def _flush_startup_notifications(
+    console: Console,
+    startup_state: _StartupState,
+    *,
+    palette: UiPalette,
+) -> None:
+    update = startup_state.take_update_notice()
+    if update is not None:
+        _print_startup_update_notice(console, update, palette=palette)
+
+
 def _ensure_interactive_theme(settings: Settings) -> Settings:
     if settings.path is None or settings.ui.theme_configured:
         return settings
@@ -667,6 +832,8 @@ def _run_once_with_status(
     **kwargs: Any,
 ) -> RunSummary:
     async_runner = kwargs.pop("async_runner", None)
+    startup_state = kwargs.pop("startup_state", None)
+    mcp_startup = kwargs.pop("mcp_startup", None)
     palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
@@ -679,6 +846,7 @@ def _run_once_with_status(
         settings=settings if isinstance(settings, Settings) else None,
         mcp_runtime=kwargs.get("mcp_runtime"),
         background_tasks=kwargs.get("background_tasks"),
+        startup_state=startup_state if isinstance(startup_state, _StartupState) else None,
     )
     renderer: TerminalStreamRenderer | None = None
     started_at = time.monotonic()
@@ -725,8 +893,10 @@ def _run_once_with_status(
                     if callable(original_emit_event):
                         original_emit_event(event)
 
+                if isinstance(mcp_startup, _McpStartupHandle):
+                    mcp_startup.wait()
                 coroutine = run_once(prompt, **kwargs, emit_event=emit_event)
-                if isinstance(async_runner, asyncio.Runner):
+                if hasattr(async_runner, "run") and callable(async_runner.run):
                     summary = async_runner.run(coroutine)
                 else:
                     summary = asyncio.run(coroutine)
@@ -1173,6 +1343,7 @@ def _handle_slash_command(
     palette: UiPalette | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
     background_tasks: BackgroundTaskManager | None = None,
+    startup_state: _StartupState | None = None,
 ) -> str | None:
     loaded_skill_names = loaded_skill_names if loaded_skill_names is not None else []
     settings = settings or Settings()
@@ -1266,7 +1437,14 @@ def _handle_slash_command(
         )
         return current_session_id
     if command.name == "mcp":
+        startup_snapshot = startup_state.snapshot() if startup_state is not None else None
+        if startup_snapshot is not None and startup_snapshot.mcp_pending:
+            console.print("MCP: connecting.")
+            return current_session_id
         statuses = mcp_runtime.statuses if mcp_runtime is not None else []
+        if startup_snapshot is not None and startup_snapshot.mcp_failed and not statuses:
+            console.print("MCP: startup failed.")
+            return current_session_id
         console.print(format_mcp_status(statuses))
         return current_session_id
     if command.name == "ps":
@@ -2626,6 +2804,7 @@ def _format_context_footer(
     settings: Settings | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
     background_tasks: BackgroundTaskManager | None = None,
+    startup_state: _StartupState | None = None,
 ) -> str:
     return _build_status_footer(
         session_id,
@@ -2633,7 +2812,35 @@ def _format_context_footer(
         settings=settings,
         mcp_runtime=mcp_runtime,
         background_tasks=background_tasks,
+        startup_state=startup_state,
     ).plain
+
+
+def _build_prompt_toolbar_provider(
+    session_id: str | None,
+    *,
+    project_root: Path,
+    settings: Settings,
+    mcp_runtime: DeepyMcpRuntime,
+    background_tasks: BackgroundTaskManager,
+    startup_state: _StartupState,
+) -> Callable[[], object]:
+    captured_session_id = session_id
+    captured_settings = settings
+
+    def toolbar() -> object:
+        return build_prompt_toolbar(
+            _build_status_footer(
+                captured_session_id,
+                project_root=project_root,
+                settings=captured_settings,
+                mcp_runtime=mcp_runtime,
+                background_tasks=background_tasks,
+                startup_state=startup_state,
+            )
+        )
+
+    return toolbar
 
 
 def _build_status_footer(
@@ -2643,6 +2850,7 @@ def _build_status_footer(
     settings: Settings | None = None,
     mcp_runtime: DeepyMcpRuntime | None = None,
     background_tasks: BackgroundTaskManager | None = None,
+    startup_state: _StartupState | None = None,
     active_work: str | None = None,
 ) -> StatusFooter:
     if settings is None:
@@ -2661,6 +2869,16 @@ def _build_status_footer(
             segments.append(StatusFooterSegment("[AGENTS.md]", "loaded"))
         if mcp_runtime is not None and mcp_runtime.active_servers:
             segments.append(StatusFooterSegment(f"mcp {len(mcp_runtime.active_servers)}", "loaded"))
+        elif startup_state is not None:
+            startup_snapshot = startup_state.snapshot()
+            if startup_snapshot.mcp_pending:
+                segments.append(StatusFooterSegment("mcp connecting", "metadata"))
+            elif startup_snapshot.mcp_failed:
+                segments.append(StatusFooterSegment("mcp failed", "metadata"))
+        if startup_state is not None:
+            startup_snapshot = startup_state.snapshot()
+            if startup_snapshot.update_pending:
+                segments.append(StatusFooterSegment("update checking", "metadata"))
         if background_tasks is not None:
             running_background_tasks = background_tasks.running_count()
             if running_background_tasks:

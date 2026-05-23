@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -45,6 +46,8 @@ from deepy.utils import json as json_utils
 
 
 def _toolbar_text(toolbar: object) -> str:
+    if callable(toolbar):
+        toolbar = toolbar()
     return "".join(text for _style, text in toolbar) if isinstance(toolbar, list) else str(toolbar)
 
 
@@ -2946,6 +2949,243 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
     assert ("class:toolbar.title", "mcp") in footer.to_prompt_toolkit()
     assert ("class:toolbar.title", "bg") in footer.to_prompt_toolkit()
     assert ("class:toolbar.loaded", "[AGENTS.md]") in footer.to_prompt_toolkit()
+
+
+def test_build_status_footer_shows_startup_ghosts_and_completed_mcp_count(tmp_path):
+    startup_state = terminal._StartupState(update_pending=True, mcp_pending=True)
+    runtime = SimpleNamespace(active_servers=[])
+
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000)),
+        mcp_runtime=runtime,
+        startup_state=startup_state,
+    )
+
+    assert "mcp connecting" in footer.plain
+    assert "update checking" in footer.plain
+
+    startup_state.mark_update_complete(None)
+    startup_state.mark_mcp_complete()
+    runtime.active_servers = [object(), object()]
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000)),
+        mcp_runtime=runtime,
+        startup_state=startup_state,
+    )
+
+    assert "mcp 2" in footer.plain
+    assert "mcp connecting" not in footer.plain
+    assert "update checking" not in footer.plain
+
+
+def test_run_interactive_renders_welcome_and_prompt_before_delayed_mcp_connect(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    connect_finished = threading.Event()
+    observed_toolbars: list[str] = []
+
+    class FakeMcpRuntime:
+        active_servers = []
+        statuses = []
+
+        def __init__(self, settings, *, project_root):
+            pass
+
+        async def connect(self):
+            await asyncio.sleep(10)
+            connect_finished.set()
+
+        async def cleanup(self):
+            pass
+
+    def fake_prompt_for_input(session, **kwargs):
+        observed_toolbars.append(_toolbar_text(kwargs["bottom_toolbar"]))
+        assert not connect_finished.is_set()
+        return "/exit"
+
+    monkeypatch.setattr(terminal, "DeepyMcpRuntime", FakeMcpRuntime)
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=1_000)),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "Deepy is ready" in console.export_text()
+    assert any("mcp connecting" in toolbar for toolbar in observed_toolbars)
+
+
+def test_run_interactive_waits_for_mcp_before_first_model_turn(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    events: list[str] = []
+
+    class FakeMcpRuntime:
+        active_servers = [object()]
+        statuses = []
+
+        def __init__(self, settings, *, project_root):
+            pass
+
+        async def connect(self):
+            events.append("connect-start")
+            await asyncio.sleep(0.05)
+            events.append("connect-finish")
+
+        async def cleanup(self):
+            events.append("cleanup")
+
+    async def fake_run_once(prompt, **kwargs):
+        events.append("run-once")
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "DeepyMcpRuntime", FakeMcpRuntime)
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert events.index("connect-finish") < events.index("run-once")
+
+
+def test_run_interactive_local_command_does_not_wait_for_pending_mcp(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompts = iter(["!printf ok", "/exit"])
+    events: list[str] = []
+
+    class FakeMcpRuntime:
+        active_servers = []
+        statuses = []
+
+        def __init__(self, settings, *, project_root):
+            pass
+
+        async def connect(self):
+            events.append("connect-start")
+            await asyncio.sleep(10)
+            events.append("connect-finish")
+
+        async def cleanup(self):
+            events.append("cleanup")
+
+    def fake_run_local_command(command, *, cwd, should_interrupt=None):
+        events.append("local-command")
+        return LocalCommandResult(
+            command=command,
+            output="ok",
+            display_output="ok",
+            context_output="ok",
+            exit_code=0,
+            cwd=cwd,
+            shell_path="/bin/sh",
+            shell_kind="unknown",
+            command_dialect="posix",
+            path_style="posix",
+            os_family="macos",
+            tty_mode="pty",
+            duration_ms=1,
+            timeout_ms=1000,
+        )
+
+    async def fake_run_once(prompt, **kwargs):
+        raise AssertionError("local command should not call the model")
+
+    monkeypatch.setattr(terminal, "DeepyMcpRuntime", FakeMcpRuntime)
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
+    monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
+
+    result = terminal.run_interactive(
+        Settings(context=ContextConfig(window_tokens=1_000)),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert "local-command" in events
+    assert "connect-finish" not in events
+
+
+def test_run_interactive_shows_fast_version_update_in_welcome(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+
+    def fake_checker(current_version):
+        return terminal.VersionUpdate(
+            current_version=current_version,
+            latest_version="9.9.9",
+            source="PyPI",
+            url="https://example.test/deepy",
+            install_hint="uv tool upgrade deepy-cli",
+        )
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: "/exit")
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=fake_checker,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "9.9.9 available from PyPI" in rendered
+    assert "uv tool upgrade deepy-cli" in rendered
+
+
+def test_run_interactive_prints_delayed_version_update_notice_after_prompt(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    release_update = threading.Event()
+    prompts = iter(["", "/exit"])
+
+    def fake_checker(current_version):
+        release_update.wait(timeout=1)
+        return terminal.VersionUpdate(
+            current_version=current_version,
+            latest_version="9.9.9",
+            source="PyPI",
+            url="https://example.test/deepy",
+            install_hint="uv tool upgrade deepy-cli",
+        )
+
+    def fake_prompt_for_input(session, **kwargs):
+        value = next(prompts)
+        if value == "":
+            release_update.set()
+            time.sleep(0.05)
+        return value
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(
+        Settings(),
+        project_root=tmp_path,
+        console=console,
+        version_update_checker=fake_checker,
+    )
+
+    rendered = console.export_text()
+    assert result == 0
+    assert "Update available:" in rendered
+    assert "9.9.9" in rendered
 
 
 def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkeypatch):
