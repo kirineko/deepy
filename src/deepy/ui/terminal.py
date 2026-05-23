@@ -2819,6 +2819,13 @@ class _SilentStatus:
         return None
 
 
+@dataclass(frozen=True)
+class _RuntimeStatusSegments:
+    prefix: str
+    label: str = ""
+    payload: str = ""
+
+
 def _terminal_runtime_status_style(palette: UiPalette) -> str:
     foreground = _hex_color(palette.toolbar_background) or "#161821"
     background = _hex_color(palette.warning) or "#facc15"
@@ -2851,6 +2858,18 @@ def _ansi_rgb(prefix: str, color: str) -> str:
     return f"{prefix};2;{red};{green};{blue}"
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+_STATUS_SEPARATOR = " · "
+
+
+def _sanitize_status_line(text: str) -> str:
+    stripped = _ANSI_ESCAPE_RE.sub("", text)
+    stripped = stripped.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    stripped = _CONTROL_CHAR_RE.sub("", stripped)
+    return re.sub(r" {2,}", " ", stripped).strip()
+
+
 def _truncate_status_line(text: str, *, max_width: int) -> str:
     if cell_len(text) <= max_width:
         return text
@@ -2870,8 +2889,86 @@ def _truncate_status_line(text: str, *, max_width: int) -> str:
 
 
 def _fit_status_line(text: str, *, width: int) -> str:
-    line = _truncate_status_line(text, max_width=max(width, 0))
+    width = max(width, 0)
+    sanitized = _sanitize_status_line(text)
+    segments = _parse_runtime_status_segments(sanitized)
+    line = (
+        _fit_runtime_status_segments(segments, width=width)
+        if segments is not None
+        else _truncate_status_line(sanitized, max_width=width)
+    )
     return line + (" " * max(0, width - cell_len(line)))
+
+
+def _parse_runtime_status_segments(text: str) -> _RuntimeStatusSegments | None:
+    interrupt = "esc to interrupt"
+    interrupt_index = text.find(interrupt)
+    if interrupt_index < 0:
+        return None
+
+    prefix_end = interrupt_index + len(interrupt)
+    prefix = text[:prefix_end].strip()
+    detail = text[prefix_end:]
+    if detail.startswith(_STATUS_SEPARATOR):
+        detail = detail[len(_STATUS_SEPARATOR) :].strip()
+    else:
+        detail = detail.strip()
+    if not detail:
+        return _RuntimeStatusSegments(prefix=prefix)
+
+    if detail.startswith(f"local command{_STATUS_SEPARATOR}"):
+        payload = detail.removeprefix(f"local command{_STATUS_SEPARATOR}").strip()
+        return _RuntimeStatusSegments(prefix=prefix, label="local command", payload=payload)
+
+    tool_match = re.match(r"(tool \[[^\]]+\])(?:\s+(.*))?$", detail)
+    if tool_match:
+        label, payload = tool_match.groups()
+        return _RuntimeStatusSegments(prefix=prefix, label=label, payload=(payload or "").strip())
+
+    return _RuntimeStatusSegments(prefix=prefix, label=detail)
+
+
+def _fit_runtime_status_segments(segments: _RuntimeStatusSegments, *, width: int) -> str:
+    if width <= 0:
+        return ""
+
+    full = _runtime_status_segments_text(segments)
+    if cell_len(full) <= width:
+        return full
+
+    if cell_len(segments.prefix) >= width:
+        return _truncate_status_line(segments.prefix, max_width=width)
+
+    if not segments.label:
+        return _truncate_status_line(segments.prefix, max_width=width)
+
+    prefix_label = f"{segments.prefix}{_STATUS_SEPARATOR}{segments.label}"
+    if segments.payload:
+        base = f"{prefix_label}{_STATUS_SEPARATOR}"
+        payload_width = width - cell_len(base)
+        if payload_width > 0:
+            payload = _truncate_status_line(segments.payload, max_width=payload_width)
+            return f"{base}{payload}".rstrip()
+
+    if cell_len(prefix_label) <= width:
+        return prefix_label
+
+    label_base = f"{segments.prefix}{_STATUS_SEPARATOR}"
+    label_width = width - cell_len(label_base)
+    if label_width > 0:
+        label = _truncate_status_line(segments.label, max_width=label_width)
+        return f"{label_base}{label}".rstrip()
+
+    return _truncate_status_line(segments.prefix, max_width=width)
+
+
+def _runtime_status_segments_text(segments: _RuntimeStatusSegments) -> str:
+    parts = [segments.prefix]
+    if segments.label:
+        parts.append(segments.label)
+    if segments.payload:
+        parts.append(segments.payload)
+    return _STATUS_SEPARATOR.join(parts)
 
 
 def _working_status_text(

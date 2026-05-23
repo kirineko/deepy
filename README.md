@@ -11,7 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://kirineko.github.io/deepy/">Website</a>
+  <a href="https://deepy.kirineko.tech/"><strong>Install Website</strong></a>
+  ·
+  <a href="https://kirineko.github.io/deepy/">GitHub Pages</a>
   ·
   <a href="README.zh-CN.md">中文文档</a>
   ·
@@ -21,6 +23,8 @@
 </p>
 
 ![Deepy terminal welcome screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.webp)
+
+> Install and setup guide: **https://deepy.kirineko.tech/**
 
 ## What Deepy Does
 
@@ -80,6 +84,8 @@ for direct local commands.
 ![Deepy local command mode](https://raw.githubusercontent.com/kirineko/deepy/main/asset/command_mode.webp)
 
 ## Quick Start
+
+For the guided installation page, open **https://deepy.kirineko.tech/**.
 
 1. Install `uv`:
 

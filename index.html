@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.17 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，新增后台任务管理并优化文件编辑工具的恢复体验。"
+      content="Deepy 0.2.19 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，稳定运行时底部状态栏并保留长命令可见性。"
     >
-    <title>Deepy 0.2.17 - 终端编程 Agent</title>
+    <title>Deepy 0.2.19 - 终端编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -24,6 +24,7 @@
         <a href="#mcp">MCP</a>
         <a href="#usage">使用</a>
         <a href="#install">安装</a>
+        <a href="https://deepy.kirineko.tech/">安装站</a>
         <a href="https://github.com/kirineko/deepy">GitHub</a>
       </nav>
     </header>
@@ -34,26 +35,26 @@
           <img src="asset/deepy-tui.webp" alt="">
         </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.17</p>
+          <p class="release-kicker">Deepy 0.2.19</p>
           <h1 id="hero-title">Deepy</h1>
           <p class="hero-lede">
-            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.17 新增
-            后台任务管理，并让文件编辑工具在参数可恢复失败时更安静、更稳定。
+            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.19 稳定
+            运行时底部状态栏，长命令和工具参数不会再挤走转圈、耗时和中断提示。
           </p>
           <div class="hero-actions" aria-label="主要操作">
-            <a class="button primary" href="#install">安装 Deepy</a>
+            <a class="button primary" href="https://deepy.kirineko.tech/">打开安装网站</a>
+            <a class="button secondary" href="#install">查看安装命令</a>
             <a class="button secondary" href="#tui">查看 TUI</a>
-            <a class="button secondary" href="#usage">查看命令</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.17 核心定位">
+        <dl class="hero-facts" aria-label="Deepy 0.2.19 核心定位">
           <div>
             <dt>Version</dt>
-            <dd>0.2.17</dd>
+            <dd>0.2.19</dd>
           </div>
           <div>
             <dt>TUI</dt>
-            <dd>Background tasks and recoverable file-tool display</dd>
+            <dd>Stable runtime status and command visibility</dd>
           </div>
           <div>
             <dt>Status</dt>
@@ -68,24 +69,29 @@
 
       <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.17 的重点</h2>
+          <h2 id="capabilities-title">0.2.19 的重点</h2>
           <p>
             Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时增强
-            长任务运行、工具输出管理和文件编辑恢复体验。
+            运行时状态栏、长命令显示和工具参数渲染的稳定性。
           </p>
         </div>
         <div class="capability-grid">
           <article>
-            <h3>后台任务管理</h3>
+            <h3>运行时状态栏稳定性</h3>
             <p>
-              `shell` 可启动长时间运行的后台任务，`task_list`、`task_output` 和 `task_stop`
-              用于查看、等待输出和请求停止。
+              模型工作和本地命令运行时，底部状态栏会优先保留转圈、耗时和 Esc 中断提示。
             </p>
           </article>
           <article>
-            <h3>文件工具恢复体验</h3>
+            <h3>长命令可见</h3>
             <p>
-              文件编辑工具会保守修复高置信 malformed 参数，并在 UI 中将可重试参数错误和真正失败区分开。
+              `!cmd` 和 `shell` 的长命令采用末尾截断，保留 `uv run`、`git commit` 等命令前缀。
+            </p>
+          </article>
+          <article>
+            <h3>工具参数净化</h3>
+            <p>
+              工具参数中的换行、ANSI 序列和控制字符会先转成安全单行文本，避免破坏终端底行。
             </p>
           </article>
           <article>
@@ -119,7 +125,7 @@
         <div class="section-header compact">
           <h2 id="tui-title">Textual TUI 和 `/status`</h2>
           <p>
-            TUI 仍是 opt-in 实验入口，但 0.2.17 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
+            TUI 仍是 opt-in 实验入口，但 0.2.19 已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
             `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
           </p>
         </div>
@@ -193,7 +199,7 @@
             skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.17 工作流截图">
+        <div class="workflow-grid" aria-label="Deepy 0.2.19 工作流截图">
           <figure class="workflow-card diff-card">
             <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
             <figcaption>
@@ -322,8 +328,8 @@ deepy</code></pre>
         <div class="section-header compact">
           <h2 id="install-title">安装指南</h2>
           <p>
-            推荐通过 `uv tool` 安装。Deepy 的 Python 包名是 `deepy-cli`，安装后的命令是
-            `deepy`。MCP 和 Skills 都可以在安装后按需配置。
+            推荐先打开安装网站 <a href="https://deepy.kirineko.tech/">deepy.kirineko.tech</a>。
+            Deepy 的 Python 包名是 `deepy-cli`，安装后的命令是 `deepy`。MCP 和 Skills 都可以在安装后按需配置。
           </p>
         </div>
         <div class="install-grid">
@@ -378,7 +384,7 @@ deepy</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.17</span>
+      <span>Deepy 0.2.19</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

@@ -2508,6 +2508,66 @@ def test_runtime_status_line_fits_wide_web_search_text_to_display_cells():
     assert fitted.rstrip().endswith("…")
 
 
+def test_runtime_status_line_prioritizes_prefix_over_long_tool_payload():
+    text = "⠋ time 0s · esc to interrupt · tool [WebSearch] " + ("DeepSeek 最新模型 " * 8)
+
+    fitted = terminal._fit_status_line(text, width=56)
+
+    assert cell_len(fitted) == 56
+    assert "time 0s" in fitted
+    assert "esc to interrupt" in fitted
+    assert "tool [WebSearch]" in fitted
+    assert fitted.rstrip().endswith("…")
+
+
+def test_runtime_status_line_tail_truncates_long_local_command():
+    command = "uv run pytest tests/test_terminal_ui.py::test_runtime_status --very-long-option"
+    text = f"⠋ time 0s · esc to interrupt · local command · {command}"
+
+    fitted = terminal._fit_status_line(text, width=74)
+
+    assert cell_len(fitted) == 74
+    assert "time 0s" in fitted
+    assert "esc to interrupt" in fitted
+    assert "local command" in fitted
+    assert "uv run pytest" in fitted
+    assert "--very-long-option" not in fitted
+    assert fitted.rstrip().endswith("…")
+
+
+def test_runtime_status_line_tail_truncates_long_shell_tool_command():
+    command = "uv run pytest tests/test_terminal_ui.py::test_runtime_status --very-long-option"
+    text = f"⠋ time 0s · esc to interrupt · tool [Shell] {command}"
+
+    fitted = terminal._fit_status_line(text, width=66)
+
+    assert cell_len(fitted) == 66
+    assert "time 0s" in fitted
+    assert "esc to interrupt" in fitted
+    assert "tool [Shell]" in fitted
+    assert "uv run pytest" in fitted
+    assert "--very-long-option" not in fitted
+    assert fitted.rstrip().endswith("…")
+
+
+def test_runtime_status_line_sanitizes_control_sequences_before_fitting():
+    text = (
+        "⠋ time 0s · esc to interrupt · local command · "
+        "printf ok\nBAD\rX\tY \x1b[31mred\x1b[0m\x07"
+    )
+
+    fitted = terminal._fit_status_line(text, width=120)
+    visible = fitted.rstrip()
+
+    assert cell_len(fitted) == 120
+    assert "\n" not in visible
+    assert "\r" not in visible
+    assert "\t" not in visible
+    assert "\x1b" not in visible
+    assert "\x07" not in visible
+    assert "printf ok BAD X Y red" in visible
+
+
 def test_runtime_status_line_handles_very_narrow_widths():
     assert terminal._fit_status_line("abcdef", width=1) == "…"
     assert terminal._fit_status_line("abcdef", width=0) == ""
