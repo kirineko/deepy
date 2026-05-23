@@ -61,13 +61,13 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--model", help="Model name.")
     init_parser.add_argument("--base-url", help="OpenAI-compatible base URL.")
     init_parser.add_argument("--thinking", help="Thinking mode for the provider.")
-    init_parser.add_argument("--theme", default=DEFAULT_UI_THEME, help="UI theme: auto, dark, or light.")
+    init_parser.add_argument("--theme", default=DEFAULT_UI_THEME, help="UI theme: dark or light.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
     setup_parser = config_sub.add_parser("setup", help="Interactively configure Deepy.")
     setup_parser.add_argument("--force", action="store_true", help="Overwrite existing config.")
     config_sub.add_parser("reset", help="Delete local config and run interactive setup again.")
     theme_parser = config_sub.add_parser("theme", help="Show or update terminal UI theme.")
-    theme_parser.add_argument("theme", nargs="?", help="Theme to save: auto, dark, or light.")
+    theme_parser.add_argument("theme", nargs="?", help="Theme to save: dark or light.")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate local Deepy setup.")
     doctor_parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
@@ -381,9 +381,8 @@ def _thinking_mode_from_selection(provider: str, value: str, *, default: str) ->
 
 def _prompt_theme_value(*, default: str = DEFAULT_UI_THEME) -> str:
     print("UI theme:")
-    print("1. auto  Detect when possible; falls back to dark")
-    print("2. dark  Optimized for dark terminal backgrounds")
-    print("3. light Optimized for light terminal backgrounds")
+    print("1. dark  Optimized for dark terminal backgrounds")
+    print("2. light Optimized for light terminal backgrounds")
     value = _prompt_config_value("UI theme number", default=ui_theme_number(default))
     return ui_theme_from_selection(value, default=default)
 
@@ -417,7 +416,7 @@ def _cmd_config_theme(args: argparse.Namespace) -> int:
         print(f"resolved: {palette.name}")
         return 0
     if args.theme not in UI_THEMES:
-        print("Invalid theme. Usage: deepy config theme [auto|dark|light]", file=sys.stderr)
+        print("Invalid theme. Usage: deepy config theme [dark|light]", file=sys.stderr)
         return 1
     config_path = settings.path or (args.config.expanduser() if args.config else Path.home() / ".deepy" / "config.toml")
     update_config_theme(config_path, args.theme)

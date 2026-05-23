@@ -15,7 +15,6 @@ from prompt_toolkit.widgets import RadioList
 
 
 THEME_CHOICES = (
-    ("auto", "auto  Detect when possible; falls back to dark"),
     ("dark", "dark  Optimized for dark terminal backgrounds"),
     ("light", "light Optimized for light terminal backgrounds"),
 )
@@ -27,7 +26,7 @@ def pick_theme(current: str) -> str | None:
 
 class ThemePicker:
     def __init__(self, current: str) -> None:
-        default = current if current in {value for value, _label in THEME_CHOICES} else "auto"
+        default = current if current in {value for value, _label in THEME_CHOICES} else "dark"
         self._radio_list = RadioList[str](
             values=list(THEME_CHOICES),
             default=default,

@@ -274,7 +274,7 @@ reserved_context_tokens = 50000
 compact_preserve_recent_messages = 2
 
 [ui]
-theme = "auto" # auto, dark, or light
+theme = "dark" # dark or light
 ```
 
 Set config without the interactive wizard:

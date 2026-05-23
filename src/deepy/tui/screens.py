@@ -191,7 +191,7 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
             yield Input(value=self.model, placeholder="Model", id="reset-model")
             yield Input(value=self.base_url, placeholder="Base URL", id="reset-base-url")
             yield Input(value=self.thinking, placeholder="Thinking", id="reset-thinking")
-            yield Input(value=self.theme, placeholder="Theme: auto|dark|light", id="reset-theme")
+            yield Input(value=self.theme, placeholder="Theme: dark|light", id="reset-theme")
             yield Footer()
 
     def on_mount(self) -> None:

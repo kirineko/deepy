@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import io
 import os
 from pathlib import Path
@@ -47,6 +46,14 @@ from deepy.utils import json as json_utils
 
 def _toolbar_text(toolbar: object) -> str:
     return "".join(text for _style, text in toolbar) if isinstance(toolbar, list) else str(toolbar)
+
+
+class _FakeStatusDisplay:
+    def __enter__(self):
+        return terminal._SilentStatus()
+
+    def __exit__(self, *args):
+        return None
 
 
 def test_terminal_import_does_not_require_termios():
@@ -1029,162 +1036,6 @@ def test_clear_submitted_prompt_echo_clears_each_rendered_row(monkeypatch):
     assert stream.getvalue() == "\x1b[1A\x1b[2K\x1b[1A\x1b[2K\r"
 
 
-def test_submitted_prompt_needs_status_anchor_only_at_terminal_bottom(monkeypatch):
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    stream = TtyBuffer()
-    console = Console(file=stream, force_terminal=True, width=80)
-    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
-    monkeypatch.setattr(terminal, "_terminal_cursor_row", lambda console: 24)
-
-    assert terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
-    monkeypatch.setattr(terminal, "_terminal_cursor_row", lambda console: 10)
-    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
-    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello")
-
-
-def test_visible_cursor_row_from_windows_buffer_accounts_for_scrolled_window():
-    assert (
-        terminal._visible_cursor_row_from_windows_buffer(
-            cursor_y=123,
-            window_top=100,
-            window_bottom=123,
-        )
-        == 24
-    )
-    assert (
-        terminal._visible_cursor_row_from_windows_buffer(
-            cursor_y=100,
-            window_top=100,
-            window_bottom=123,
-        )
-        == 1
-    )
-    assert (
-        terminal._visible_cursor_row_from_windows_buffer(
-            cursor_y=99,
-            window_top=100,
-            window_bottom=123,
-        )
-        is None
-    )
-    assert (
-        terminal._visible_cursor_row_from_windows_buffer(
-            cursor_y=124,
-            window_top=100,
-            window_bottom=123,
-        )
-        is None
-    )
-
-
-def test_windows_terminal_cursor_row_uses_console_buffer_info(monkeypatch):
-    class FakeFunction:
-        argtypes = "prompt-toolkit-owned"
-        restype = "prompt-toolkit-owned"
-
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.GetStdHandle = FakeFunction(self._get_std_handle)
-            self.GetConsoleScreenBufferInfo = FakeFunction(self._get_console_screen_buffer_info)
-
-        def _get_std_handle(self, value):
-            assert value == terminal._STD_OUTPUT_HANDLE
-            return 123
-
-        def _get_console_screen_buffer_info(self, handle, info_ptr):
-            assert handle == 123
-            info = info_ptr._obj
-            info.dwCursorPosition.Y = 123
-            info.srWindow.Top = 100
-            info.srWindow.Bottom = 123
-            return 1
-
-    kernel32 = FakeKernel32()
-    monkeypatch.setattr(
-        terminal.ctypes,
-        "windll",
-        SimpleNamespace(kernel32=kernel32),
-        raising=False,
-    )
-
-    assert terminal._windows_terminal_cursor_row() == 24
-    assert kernel32.GetConsoleScreenBufferInfo.argtypes == "prompt-toolkit-owned"
-    assert kernel32.GetConsoleScreenBufferInfo.restype == "prompt-toolkit-owned"
-
-
-def test_windows_terminal_cursor_row_fails_closed(monkeypatch):
-    class FakeKernel32:
-        def GetStdHandle(self, value):
-            return 123
-
-        def GetConsoleScreenBufferInfo(self, handle, info_ptr):
-            raise OSError("no console")
-
-    monkeypatch.setattr(
-        terminal.ctypes,
-        "windll",
-        SimpleNamespace(kernel32=FakeKernel32()),
-        raising=False,
-    )
-
-    assert terminal._windows_terminal_cursor_row() is None
-
-
-def test_windows_submitted_prompt_at_bottom_requests_anchor(monkeypatch):
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
-    monkeypatch.setattr(terminal.os, "name", "nt")
-    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
-    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: 24)
-
-    assert terminal._submitted_prompt_needs_status_anchor(console, "hello")
-
-
-def test_windows_submitted_prompt_not_at_bottom_does_not_anchor(monkeypatch):
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
-    monkeypatch.setattr(terminal.os, "name", "nt")
-    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
-    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: 10)
-
-    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
-
-
-def test_windows_unreadable_cursor_uses_multiline_fallback(monkeypatch):
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    console = Console(file=TtyBuffer(), force_terminal=True, width=80)
-    monkeypatch.setattr(terminal.os, "name", "nt")
-    monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((80, 24)))
-    monkeypatch.setattr(terminal, "_windows_terminal_cursor_row", lambda: None)
-
-    assert terminal._submitted_prompt_needs_status_anchor(console, "hello\nworld")
-    assert not terminal._submitted_prompt_needs_status_anchor(console, "hello")
-
-
-def test_cursor_row_from_terminal_response_parses_ansi_report():
-    assert terminal._cursor_row_from_terminal_response(b"\x1b[24;1R") == 24
-    assert terminal._cursor_row_from_terminal_response(b"noise\x1b[7;42R") == 7
-    assert terminal._cursor_row_from_terminal_response(b"") is None
-
-
 def test_terminal_stream_renderer_flushes_reasoning_summary():
     console = Console(record=True)
     renderer = terminal.TerminalStreamRenderer(console)
@@ -1313,6 +1164,129 @@ def test_terminal_stream_renderer_keeps_reasoning_visible_under_status_refresh()
     assert "中\n文" not in rendered
 
 
+def test_terminal_stream_renderer_restores_status_for_silent_text_generation(tmp_path):
+    class FakeStatus:
+        inline_output_flow = True
+        active = False
+
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.active = True
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+    )
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="准备输出最终答案。"))
+    renderer(DeepyStreamEvent(kind="text_delta", text="最终答案片段"))
+
+    rendered = console.export_text()
+    assert "准备输出最终答案。" in rendered
+    assert status.updates
+    assert "status working" in status.updates[-1]
+    assert "准备输出最终答案" not in status.updates[-1]
+
+
+def test_terminal_stream_renderer_restores_status_for_silent_tool_arguments(tmp_path):
+    class FakeStatus:
+        inline_output_flow = True
+        active = False
+
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.active = True
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+    )
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="准备调用写入工具。"))
+    renderer(
+        DeepyStreamEvent(
+            kind="raw_response",
+            name="response.function_call_arguments.delta",
+            text='{"file_path"',
+        )
+    )
+
+    rendered = console.export_text()
+    assert "准备调用写入工具。" in rendered
+    assert status.updates
+    assert "status working" in status.updates[-1]
+
+
+def test_terminal_stream_renderer_refresh_restores_status_after_reasoning_pause(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeStatus:
+        inline_output_flow = True
+        active = False
+
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.active = True
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    now = 100.0
+    monkeypatch.setattr(terminal.time, "monotonic", lambda: now)
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=now,
+        footer=footer,
+    )
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="这里之后模型会静默一段时间。"))
+    now = 100.5
+    renderer.refresh_status()
+    assert status.updates == []
+
+    now = 101.1
+    renderer.refresh_status()
+
+    rendered = console.export_text()
+    assert "这里之后模型会静默一段时间。" in rendered
+    assert status.updates
+    assert "thinking" in status.updates[-1]
+    assert "这里之后模型会静默一段时间" not in status.updates[-1]
+
+
 def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_path):
     class FakeStatus:
         def __init__(self) -> None:
@@ -1350,6 +1324,40 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
     assert "thinking" in status.updates[0]
     assert "第一段很长的思考内容" not in status.updates[0]
     assert "第二段仍然是正文" not in status.updates[0]
+
+
+def test_terminal_stream_renderer_shows_tool_status_without_call_id(tmp_path):
+    class FakeStatus:
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+        project_root=str(tmp_path),
+    )
+
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="write_file",
+            payload={"arguments": json_utils.dumps({"file_path": str(tmp_path / "README.md")})},
+        )
+    )
+
+    assert any("tool [Write]" in update and "README.md" in update for update in status.updates)
 
 
 def test_terminal_stream_renderer_serializes_tool_output_with_output_lock():
@@ -2082,7 +2090,7 @@ def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["1", "sk-reset", "2", "https://api.deepseek.com", "3", "3"])
+    answers = iter(["1", "sk-reset", "2", "https://api.deepseek.com", "3", "2"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -2116,7 +2124,7 @@ def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatc
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["3", "sk-mi-reset", "1", "", "2", "3"])
+    answers = iter(["3", "sk-mi-reset", "1", "", "2", "2"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -2398,7 +2406,56 @@ def test_local_command_status_text_preserves_compact_footer(tmp_path):
     assert "Running local command (" not in rendered
 
 
-def test_status_display_reserves_single_runtime_bottom_row_without_moving_output_cursor(
+def test_runtime_status_text_uses_segmented_foreground_styles(tmp_path):
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+    )
+
+    rendered = _working_status_text(
+        time.monotonic(),
+        "tool [Shell] uv run pytest",
+        footer=footer,
+    )
+
+    assert "time 0s · esc to interrupt · tool [Shell] uv run pytest" in rendered.plain
+    styles = {str(span.style) for span in rendered.spans}
+    assert len(styles) >= 4
+    assert not any(" on " in style or "bg:" in style for style in styles)
+
+
+def test_styled_runtime_status_line_preserves_fitted_visible_text():
+    fitted = terminal._fit_status_line(
+        "⠋ time 0s · esc to interrupt · tool [Shell] uv run pytest",
+        width=72,
+    )
+
+    styled = terminal._style_runtime_status_line(fitted, terminal.DARK_PALETTE)
+
+    assert styled.plain == fitted
+    styles = {str(span.style) for span in styled.spans}
+    assert len(styles) >= 4
+    assert not any(" on " in style or "bg:" in style for style in styles)
+
+
+def test_runtime_status_spinner_advances_at_refresh_interval(monkeypatch):
+    started_at = 100.0
+    monkeypatch.setattr(terminal.time, "monotonic", lambda: started_at)
+
+    first = terminal._runtime_spinner_frame(started_at)
+    monkeypatch.setattr(terminal.time, "monotonic", lambda: started_at + 1.0)
+    second = terminal._runtime_spinner_frame(started_at)
+
+    assert terminal.RUNTIME_STATUS_REFRESH_SECONDS == 1.0
+    assert first != second
+
+
+def test_inline_runtime_status_periodically_refreshes_elapsed_time():
+    assert terminal._InlineRuntimeStatus.periodic_refresh is True
+
+
+def test_status_display_writes_runtime_status_in_output_flow_without_scroll_region(
     tmp_path,
     monkeypatch,
 ):
@@ -2426,16 +2483,17 @@ def test_status_display_reserves_single_runtime_bottom_row_without_moving_output
         pass
 
     output = buffer.getvalue()
-    assert output.startswith("\x1b7\x1b[1;23r\x1b[23;1H\x1b8")
-    assert "\x1b[1;23r" in output
-    assert "\x1b[24;1H\x1b[2K" in output
-    assert "\x1b[23;1H\x1b[2K" not in output
+    assert output.startswith("\r\x1b[2K")
+    assert "\x1b[1;23r" not in output
+    assert "\x1b[r" not in output
+    assert "\x1b[24;1H" not in output
+    assert "\x1b[23;1H" not in output
     assert "model deepseek-v4-pro[max]" not in output
     assert "thinking" in output
-    assert "\x1b[r" in output
+    assert "48;2" not in output
 
 
-def test_status_display_can_anchor_output_above_runtime_bottom_row(tmp_path, monkeypatch):
+def test_status_display_clears_inline_runtime_status_before_output(tmp_path, monkeypatch):
     class TtyBuffer(io.StringIO):
         def isatty(self):
             return True
@@ -2456,17 +2514,25 @@ def test_status_display_can_anchor_output_above_runtime_bottom_row(tmp_path, mon
         console,
         _working_status_text(time.monotonic(), "thinking", footer=footer),
         palette=terminal.DARK_PALETTE,
-        anchor_output=True,
-    ):
-        pass
+    ) as status:
+        renderer = terminal.TerminalStreamRenderer(
+            console,
+            status=status,
+            status_started_at=time.monotonic(),
+            footer=footer,
+            output_lock=getattr(status, "output_lock", None),
+        )
+        renderer(DeepyStreamEvent(kind="tool_output", text='{"ok":true,"name":"Read","output":"done"}'))
 
     output = buffer.getvalue()
-    assert output.startswith("\x1b[1;23r\x1b[23;1H\n\n\x1b[22;1H")
-    assert "\x1b[24;1H\x1b[2K" in output
+    assert "\r\x1b[2K" in output
+    assert "\x1b[1;23r" not in output
+    assert "\x1b[24;1H" not in output
     assert "thinking" in output
+    assert "[Read]" in output
 
 
-def test_status_display_can_scroll_one_line_for_multiline_prompt(tmp_path, monkeypatch):
+def test_status_display_keeps_inline_runtime_status_for_nonprinting_events(tmp_path, monkeypatch):
     class TtyBuffer(io.StringIO):
         def isatty(self):
             return True
@@ -2485,16 +2551,23 @@ def test_status_display_can_scroll_one_line_for_multiline_prompt(tmp_path, monke
 
     with terminal._status_display(
         console,
-        _working_status_text(time.monotonic(), "thinking", footer=footer),
+        _working_status_text(time.monotonic(), "status working", footer=footer),
         palette=terminal.DARK_PALETTE,
-        anchor_output_lines=1,
-    ):
-        pass
+    ) as status:
+        renderer = terminal.TerminalStreamRenderer(
+            console,
+            status=status,
+            status_started_at=time.monotonic(),
+            footer=footer,
+            output_lock=getattr(status, "output_lock", None),
+        )
+        before = buffer.getvalue()
+        renderer(DeepyStreamEvent(kind="agent_updated"))
+        renderer(DeepyStreamEvent(kind="usage"))
+        after = buffer.getvalue()
 
-    output = buffer.getvalue()
-    assert output.startswith("\x1b[1;23r\x1b[23;1H\n\x1b[23;1H")
-    assert "\x1b[24;1H\x1b[2K" in output
-    assert "thinking" in output
+    assert "status working" in before
+    assert after == before
 
 
 def test_runtime_status_line_fits_wide_web_search_text_to_display_cells():
@@ -2582,7 +2655,7 @@ def test_runtime_status_line_pads_shorter_refresh_after_longer_text():
     assert short_line == "thinking" + (" " * 16)
 
 
-def test_terminal_bottom_status_uses_output_lock(monkeypatch):
+def test_inline_runtime_status_uses_output_lock(monkeypatch):
     class TtyBuffer(io.StringIO):
         def isatty(self):
             return True
@@ -2601,19 +2674,20 @@ def test_terminal_bottom_status_uses_output_lock(monkeypatch):
     lock = RecordingLock()
     buffer = TtyBuffer()
     console = Console(file=buffer, force_terminal=True)
-    status = terminal._TerminalBottomStatus(
+    status = terminal._InlineRuntimeStatus(
         console,
         palette=terminal.DARK_PALETTE,
         output_lock=lock,
     )
     monkeypatch.setattr(terminal.shutil, "get_terminal_size", lambda fallback: os.terminal_size((30, 8)))
 
-    status.start()
     status.update(terminal.Text("tool [WebSearch] DeepSeek 最新模型"))
     status.clear()
 
-    assert lock.entries == 3
-    assert "\x1b[8;1H\x1b[2K" in buffer.getvalue()
+    assert lock.entries == 2
+    output = buffer.getvalue()
+    assert output.startswith("\r\x1b[2K")
+    assert "\x1b[8;1H\x1b[2K" not in output
 
 
 def test_status_display_is_silent_for_recorded_console():
@@ -3076,7 +3150,7 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     prompts = iter(["start", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
     calls: list[dict[str, object]] = []
     collected_questions: list[str] = []
-    status_anchors: list[tuple[bool, int]] = []
+    status_calls = 0
 
     async def fake_run_once(prompt, **kwargs):
         calls.append({"prompt": prompt, "session_id": kwargs.get("session_id")})
@@ -3106,10 +3180,10 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
     monkeypatch.setattr(terminal, "_collect_pending_question_response", fake_collect)
 
-    @contextlib.contextmanager
-    def fake_status_display(console, initial_status, *, palette, anchor_output=False, anchor_output_lines=0):
-        status_anchors.append((anchor_output, anchor_output_lines))
-        yield terminal._SilentStatus()
+    def fake_status_display(console, initial_status, *, palette):
+        nonlocal status_calls
+        status_calls += 1
+        return _FakeStatusDisplay()
 
     monkeypatch.setattr(terminal, "_status_display", fake_status_display)
 
@@ -3125,7 +3199,7 @@ def test_run_interactive_handles_multiple_pending_question_rounds(tmp_path, monk
     assert collected_questions == ["First?", "Second?"]
     assert [call["session_id"] for call in calls] == [None, "s1", "s1"]
     assert [call["prompt"] for call in calls] == ["start", "answer for First?", "answer for Second?"]
-    assert status_anchors == [(False, 0), (True, 0), (True, 0)]
+    assert status_calls == 3
     rendered = console.export_text()
     assert "done" in rendered
     assert "> answer for First?" not in rendered
@@ -3306,11 +3380,35 @@ def test_print_assistant_output_renders_markdown():
     )
 
     rendered = console.export_text()
+    assert "• [Assistant]" in rendered
     assert "Deepy" in rendered
     assert "**Deepy**" not in rendered
     assert "• 终端 Agent" in rendered
     assert "code bash" in rendered
     assert "```" not in rendered
+
+
+def test_print_assistant_output_shows_status_while_rendering(monkeypatch):
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    buffer = TtyBuffer()
+    console = Console(file=buffer, force_terminal=True, width=120)
+
+    def fake_render_markdown(text, *, palette, width):
+        assert "rendering response" in buffer.getvalue()
+        return terminal.Text("rendered response")
+
+    monkeypatch.setattr(terminal, "render_markdown", fake_render_markdown)
+
+    _print_assistant_output(console, "**Deepy**")
+
+    output = buffer.getvalue()
+    assert "rendering response" in output
+    assert "[Assistant]" in output
+    assert "rendered response" in output
+    assert "\x1b[1;23r" not in output
 
 
 def test_run_once_with_status_returns_summary(tmp_path):
@@ -3539,10 +3637,10 @@ def test_run_interactive_prompts_for_missing_theme_before_welcome(tmp_path, monk
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
-    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="auto": "light")
+    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="dark": "light")
 
     result = terminal.run_interactive(
-        Settings(path=config, ui=UiConfig(theme="auto", theme_configured=False)),
+        Settings(path=config, ui=UiConfig(theme="dark", theme_configured=False)),
         project_root=tmp_path,
         console=console,
         version_update_checker=None,
@@ -3562,10 +3660,10 @@ def test_run_interactive_prompts_for_theme_when_config_file_is_missing(tmp_path,
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
     monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(events))
-    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="auto": "dark")
+    monkeypatch.setattr(terminal, "_prompt_theme_choice", lambda default="dark": "dark")
 
     result = terminal.run_interactive(
-        Settings(path=config, ui=UiConfig(theme="auto", theme_configured=False)),
+        Settings(path=config, ui=UiConfig(theme="dark", theme_configured=False)),
         project_root=tmp_path,
         console=console,
         version_update_checker=None,
@@ -3586,7 +3684,7 @@ def test_run_interactive_skips_theme_prompt_when_theme_exists(tmp_path, monkeypa
     monkeypatch.setattr(
         terminal,
         "_prompt_theme_choice",
-        lambda default="auto": (_ for _ in ()).throw(AssertionError("unexpected theme prompt")),
+        lambda default="dark": (_ for _ in ()).throw(AssertionError("unexpected theme prompt")),
     )
 
     result = terminal.run_interactive(

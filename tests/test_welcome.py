@@ -96,11 +96,11 @@ def test_build_welcome_settings_includes_theme_when_available(tmp_path):
         reasoning_effort="max",
         project_root=tmp_path,
         current_version="0.1.0",
-        theme="auto",
+        theme="dark",
         resolved_theme="dark",
     )
 
-    assert ("Theme", "auto -> dark") in [(item.label, item.value) for item in settings]
+    assert ("Theme", "dark") in [(item.label, item.value) for item in settings]
 
 
 def test_build_welcome_settings_shows_available_update(tmp_path):

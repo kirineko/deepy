@@ -366,7 +366,7 @@ def test_settings_to_toml_includes_input_suggestions_without_model_customization
     assert "input_suggestion_model" not in data["ui"]
 
 
-def test_defaults_ui_theme_to_auto_when_missing_or_invalid(tmp_path):
+def test_defaults_ui_theme_to_dark_when_missing_or_invalid(tmp_path):
     missing = tmp_path / "missing-theme.toml"
     missing.write_text("", encoding="utf-8")
     invalid = tmp_path / "invalid-theme.toml"
@@ -375,17 +375,27 @@ def test_defaults_ui_theme_to_auto_when_missing_or_invalid(tmp_path):
     missing_settings = load_settings(missing, env={})
     invalid_settings = load_settings(invalid, env={})
 
-    assert missing_settings.ui.theme == "auto"
+    assert missing_settings.ui.theme == "dark"
     assert missing_settings.ui.theme_configured is False
-    assert invalid_settings.ui.theme == "auto"
+    assert invalid_settings.ui.theme == "dark"
     assert invalid_settings.ui.theme_configured is False
 
 
+def test_legacy_auto_ui_theme_loads_as_configured_dark(tmp_path):
+    config = tmp_path / "auto-theme.toml"
+    config.write_text('[ui]\ntheme = "auto"\n', encoding="utf-8")
+
+    settings = load_settings(config, env={})
+
+    assert settings.ui.theme == "dark"
+    assert settings.ui.theme_configured is True
+
+
 def test_ui_theme_selection_accepts_numbers_and_names():
-    assert ui_theme_from_selection("1", default="light") == "auto"
-    assert ui_theme_from_selection("2", default="auto") == "dark"
-    assert ui_theme_from_selection("3", default="auto") == "light"
-    assert ui_theme_from_selection("dark", default="auto") == "dark"
+    assert ui_theme_from_selection("1", default="light") == "dark"
+    assert ui_theme_from_selection("2", default="dark") == "light"
+    assert ui_theme_from_selection("auto", default="light") == "light"
+    assert ui_theme_from_selection("dark", default="light") == "dark"
     assert ui_theme_from_selection("", default="light") == "light"
     assert ui_theme_from_selection("solarized", default="dark") == "dark"
 
@@ -455,7 +465,7 @@ def test_write_config_uses_provider_default_base_urls_and_switch_thinking(tmp_pa
         api_key="sk-test",
         provider="xiaomi",
         model="mimo-v2.5",
-        theme="auto",
+        theme="dark",
         thinking_mode="disabled",
     )
 
@@ -475,7 +485,7 @@ def test_write_config_saves_xiaomi_enabled_as_switch_only_mode(tmp_path):
         api_key="sk-test",
         provider="xiaomi",
         model="mimo-v2.5-pro",
-        theme="auto",
+        theme="dark",
         thinking_mode="enabled",
     )
 
@@ -541,7 +551,7 @@ def test_update_config_model_settings_rejects_invalid_values_without_changing_co
         api_key="sk-test",
         provider="openrouter",
         model="deepseek/deepseek-r1",
-        theme="auto",
+        theme="dark",
         thinking_mode="xhigh",
     )
 

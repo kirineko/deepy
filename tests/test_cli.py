@@ -52,7 +52,7 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert "[tools.web_search]" in text
     assert 'searxng_url = "https://s.kirineko.tech/"' in text
     assert "[ui]" in text
-    assert 'theme = "auto"' in text
+    assert 'theme = "dark"' in text
 
 
 def test_config_init_accepts_openrouter_provider_defaults(tmp_path, capsys):
@@ -115,7 +115,7 @@ def test_config_init_accepts_openrouter_custom_model_and_effort(tmp_path):
 
 def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    answers = iter(["1", "sk-live", "2", "https://api.deepseek.com", "3", "3"])
+    answers = iter(["1", "sk-live", "2", "https://api.deepseek.com", "3", "2"])
     prompts: list[dict[str, object]] = []
 
     class FakePromptSession:
@@ -140,7 +140,7 @@ def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypat
 
 def test_config_setup_prints_openrouter_api_key_guidance(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    answers = iter(["2", "sk-or-live", "1", "", "1", "1", "3"])
+    answers = iter(["2", "sk-or-live", "1", "", "1", "1", "2"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -243,7 +243,7 @@ def test_config_setup_cancellation_preserves_existing_config(tmp_path, capsys, m
 def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
-    answers = iter(["1", "sk-reset", "1", "https://api.deepseek.com", "3", "3"])
+    answers = iter(["1", "sk-reset", "1", "https://api.deepseek.com", "3", "2"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -319,7 +319,7 @@ def test_config_theme_shows_and_updates_theme(tmp_path, capsys):
     output = capsys.readouterr().out
     assert show_code == 0
     assert update_code == 0
-    assert "saved: auto" in output
+    assert "saved: dark" in output
     assert "resolved: dark" in output
     assert "Saved UI theme: light" in output
     assert 'theme = "light"' in config.read_text(encoding="utf-8")

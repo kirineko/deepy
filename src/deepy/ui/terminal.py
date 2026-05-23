@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ctypes
-from ctypes import wintypes
 import os
 import re
 import select
@@ -168,6 +166,7 @@ RunOnce = Callable[..., Coroutine[Any, Any, RunSummary]]
 InputFunc = Callable[[str], str]
 VersionUpdateChecker = Callable[[str], VersionUpdate | None]
 MAX_CLARIFICATION_ROUNDS_PER_TURN = 5
+RUNTIME_STATUS_REFRESH_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -306,7 +305,7 @@ def run_interactive(
             slash = parse_slash_command(text)
             if slash is not None:
                 if is_subagent_slash_command(slash.name):
-                    anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                    _print_submitted_user_input(output, text, palette=palette)
                     cost_start = _capture_session_cost_start(root, session_id, settings)
                     summary = _run_once_with_status(
                         output,
@@ -320,7 +319,6 @@ def run_interactive(
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
                         background_tasks=background_tasks,
-                        anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -354,7 +352,7 @@ def run_interactive(
                             continue
                     else:
                         request = slash.argument or f"Use the {skill.name} skill."
-                        anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                        _print_submitted_user_input(output, text, palette=palette)
                         cost_start = _capture_session_cost_start(root, session_id, settings)
                         summary = _run_once_with_status(
                             output,
@@ -368,7 +366,6 @@ def run_interactive(
                             async_runner=async_runner,
                             mcp_runtime=mcp_runtime,
                             background_tasks=background_tasks,
-                            anchor_status_output_lines=1 if anchor_status_output else 0,
                         )
                         session_id = summary.session_id
                         _record_session_cost_start(root, session_id, cost_start)
@@ -397,7 +394,6 @@ def run_interactive(
                                 async_runner=async_runner,
                                 mcp_runtime=mcp_runtime,
                                 background_tasks=background_tasks,
-                                anchor_status_output=True,
                             )
                             session_id = summary.session_id
                             _record_session_cost_start(root, session_id, cost_start)
@@ -419,7 +415,7 @@ def run_interactive(
                         )
                         continue
                 if slash.name == "init":
-                    anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+                    _print_submitted_user_input(output, text, palette=palette)
                     cost_start = _capture_session_cost_start(root, session_id, settings)
                     summary = _run_once_with_status(
                         output,
@@ -433,7 +429,6 @@ def run_interactive(
                         async_runner=async_runner,
                         mcp_runtime=mcp_runtime,
                         background_tasks=background_tasks,
-                        anchor_status_output_lines=1 if anchor_status_output else 0,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -504,7 +499,7 @@ def run_interactive(
                     )
                 continue
 
-            anchor_status_output = _print_submitted_user_input(output, text, palette=palette)
+            _print_submitted_user_input(output, text, palette=palette)
             cost_start = _capture_session_cost_start(root, session_id, settings)
             summary = _run_once_with_status(
                 output,
@@ -518,7 +513,6 @@ def run_interactive(
                 async_runner=async_runner,
                 mcp_runtime=mcp_runtime,
                 background_tasks=background_tasks,
-                anchor_status_output_lines=1 if anchor_status_output else 0,
             )
             session_id = summary.session_id
             _record_session_cost_start(root, session_id, cost_start)
@@ -547,7 +541,6 @@ def run_interactive(
                     async_runner=async_runner,
                     mcp_runtime=mcp_runtime,
                     background_tasks=background_tasks,
-                    anchor_status_output=True,
                 )
                 session_id = summary.session_id
                 _record_session_cost_start(root, session_id, cost_start)
@@ -652,7 +645,7 @@ def _ensure_interactive_theme(settings: Settings) -> Settings:
     return load_settings(settings.path)
 
 
-def _prompt_theme_choice(default: str = "auto") -> str:
+def _prompt_theme_choice(default: str = "dark") -> str:
     _print_theme_choices(Console())
     value = Prompt.ask("UI theme number", default=ui_theme_number(default))
     return ui_theme_from_selection(value, default=default)
@@ -677,8 +670,6 @@ def _run_once_with_status(
     palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
-    anchor_status_output = bool(kwargs.pop("anchor_status_output", False))
-    anchor_status_output_lines = int(kwargs.pop("anchor_status_output_lines", 0))
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
     settings = kwargs.get("settings")
@@ -707,8 +698,6 @@ def _run_once_with_status(
         console,
         _working_status_text(started_at, palette=active_palette, footer=footer),
         palette=active_palette,
-        anchor_output=anchor_status_output,
-        anchor_output_lines=anchor_status_output_lines,
     ) as status:
         renderer = TerminalStreamRenderer(
             console,
@@ -720,12 +709,14 @@ def _run_once_with_status(
             output_lock=getattr(status, "output_lock", None),
         )
         stop_status_refresh = threading.Event()
-        status_thread = threading.Thread(
-            target=_refresh_working_status,
-            args=(renderer, stop_status_refresh),
-            daemon=True,
-        )
-        status_thread.start()
+        status_thread: threading.Thread | None = None
+        if getattr(status, "periodic_refresh", True):
+            status_thread = threading.Thread(
+                target=_refresh_working_status,
+                args=(renderer, stop_status_refresh),
+                daemon=True,
+            )
+            status_thread.start()
 
         try:
             with _esc_interrupt_watcher(interrupt_requested):
@@ -741,7 +732,8 @@ def _run_once_with_status(
                     summary = asyncio.run(coroutine)
         finally:
             stop_status_refresh.set()
-            status_thread.join(timeout=0.2)
+            if status_thread is not None:
+                status_thread.join(timeout=0.2)
 
     renderer.flush()
     return summary
@@ -762,7 +754,7 @@ def _handle_local_command(
         console.print(f"[{palette.error}]Usage:[/] !<command>")
         return current_session_id
 
-    anchor_status_output = _print_submitted_user_input(console, command_input.raw_text, palette=palette)
+    _print_submitted_user_input(console, command_input.raw_text, palette=palette)
     started_at = time.monotonic()
     interrupt_requested = threading.Event()
     with _status_display(
@@ -780,7 +772,6 @@ def _handle_local_command(
             ),
         ),
         palette=palette,
-        anchor_output_lines=1 if anchor_status_output else 0,
     ):
         with _esc_interrupt_watcher(interrupt_requested):
             result = run_local_command(
@@ -1064,10 +1055,14 @@ class TerminalStreamRenderer:
         self.pending_tool_calls: dict[str, ToolCallDisplay] = {}
         self.reasoning_started = False
         self.reasoning_buffer = ""
+        self.reasoning_updated_at = 0.0
         self.output_lock = output_lock
 
     def __call__(self, event: DeepyStreamEvent) -> None:
         if self.output_lock is None:
+            if _stream_event_writes_terminal(event):
+                self._clear_status_for_output()
+            self._update_status_for_silent_generation(event)
             _print_stream_event(
                 self.console,
                 event,
@@ -1078,6 +1073,9 @@ class TerminalStreamRenderer:
             )
             return
         with self.output_lock:
+            if _stream_event_writes_terminal(event):
+                self._clear_status_for_output()
+            self._update_status_for_silent_generation(event)
             _print_stream_event(
                 self.console,
                 event,
@@ -1099,6 +1097,7 @@ class TerminalStreamRenderer:
             )
             self.reasoning_started = True
         self.reasoning_buffer = "printed"
+        self.reasoning_updated_at = time.monotonic()
         self.console.print(Text(text, style=self.palette.muted), end="")
         if self.status is not None and self.status_detail != "thinking":
             self.update_status("thinking")
@@ -1110,7 +1109,7 @@ class TerminalStreamRenderer:
     def update_status(self, detail: str | None = None) -> None:
         if detail is not None:
             self.status_detail = detail
-        if self.status is not None:
+        if self.status is not None and not self._status_output_is_blocked():
             self.status.update(
                 _working_status_text(
                     self.status_started_at,
@@ -1119,6 +1118,36 @@ class TerminalStreamRenderer:
                     footer=self.footer,
                 )
             )
+
+    def refresh_status(self) -> None:
+        if self.output_lock is not None:
+            with self.output_lock:
+                self.update_status()
+            return
+        self.update_status()
+
+    def _clear_status_for_output(self) -> None:
+        clear_for_output = getattr(self.status, "clear_for_output", None)
+        if callable(clear_for_output):
+            clear_for_output()
+
+    def _status_output_is_blocked(self) -> bool:
+        if not (self.reasoning_buffer and getattr(self.status, "inline_output_flow", False)):
+            return False
+        if time.monotonic() - self.reasoning_updated_at < RUNTIME_STATUS_REFRESH_SECONDS:
+            return True
+        self._flush_unlocked()
+        return False
+
+    def _update_status_for_silent_generation(self, event: DeepyStreamEvent) -> None:
+        detail = _silent_generation_status_detail(event)
+        if self.status is None or detail is None:
+            return
+        if self.reasoning_buffer:
+            self._flush_unlocked()
+        if self.status_detail == detail and getattr(self.status, "active", False):
+            return
+        self.update_status(detail)
 
     def flush(self) -> None:
         if self.output_lock is not None:
@@ -1666,7 +1695,7 @@ def _handle_theme_command(
             return current_session_id
         theme = selected
     if theme not in UI_THEMES:
-        console.print(f"[{palette.error}]Usage:[/] /theme auto|dark|light")
+        console.print(f"[{palette.error}]Usage:[/] /theme dark|light")
         return current_session_id
     if settings.path is None:
         console.print(f"[{palette.error}]Cannot persist theme: config path is unknown.[/]")
@@ -2077,7 +2106,7 @@ def _theme_from_selection(value: str) -> str | None:
     normalized = value.strip().lower()
     if normalized in UI_THEMES:
         return normalized
-    return {"1": "auto", "2": "dark", "3": "light"}.get(normalized)
+    return {"1": "dark", "2": "light"}.get(normalized)
 
 
 def _handle_reset_command(
@@ -2719,8 +2748,8 @@ def _refresh_working_status(
     renderer: TerminalStreamRenderer,
     stop_event: threading.Event,
 ) -> None:
-    while not stop_event.wait(0.2):
-        renderer.update_status()
+    while not stop_event.wait(RUNTIME_STATUS_REFRESH_SECONDS):
+        renderer.refresh_status()
 
 
 @contextlib.contextmanager
@@ -2729,13 +2758,10 @@ def _status_display(
     initial_status: Text,
     *,
     palette: UiPalette,
-    anchor_output: bool = False,
-    anchor_output_lines: int = 0,
 ):
-    if _should_use_bottom_status_overlay(console):
+    if _should_use_inline_runtime_status(console):
         output_lock = threading.RLock()
-        status = _TerminalBottomStatus(console, palette=palette, output_lock=output_lock)
-        status.start(anchor_output=anchor_output, anchor_output_lines=anchor_output_lines)
+        status = _InlineRuntimeStatus(console, palette=palette, output_lock=output_lock)
         status.update(initial_status)
         try:
             yield status
@@ -2746,77 +2772,82 @@ def _status_display(
     yield _SilentStatus()
 
 
-def _should_use_bottom_status_overlay(console: Console) -> bool:
+@contextlib.contextmanager
+def _phase_status_display(
+    console: Console,
+    status_text: Text,
+    *,
+    palette: UiPalette,
+):
+    if not _should_use_inline_runtime_status(console):
+        yield _SilentStatus()
+        return
+    status = _InlineRuntimeStatus(console, palette=palette)
+    status.update(status_text)
+    try:
+        yield status
+    finally:
+        status.clear()
+
+
+def _should_use_inline_runtime_status(console: Console) -> bool:
     isatty = getattr(console.file, "isatty", None)
     return bool(callable(isatty) and isatty())
 
 
-class _TerminalBottomStatus:
+class _InlineRuntimeStatus:
+    inline_output_flow = True
+    periodic_refresh = True
+
     def __init__(
         self,
         console: Console,
         *,
         palette: UiPalette,
-        output_lock: threading.RLock | None = None,
+        output_lock: Any | None = None,
     ) -> None:
         self.console = console
         self.palette = palette
-        self.rows = 0
         self.columns = 0
         self.output_lock = output_lock or threading.RLock()
-
-    def start(self, *, anchor_output: bool = False, anchor_output_lines: int = 0) -> None:
-        with self.output_lock:
-            self.columns, self.rows = shutil.get_terminal_size((80, 24))
-            if self.rows <= 1:
-                return
-            scroll_bottom = self.rows - 1
-            scroll_lines = max(anchor_output_lines, 2 if anchor_output else 0)
-            if scroll_lines:
-                output_row = max(scroll_bottom - scroll_lines + 1, 1)
-                scroll_text = "\n" * scroll_lines
-                self.console.file.write(
-                    f"\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H"
-                    f"{scroll_text}"
-                    f"\x1b[{output_row};1H"
-                )
-            else:
-                self.console.file.write(
-                    f"\x1b7\x1b[1;{scroll_bottom}r\x1b[{scroll_bottom};1H\x1b8"
-                )
-            self.console.file.flush()
+        self.active = False
 
     def update(self, status: Text) -> None:
         with self.output_lock:
-            columns, rows = shutil.get_terminal_size((80, 24))
+            columns = _terminal_columns(self.console)
             self.columns = columns
-            self.rows = rows
-            if rows <= 1:
-                return
-            self._write_line(rows, status.plain, _terminal_runtime_status_style(self.palette))
+            self._write_line(status.plain)
             self.console.file.flush()
 
     def clear(self) -> None:
         with self.output_lock:
-            columns, rows = shutil.get_terminal_size((80, 24))
-            self.columns = columns
-            self.rows = rows
-            if rows <= 1:
+            if not self.active:
                 return
-            self.console.file.write("\x1b7\x1b[r")
-            self.console.file.write(f"\x1b[{rows};1H\x1b[2K")
-            self.console.file.write("\x1b8")
+            self.console.file.write("\r\x1b[2K")
+            self.active = False
             self.console.file.flush()
 
-    def _write_line(self, row: int, text: str, style: str) -> None:
+    def clear_for_output(self) -> None:
+        self.clear()
+
+    def _write_line(self, text: str) -> None:
         width = max(self.columns - 1, 1)
         padded = _fit_status_line(text, width=width)
-        self.console.file.write(f"\x1b7\x1b[{row};1H\x1b[2K{style}{padded}\x1b[0m\x1b8")
+        self.console.file.write("\r\x1b[2K")
+        self.console.print(_style_runtime_status_line(padded, self.palette), end="")
+        self.active = True
 
 
 class _SilentStatus:
     def update(self, status: Text) -> None:
         return None
+
+
+def _phase_status_text(text: str, palette: UiPalette) -> Text:
+    return Text.assemble(
+        ("• ", palette.toolbar_separator),
+        (text, palette.toolbar_metadata),
+    )
 
 
 @dataclass(frozen=True)
@@ -2826,41 +2857,53 @@ class _RuntimeStatusSegments:
     payload: str = ""
 
 
-def _terminal_runtime_status_style(palette: UiPalette) -> str:
-    foreground = _hex_color(palette.toolbar_background) or "#161821"
-    background = _hex_color(palette.warning) or "#facc15"
-    return _terminal_ansi_style(foreground=foreground, background=background, bold=True)
-
-
-def _terminal_ansi_style(
-    *,
-    foreground: str = "",
-    background: str = "",
-    bold: bool = False,
-) -> str:
-    codes: list[str] = []
-    codes.append("1" if bold else "22")
-    if foreground:
-        codes.append(_ansi_rgb("38", foreground))
-    if background:
-        codes.append(_ansi_rgb("48", background))
-    return f"\x1b[{';'.join(codes)}m" if codes else ""
-
-
-def _hex_color(style: str) -> str:
-    return next((part for part in style.split() if part.startswith("#") and len(part) == 7), "")
-
-
-def _ansi_rgb(prefix: str, color: str) -> str:
-    red = int(color[1:3], 16)
-    green = int(color[3:5], 16)
-    blue = int(color[5:7], 16)
-    return f"{prefix};2;{red};{green};{blue}"
-
-
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _STATUS_SEPARATOR = " · "
+
+
+def _style_runtime_status_line(text: str, palette: UiPalette) -> Text:
+    trailing_spaces = len(text) - len(text.rstrip(" "))
+    visible = text.rstrip(" ")
+    segments = _parse_runtime_status_segments(visible)
+    if segments is None:
+        styled = Text(visible, style=palette.toolbar_metadata)
+    else:
+        styled = Text()
+        _append_runtime_status_prefix(styled, segments.prefix, palette)
+        if segments.label:
+            _append_runtime_status_separator(styled, palette)
+            styled.append(segments.label, style=palette.toolbar_active)
+        if segments.payload:
+            _append_runtime_status_separator(styled, palette)
+            styled.append(segments.payload, style=palette.toolbar_metadata)
+    if trailing_spaces:
+        styled.append(" " * trailing_spaces)
+    return styled
+
+
+def _append_runtime_status_prefix(text: Text, prefix: str, palette: UiPalette) -> None:
+    spinner = ""
+    rest = prefix
+    if not rest.startswith("time ") and " time " in rest:
+        spinner, rest = rest.split(" ", 1)
+    if spinner:
+        text.append(spinner, style=palette.toolbar_active)
+        text.append(" ", style=palette.toolbar_separator)
+    if not rest.startswith("time "):
+        text.append(rest, style=palette.toolbar_metadata)
+        return
+    elapsed_and_hint = rest.removeprefix("time ")
+    elapsed, separator, hint = elapsed_and_hint.partition(_STATUS_SEPARATOR)
+    text.append("time ", style=palette.toolbar_metadata)
+    text.append(elapsed, style=palette.toolbar_identity)
+    if separator:
+        _append_runtime_status_separator(text, palette)
+        text.append(hint, style=palette.warning)
+
+
+def _append_runtime_status_separator(text: Text, palette: UiPalette) -> None:
+    text.append(_STATUS_SEPARATOR, style=palette.toolbar_separator)
 
 
 def _sanitize_status_line(text: str) -> str:
@@ -2923,7 +2966,10 @@ def _parse_runtime_status_segments(text: str) -> _RuntimeStatusSegments | None:
     tool_match = re.match(r"(tool \[[^\]]+\])(?:\s+(.*))?$", detail)
     if tool_match:
         label, payload = tool_match.groups()
-        return _RuntimeStatusSegments(prefix=prefix, label=label, payload=(payload or "").strip())
+        payload_text = (payload or "").strip()
+        if payload_text.startswith("·"):
+            payload_text = payload_text.removeprefix("·").strip()
+        return _RuntimeStatusSegments(prefix=prefix, label=label, payload=payload_text)
 
     return _RuntimeStatusSegments(prefix=prefix, label=detail)
 
@@ -3032,32 +3078,35 @@ def _runtime_status_text(
     spinner: str = "",
     palette: UiPalette,
 ) -> Text:
-    parts: list[tuple[str, str]] = []
-    style = _runtime_text_style(palette)
+    text = Text()
     if spinner:
-        parts.extend([(spinner, style), (" ", style)])
-    parts.extend(
-        [
-            ("time ", style),
-            (elapsed, style),
-            (" · ", style),
-            ("esc to interrupt", style),
-        ]
-    )
-    text = Text.assemble(*parts)
+        text.append(spinner, style=palette.toolbar_active)
+        text.append(" ", style=palette.toolbar_separator)
+    text.append("time ", style=palette.toolbar_metadata)
+    text.append(elapsed, style=palette.toolbar_identity)
+    _append_runtime_status_separator(text, palette)
+    text.append("esc to interrupt", style=palette.warning)
     if detail:
-        text.append(" · ", style=style)
-        text.append(detail, style=style)
+        _append_runtime_status_separator(text, palette)
+        _append_runtime_detail(text, detail, palette)
     return text
 
 
-def _runtime_text_style(palette: UiPalette) -> str:
-    return f"bold {palette.toolbar_background}"
+def _append_runtime_detail(text: Text, detail: str, palette: UiPalette) -> None:
+    tool_match = re.match(r"(tool \[[^\]]+\])(?:\s+(.*))?$", detail)
+    if tool_match:
+        label, payload = tool_match.groups()
+        text.append(label, style=palette.toolbar_active)
+        if payload:
+            text.append(" ", style=palette.toolbar_separator)
+            text.append(payload, style=palette.toolbar_metadata)
+        return
+    text.append(detail, style=palette.toolbar_active)
 
 
 def _runtime_spinner_frame(started_at: float) -> str:
     frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    index = int(max(0.0, time.monotonic() - started_at) * 10) % len(frames)
+    index = int(max(0.0, time.monotonic() - started_at)) % len(frames)
     return frames[index]
 
 
@@ -3073,20 +3122,9 @@ def _format_duration_ms(duration_ms: int) -> str:
     return f"{remaining_seconds}s"
 
 
-def _print_submitted_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> bool:
+def _print_submitted_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> None:
     _clear_submitted_prompt_echo(console, text)
     _print_user_input(console, text, palette=palette)
-    return _submitted_prompt_needs_status_anchor(console, text)
-
-
-def _submitted_prompt_needs_status_anchor(console: Console, text: str) -> bool:
-    if not text.strip() or not _should_use_bottom_status_overlay(console):
-        return False
-    rows = shutil.get_terminal_size((80, 24)).lines
-    cursor_row = _terminal_cursor_row(console)
-    if cursor_row is not None:
-        return cursor_row >= rows
-    return _should_fallback_anchor_submitted_prompt(console, text)
 
 
 def _clear_submitted_prompt_echo(console: Console, text: str) -> None:
@@ -3111,154 +3149,12 @@ def _terminal_columns(console: Console) -> int:
     return max(1, shutil.get_terminal_size(fallback).columns)
 
 
-def _terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | None:
-    if os.name == "nt":
-        return _windows_terminal_cursor_row()
-    return _posix_terminal_cursor_row(console, timeout=timeout)
-
-
-def _posix_terminal_cursor_row(console: Console, *, timeout: float = 0.03) -> int | None:
-    if termios is None or tty is None or not Path("/dev/tty").exists():
-        return None
-    file = getattr(console, "file", None)
-    if file is None:
-        return None
-    isatty = getattr(file, "isatty", None)
-    if not callable(isatty) or not isatty():
-        return None
-
-    fd: int | None = None
-    old_attrs: list[Any] | None = None
-    try:
-        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
-        old_attrs = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
-        file.write("\x1b[6n")
-        file.flush()
-        deadline = time.monotonic() + timeout
-        data = b""
-        while time.monotonic() < deadline:
-            readable, _, _ = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))
-            if not readable:
-                continue
-            try:
-                chunk = os.read(fd, 32)
-            except BlockingIOError:
-                continue
-            if not chunk:
-                continue
-            data += chunk
-            row = _cursor_row_from_terminal_response(data)
-            if row is not None:
-                return row
-    except Exception:
-        return None
-    finally:
-        if fd is not None:
-            if old_attrs is not None:
-                with contextlib.suppress(Exception):
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
-            with contextlib.suppress(Exception):
-                os.close(fd)
-    return None
-
-
-def _windows_terminal_cursor_row() -> int | None:
-    try:
-        windll = getattr(ctypes, "windll")
-        kernel32 = windll.kernel32
-        get_std_handle, get_console_screen_buffer_info = _windows_console_functions(kernel32)
-        handle = get_std_handle(_STD_OUTPUT_HANDLE)
-        if handle in {None, 0, _INVALID_HANDLE_VALUE}:
-            return None
-        info = _WindowsConsoleScreenBufferInfo()
-        if not get_console_screen_buffer_info(handle, ctypes.byref(info)):
-            return None
-        return _visible_cursor_row_from_windows_buffer(
-            cursor_y=int(info.dwCursorPosition.Y),
-            window_top=int(info.srWindow.Top),
-            window_bottom=int(info.srWindow.Bottom),
-        )
-    except Exception:
-        return None
-
-
-def _windows_console_functions(kernel32: Any) -> tuple[Callable[[int], Any], Callable[[Any, Any], Any]]:
-    prototype_factory = getattr(ctypes, "WINFUNCTYPE", None)
-    if prototype_factory is None:
-        return kernel32.GetStdHandle, kernel32.GetConsoleScreenBufferInfo
-    return (
-        prototype_factory(wintypes.HANDLE, wintypes.DWORD)(("GetStdHandle", kernel32)),
-        prototype_factory(
-            wintypes.BOOL,
-            wintypes.HANDLE,
-            ctypes.POINTER(_WindowsConsoleScreenBufferInfo),
-        )(("GetConsoleScreenBufferInfo", kernel32)),
-    )
-
-
-def _visible_cursor_row_from_windows_buffer(
-    *,
-    cursor_y: int,
-    window_top: int,
-    window_bottom: int,
-) -> int | None:
-    if window_top > window_bottom:
-        return None
-    if cursor_y < window_top or cursor_y > window_bottom:
-        return None
-    return cursor_y - window_top + 1
-
-
-def _should_fallback_anchor_submitted_prompt(console: Console, text: str) -> bool:
-    if os.name != "nt":
-        return False
-    return _submitted_prompt_echo_rows(text, _terminal_columns(console)) > 1
-
-
-_STD_OUTPUT_HANDLE = ctypes.c_ulong(-11).value
-_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-
-
-def _cursor_row_from_terminal_response(data: bytes) -> int | None:
-    match = re.search(rb"\x1b\[(\d+);\d+R", data)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
 def _submitted_prompt_echo_rows(text: str, columns: int) -> int:
     lines = text.rstrip("\n").split("\n") or [""]
     return sum(
         measure_text_rows(line, width=columns, initial_column=2 if index == 0 else 0)
         for index, line in enumerate(lines)
     )
-
-
-class _WindowsCoord(ctypes.Structure):
-    _fields_ = [
-        ("X", ctypes.c_short),
-        ("Y", ctypes.c_short),
-    ]
-
-
-class _WindowsSmallRect(ctypes.Structure):
-    _fields_ = [
-        ("Left", ctypes.c_short),
-        ("Top", ctypes.c_short),
-        ("Right", ctypes.c_short),
-        ("Bottom", ctypes.c_short),
-    ]
-
-
-class _WindowsConsoleScreenBufferInfo(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", _WindowsCoord),
-        ("dwCursorPosition", _WindowsCoord),
-        ("wAttributes", ctypes.c_ushort),
-        ("srWindow", _WindowsSmallRect),
-        ("dwMaximumWindowSize", _WindowsCoord),
-    ]
 
 
 def _print_user_input(console: Console, text: str, *, palette: UiPalette | None = None) -> None:
@@ -3286,9 +3182,15 @@ def _print_assistant_output(
     palette = palette or DARK_PALETTE
     if not text.strip():
         return
+    with _phase_status_display(
+        console,
+        _phase_status_text("rendering response", palette),
+        palette=palette,
+    ):
+        rendered = render_markdown(text.rstrip(), palette=palette, width=console.width)
     console.print()
-    console.print(f"[bold {palette.assistant}]Deepy[/]")
-    console.print(render_markdown(text.rstrip(), palette=palette, width=console.width))
+    console.print(_status_line("[Assistant]", palette.assistant))
+    console.print(rendered)
 
 
 def _print_stream_event(
@@ -3312,6 +3214,7 @@ def _print_stream_event(
             reasoning_sink.flush()
         tool_name = event.name or "tool"
         arguments = _string_payload(event.payload.get("arguments"))
+        call_id = ""
         is_subagent = tool_name.startswith("subagent_")
         summary = (
             format_tool_display_label(tool_name)
@@ -3329,13 +3232,13 @@ def _print_stream_event(
                     summary=summary,
                     name=tool_name,
                 )
-                if reasoning_sink is not None:
-                    reasoning_sink.set_tool_status(summary)
         if is_subagent:
             console.print(_status_line(f"{summary} started", palette.info))
             task = _subagent_input_markdown(arguments)
             if task:
                 console.print(_subagent_input_panel(task, palette=palette, width=console.width))
+        if reasoning_sink is not None:
+            reasoning_sink.set_tool_status(summary)
         return
     if event.kind == "tool_output":
         if reasoning_sink is not None:
@@ -3366,6 +3269,22 @@ def _print_stream_event(
     if event.kind == "status":
         console.print(_status_line(event.text, palette.info))
         return
+
+
+def _stream_event_writes_terminal(event: DeepyStreamEvent) -> bool:
+    if event.kind == "reasoning_delta":
+        return bool(event.text)
+    if event.kind == "tool_call":
+        return bool((event.name or "").startswith("subagent_"))
+    return event.kind in {"tool_output", "status"}
+
+
+def _silent_generation_status_detail(event: DeepyStreamEvent) -> str | None:
+    if event.kind in {"text_delta", "message"} and event.text:
+        return ""
+    if event.kind == "raw_response" and event.text:
+        return ""
+    return None
 
 
 def _string_payload(value: object) -> str:

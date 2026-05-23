@@ -16,7 +16,7 @@ DEFAULT_COMPACT_TRIGGER_RATIO = 0.8
 DEFAULT_RESERVED_CONTEXT_TOKENS = 50_000
 DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES = 2
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
-DEFAULT_UI_THEME = "auto"
+DEFAULT_UI_THEME = "dark"
 DEFAULT_MCP_ENABLED = True
 DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -45,8 +45,8 @@ SWITCH_ONLY_THINKING_MODES = ("disabled", "enabled")
 REASONING_MODES = set(DEEPSEEK_REASONING_MODES)
 THINKING_MODES = set(DEEPSEEK_REASONING_MODES) | set(SWITCH_ONLY_THINKING_MODES) | OPENROUTER_REASONING_EFFORTS
 PROVIDERS = {"deepseek", "openrouter", "xiaomi"}
-UI_THEMES = {"auto", "dark", "light"}
-UI_THEME_OPTIONS = (("1", "auto"), ("2", "dark"), ("3", "light"))
+UI_THEMES = {"dark", "light"}
+UI_THEME_OPTIONS = (("1", "dark"), ("2", "light"))
 
 
 @dataclass(frozen=True)
@@ -570,6 +570,12 @@ class UiConfig:
             raw.get("input_suggestions_enabled"),
             DEFAULT_INPUT_SUGGESTIONS_ENABLED,
         )
+        if isinstance(theme, str) and theme.strip() == "auto":
+            return cls(
+                theme=DEFAULT_UI_THEME,
+                theme_configured=True,
+                input_suggestions_enabled=input_suggestions_enabled,
+            )
         if isinstance(theme, str) and theme.strip() in UI_THEMES:
             return cls(
                 theme=theme.strip(),
@@ -690,7 +696,7 @@ def write_config(
     thinking_mode: str | None = None,
 ) -> None:
     if not is_valid_ui_theme(theme):
-        raise ValueError("UI theme must be one of: auto, dark, light.")
+        raise ValueError("UI theme must be one of: dark, light.")
     if not is_supported_provider(provider):
         raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
     provider_info = provider_info_for(provider)
@@ -816,7 +822,7 @@ def update_config_model_settings(
 
 def update_config_theme(config_path: Path, theme: str) -> None:
     if not is_valid_ui_theme(theme):
-        raise ValueError("UI theme must be one of: auto, dark, light.")
+        raise ValueError("UI theme must be one of: dark, light.")
     path = config_path.expanduser()
     if path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")

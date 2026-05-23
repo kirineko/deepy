@@ -823,7 +823,6 @@ class DeepyTuiApp(App[None]):
                 ChoiceScreen(
                     "Select theme",
                     [
-                        Choice("auto", "auto", "Follow saved/default theme behavior"),
                         Choice("dark", "dark", "Use Textual dark theme"),
                         Choice("light", "light", "Use Textual light theme"),
                     ],
@@ -833,7 +832,7 @@ class DeepyTuiApp(App[None]):
             self._update_status("Theme unchanged")
             return
         if not is_valid_ui_theme(theme):
-            await self._append_block(ErrorBlock("Usage: /theme auto|dark|light"))
+            await self._append_block(ErrorBlock("Usage: /theme dark|light"))
             return
         if self.settings.path is None:
             await self._append_block(ErrorBlock("Cannot persist theme: config path is unknown."))
@@ -2040,7 +2039,7 @@ def _reset_config_validation_error(result: ResetConfigResult) -> str:
     if not result.theme:
         return "Theme is required."
     if not is_valid_ui_theme(result.theme):
-        return "Usage: theme must be auto|dark|light"
+        return "Usage: theme must be dark|light"
     return ""
 
 
