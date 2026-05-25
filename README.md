@@ -1,13 +1,11 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-logo.webp" alt="Deepy logo" width="144">
+  <img src="asset/deepy-logo.webp" alt="Deepy logo" width="144">
 </p>
 
 <h1 align="center">Deepy</h1>
 
 <p align="center">
-  A terminal coding agent for DeepSeek and OpenAI-compatible providers.
-  <br>
-  Read projects, edit files, run commands, search the web, and keep long project context in one recoverable terminal session.
+  A terminal-native coding agent for real project work.
 </p>
 
 <p align="center">
@@ -16,76 +14,36 @@
   <a href="https://kirineko.github.io/deepy/">GitHub Pages</a>
   ·
   <a href="README.zh-CN.md">中文文档</a>
-  ·
-  <a href="#quick-start">Quick Start</a>
-  ·
-  <a href="#daily-workflow">Daily Workflow</a>
 </p>
 
-![Deepy terminal welcome screen](https://raw.githubusercontent.com/kirineko/deepy/main/asset/welcome.webp)
+![Deepy terminal welcome screen](asset/welcome.webp)
 
-> Install and setup guide: **https://deepy.kirineko.tech/**
+## What Deepy Is
 
-## What Deepy Does
-
-Deepy is a Python CLI coding agent for DeepSeek and supported
-OpenAI-compatible providers. It
-keeps the working loop inside your terminal: inspect a project, ask questions,
-modify code, run validation commands, search or fetch web pages, and resume the
-same project session later.
-
-Deepy is optimized for DeepSeek V4 thinking mode, long context, cache-friendly
-prompting, and a Rich terminal UI that makes the agent's actions visible instead
-of hiding tool calls behind chat text.
+Deepy is a Python CLI coding agent for real project work. It stays in your
+terminal and combines OpenAI Agents SDK tool orchestration, project Rules,
+Agent Skills, MCP, subagents, sessions, and visible UI to read code, edit files,
+run commands, search the web, and resume long tasks. It is DeepSeek-first while
+also supporting OpenAI-compatible providers.
 
 ## Why Use It
 
-- **Provider-aware model selection**: starts with DeepSeek `deepseek-v4-pro`,
-  thinking enabled, and `reasoning_effort=max`. Use `/model` to switch between
-  DeepSeek, OpenRouter MiMo, and Xiaomi MiMo models with provider-specific
-  thinking choices.
-- **Project-aware coding tools**: read files, write new files, modify existing
-  files with stale-write protection, run shell commands, and review readable
-  diffs.
-- **Visible terminal transcript**: thinking, tool calls, shell output, usage,
-  context status, and command results are shown in the terminal.
-- **Research from the terminal**: use WebSearch for discovery and WebFetch when
-  you already have an exact URL.
-- **Long-session continuity**: JSONL sessions, `/resume`, `/new`, context window
-  status, automatic compacting, and manual `/compact`.
-- **Local command mode**: type `!cmd` to run a non-interactive local shell command
-  without sending it to the model; the result is still saved as context.
-- **Cross-platform shell handling**: POSIX shell, PowerShell, cmd, Windows paths,
+- **DeepSeek-first agent loop**: tuned for DeepSeek V4 thinking mode while still
+  supporting OpenAI-compatible providers such as OpenRouter and Xiaomi MiMo.
+- **Transparent terminal execution**: thinking, tool calls, diffs, shell output,
+  usage, and context pressure stay visible in the transcript.
+- **Project memory and continuity**: `AGENTS.md` rules, JSONL sessions,
+  `/resume`, `/compact`, automatic compacting, and context-window status keep
+  long project work recoverable.
+- **Extensible agent ecosystem**: Agent Skills, MCP servers, subagents, and
+  skill-market installation give Deepy reusable workflows beyond built-in tools.
+- **Practical coding controls**: stale-write protection, direct `!cmd` local
+  commands, managed background tasks, and `/ps` / `/stop` keep local execution
+  reviewable.
+- **Cross-platform shell support**: POSIX shell, PowerShell, cmd, Windows paths,
   UTF-8 output, CRLF editing, and non-interactive Windows local command mode.
 
-## See It Work
-
-### Terminal-Centered Agent Loop
-
-Deepy keeps model reasoning, WebFetch, shell output, and status lines visible in
-one transcript.
-
-![Deepy thinking, WebFetch, and shell output](https://raw.githubusercontent.com/kirineko/deepy/main/asset/webfetch-shell-thinking.webp)
-
-### Code Editing With Reviewable Diff
-
-File edits are shown with path information and readable diff output so you can
-inspect what changed before continuing.
-
-![Deepy edit diff preview](https://raw.githubusercontent.com/kirineko/deepy/main/asset/edit-diff.webp)
-
-### Search, Fetch, And Local Commands
-
-Use WebSearch / WebFetch for external context, `@` for file mentions, and `!`
-for direct local commands.
-
-![Deepy web research workflow](https://raw.githubusercontent.com/kirineko/deepy/main/asset/websearch.webp)
-
-![Deepy local command mode](https://raw.githubusercontent.com/kirineko/deepy/main/asset/command_mode.webp)
-
 ## Quick Start
-
-For the guided installation page, open **https://deepy.kirineko.tech/**.
 
 1. Install `uv`:
 
@@ -97,166 +55,226 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-2. Configure a uv mirror.
-
-Linux / macOS: `~/.config/uv/uv.toml`
-
-```toml
-[[index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
-default = true
-```
-
-Windows: `%AppData%\uv\uv.toml`
-
-```toml
-[[index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
-default = true
-```
-
-3. Install Deepy:
+2. Install Deepy:
 
 ```bash
 uv tool install deepy-cli
 ```
 
-The installed command is `deepy`.
-
-4. Configure your provider API key and start Deepy:
+3. Start Deepy in a project:
 
 ```bash
-deepy config setup
-
 cd your-project
 deepy
 ```
 
-### Experimental Textual TUI
+If Deepy has not been configured yet, the first run guides you through provider,
+API key, model, and theme setup. You can later run `deepy config setup` to
+reconfigure manually.
 
-Deepy's stable default UI is still launched with `deepy`. Users who want to try
-the new opt-in Textual interface can run:
-
-```bash
-deepy tui
-```
-
-This first iteration focuses on experience and TUI-native interactions: a
-scrollable transcript, live thinking and assistant blocks, prompt suggestions
-for slash commands and `@file` mentions, status/help surfaces, and a Deepy-owned
-diff view. It is experimental and may change between releases.
-
-![Deepy Textual TUI](https://raw.githubusercontent.com/kirineko/deepy/main/asset/deepy-tui.webp)
-
-`/status` is available in both the stable terminal UI and the TUI. It shows
-session/project usage, context window pressure, and DeepSeek balance in one
-compact view. The balance API is called only when `/status` is invoked, not on
-startup, model turns, input suggestions, or exit.
-
-![Deepy TUI status panel](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-status.webp)
-
-`/exit`, `/quit`, and pressing Ctrl+D twice now print the same compact session
-summary in both UIs.
-
-![Deepy TUI session summary](https://raw.githubusercontent.com/kirineko/deepy/main/asset/tui-summary.webp)
-
-Known limitations: the TUI does not add interactive shell/PTTY support yet, and
-toad / textual-diff-view are only design references. Deepy does not copy their
-AGPL source or depend on those packages.
-
-Please report feedback through GitHub Issues and include your terminal, shell,
-operating system, and the exact `deepy tui` workflow you tried.
-
-## Installation Notes
-
-Use this order for a fresh machine:
-
-### 1. Install uv
-
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows PowerShell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-### 2. Configure a uv mirror
-
-Linux / macOS: `~/.config/uv/uv.toml`
-
-```toml
-[[index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
-default = true
-```
-
-Windows: `%AppData%\uv\uv.toml`
-
-```toml
-[[index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
-default = true
-```
-
-### 3. Install Deepy
-
-```bash
-uv tool install deepy-cli
-```
-
-### 4. Configure and start
-
-```bash
-deepy config setup
-
-cd your-project
-deepy
-```
-
-Upgrade or uninstall Deepy:
+Upgrade or uninstall:
 
 ```bash
 uv tool upgrade deepy-cli
 uv tool uninstall deepy-cli
 ```
 
-## Daily Workflow
+## First Session
 
-Inside an interactive Deepy session:
+Try requests like these inside `deepy`:
 
 ```text
-/model       Select provider, model, and thinking mode
-/status      Show usage, context pressure, and DeepSeek balance
-/ps          Show managed background shell tasks
-/stop        Choose background shell tasks to stop
-/resume      Resume a previous project session
-/new         Start a fresh session
-/compact     Compact the active session context
-/theme       Show or change terminal UI theme
-@src/app.py  Mention a file in the current project
-!pytest -q   Run a local non-interactive command
-Esc          Interrupt the current model turn
-Ctrl+D       Press twice to quit
+Summarize this project and point out the main entry points.
+Read @src/app.py and explain how the request flow works.
+Fix the failing test, run the focused test, and summarize the diff.
+Search the web for the current API behavior, then update the integration notes.
 ```
 
-Typical usage:
+Useful interactive inputs:
 
 ```text
-Ask Deepy to inspect a bug, edit files, run tests, and summarize what changed.
-Use @ to reference files precisely.
-Use ! for commands you want to run directly without model mediation.
-For long-running servers or watchers, Deepy can run shell commands as managed
-background tasks. Their output is captured separately; use `/ps`, `/stop` to
-choose one task or all tasks, or use the model-facing `task_output` tool to
-inspect and manage them.
-Use /resume when returning to a project later.
-Use /compact when a long session needs a durable summary.
+@src/app.py       Mention a file in the current project
+!pytest -q        Run a local non-interactive command directly
+/model            Select provider, model, and thinking mode
+/status           Show usage, context pressure, and DeepSeek balance
+/resume           Resume a previous project session
+/new              Start a fresh session
+/compact          Compact the active session context
+/mcp              Show MCP server status and tools
+/skills           Manage local and market Skills
+/ps               Show managed background shell tasks
+/stop             Choose background shell tasks to stop
+Esc               Interrupt the current model turn
+Ctrl+D            Press twice to quit
+```
+
+## What It Looks Like
+
+### Terminal-Centered Agent Loop
+
+Deepy keeps model reasoning, WebFetch, shell output, and status lines visible in
+one transcript.
+
+![Deepy thinking, WebFetch, and shell output](asset/webfetch-shell-thinking.webp)
+
+### Code Editing With Reviewable Diff
+
+File edits are shown with path information and readable diff output.
+
+![Deepy edit diff preview](asset/edit-diff.webp)
+
+### Search, Fetch, And Local Commands
+
+Use WebSearch / WebFetch for external context, `@` for file mentions, and `!`
+for direct local commands.
+
+![Deepy web research workflow](asset/websearch.webp)
+
+## Stable UI And Experimental TUI
+
+The default `deepy` command starts the stable Rich/prompt-toolkit terminal UI.
+The opt-in Textual interface is available with:
+
+```bash
+deepy tui
+```
+
+The TUI has a scrollable transcript, live thinking blocks, richer tool output
+blocks, slash-command and `@file` suggestions, status/help screens, and a
+Deepy-owned diff view. It remains experimental and may change between releases.
+
+![Deepy Textual TUI](asset/deepy-tui.webp)
+
+`/status` shows session/project usage, context-window pressure, and DeepSeek
+balance in one panel. Exiting the TUI prints the same compact session summary
+as the stable terminal UI.
+
+See [docs/deepy-ui-and-tui.md](docs/deepy-ui-and-tui.md) for the full feature
+comparison and current limitations.
+
+## Rules
+
+Rules are project and personal instructions that shape how Deepy should work.
+Deepy automatically loads them from `AGENTS.md` files:
+
+- `~/.deepy/AGENTS.md` for Deepy-wide personal guidance
+- `AGENTS.md` files from the git root down to the current working directory
+
+Project `AGENTS.md` files are loaded from broad to specific. A file in a nested
+directory appears after the repository root file and takes precedence when rules
+conflict. Direct user instructions still take precedence over loaded
+`AGENTS.md` guidance.
+
+Run `/init` in the interactive terminal to have Deepy inspect the repository and
+create or refresh the project root `AGENTS.md`.
+
+## Skills
+
+Skills are reusable capability packs. Deepy discovers three kinds:
+
+- **Project skills**: `<project>/.agents/skills/<name>/SKILL.md`. These are
+  shared with the current repository and take priority over user or built-in
+  skills with the same name.
+- **User skills**: `~/.agents/skills/<name>/SKILL.md`. These are personal
+  skills available across projects and override built-in skills with the same
+  name.
+- **Built-in skills**: packaged with Deepy for common workflows. They are always
+  available, but they are not editable or uninstallable through the skill UI.
+
+Skills use the standard Agent Skills progressive-disclosure flow: Deepy shows
+Skill metadata first, and the model reads the full `SKILL.md` only when the task
+matches that skill.
+
+The skill market is a curated source for installable Skills. Market-installed
+Skills can be installed into user or project scope, updated, and uninstalled
+through Deepy's Skills UI. Deepy records market-installed Skill metadata under
+`~/.deepy/skill-market/`.
+
+Use `/skills` to manage local and market Skills, or invoke a Skill directly:
+
+```text
+/skills
+/<name> [request]
+```
+
+![Deepy Skills market](asset/skill-market.webp)
+
+## MCP
+
+Deepy can load MCP servers through the OpenAI Agents SDK. MCP is how you connect
+external tools such as search providers, databases, local services, or
+organization-specific context providers.
+
+Most users only need `~/.deepy/mcp.json`. Project-level MCP configuration is
+ignored by default because stdio MCP servers can start local commands. Enable it
+only for repositories you trust.
+
+See [docs/mcp.md](docs/mcp.md) for setup, fields, search preference, subagent
+MCP inheritance, and troubleshooting.
+
+## Trust Boundaries
+
+- File edits are rendered with path information and readable diffs.
+- Existing file replacement uses stale-write protection.
+- `!cmd` is direct local command mode; model-started shell commands are shown in
+  the transcript.
+- MCP stdio servers start local commands. Project MCP config is ignored by
+  default and should only be enabled for repositories you trust.
+- Built-in subagents do not receive source mutation tools by default.
+- The tester subagent uses constrained `test_shell`, not raw unrestricted
+  `shell`.
+
+## Learning Resources
+
+| Topic | English | Chinese |
+| --- | --- | --- |
+| Tutorial videos | [docs/tutorial-videos.md](docs/tutorial-videos.md) | [docs/tutorial-videos.zh-CN.md](docs/tutorial-videos.zh-CN.md) |
+| MCP setup and troubleshooting | [docs/mcp.md](docs/mcp.md) | [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md) |
+| Subagents and custom subagents | [docs/subagents.md](docs/subagents.md) | [docs/subagents.zh-CN.md](docs/subagents.zh-CN.md) |
+| Stable UI versus experimental TUI | [docs/deepy-ui-and-tui.md](docs/deepy-ui-and-tui.md) | [docs/deepy-ui-and-tui.zh-CN.md](docs/deepy-ui-and-tui.zh-CN.md) |
+
+## Command Reference
+
+```bash
+deepy --version
+deepy config setup
+deepy config reset
+deepy config theme
+deepy doctor
+deepy doctor --live --json
+deepy status
+deepy tui
+deepy skills list
+deepy skills show <name>
+deepy sessions list
+deepy sessions show <session-id>
+deepy run "summarize this project"
+```
+
+Inside the interactive terminal:
+
+```text
+/help                   Show interactive help
+/model                  Select provider, model, and thinking mode
+/status                 Show usage, context pressure, and DeepSeek balance
+/resume                 Resume a previous project session
+/new                    Start a fresh session
+/compact                Compact the active session context
+/mcp                    Show MCP server status and tools
+/skills                 Manage local and market Skills
+/<name> [request]       Invoke a Skill directly
+/init                   Create or update project AGENTS.md
+/theme                  Show or change terminal UI theme
+/ps                     Show managed background shell tasks
+/stop                   Choose background shell tasks to stop
 ```
 
 ## Configuration
 
-Deepy uses TOML configuration at `~/.deepy/config.toml`.
+Deepy stores configuration in `~/.deepy/config.toml`. The interactive first-run
+setup creates this file for most users.
+
+Minimal resolved shape:
 
 ```toml
 [model]
@@ -277,9 +295,10 @@ compact_preserve_recent_messages = 2
 theme = "dark" # dark or light
 ```
 
-Set config without the interactive wizard:
+Manual configuration commands:
 
 ```bash
+deepy config setup
 deepy config init --api-key sk-... --provider deepseek --model deepseek-v4-pro
 deepy config init --api-key sk-or-... --provider openrouter --model xiaomi/mimo-v2.5-pro
 deepy config init --api-key sk-or-... --provider openrouter --model anthropic/claude-sonnet-4.5 --thinking minimal
@@ -304,104 +323,6 @@ WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it:
 [tools.web_search]
 searxng_url = "https://your-searxng.example/"
 ```
-
-Deepy can also load MCP servers through the OpenAI Agents SDK. Most users only
-need `~/.deepy/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "tavily-mcp"],
-      "env": {"TAVILY_API_KEY": "${TAVILY_API_KEY}"},
-      "roles": ["web_search"]
-    }
-  }
-}
-```
-
-When an active MCP tool is marked or detected as web search, Deepy instructs the
-model to prefer it over built-in WebSearch and keeps built-in WebSearch as a
-fallback. Project MCP config is ignored by default because stdio MCP servers can
-start local commands; enable `mcp.allow_project_config` only for trusted
-projects. Use `/mcp` to inspect server status and exposed tools. Advanced MCP
-configuration is documented in [docs/mcp.md](docs/mcp.md).
-
-## Command Reference
-
-```bash
-deepy --version
-deepy config setup
-deepy config reset
-deepy config theme
-deepy doctor
-deepy doctor --live --json
-deepy status
-deepy tui
-deepy skills list
-deepy sessions list
-deepy sessions show <session-id>
-deepy run "summarize this project"
-```
-
-Inside the interactive terminal:
-
-```text
-/skills                 Manage local and market skills
-/skills list            List discovered skills
-/skills search <query>  Search the configured skill market
-/skills install <name>  Install a market skill
-/skill:<name> [request] Invoke a skill directly
-/init                   Create or update project AGENTS.md
-/mcp                    Show MCP server status and tools
-/ps                     Show managed background shell tasks
-/stop                   Choose background shell tasks to stop
-/status                 Show usage, context pressure, and DeepSeek balance
-```
-
-## AGENTS.md Instructions And Skills
-
-Deepy automatically loads agent-facing instructions from:
-
-- `~/.deepy/AGENTS.md` for Deepy-wide personal guidance
-- `AGENTS.md` files from the git root down to the current working directory
-- `.agents/skills/*/SKILL.md`
-
-Project `AGENTS.md` files are loaded from broad to specific. A file in a nested
-directory appears after the repository root file and takes precedence when rules
-conflict. Direct user instructions still take precedence over loaded
-`AGENTS.md` guidance.
-
-A concise `AGENTS.md` works best:
-
-```markdown
-# AGENTS.md
-
-## Commands
-- Test: `uv run pytest`
-- Lint: `uv run ruff check`
-- Type check: `uv run ty check src`
-
-## Architecture
-- Keep CLI entry points thin; put reusable behavior under `src/`.
-
-## Style
-- Prefer small, focused changes that match existing patterns.
-
-## Verification
-- Run focused tests for touched code before broader checks.
-
-## Boundaries
-- Do not rewrite unrelated files or revert user changes.
-```
-
-Skills remain standard Agent Skills under `.agents/skills/*/SKILL.md` and are
-loaded through the skill progressive-disclosure flow.
-
-Run `/init` in the interactive terminal to have Deepy inspect the repository and
-create or refresh the project root `AGENTS.md`.
 
 ## Development
 

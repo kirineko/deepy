@@ -19,7 +19,7 @@ Use this skill when the user wants to browse, install, uninstall, update, or ins
 - `/skills installed` lists market-installed skills.
 - `/skills update <name>` updates one market-installed skill when a newer upload exists.
 - `/skills update --all` updates all market-installed skills when newer uploads exist.
-- `/skill:<name> [request]` actively invokes an installed or built-in skill.
+- `/<name> [request]` actively invokes an installed or built-in skill.
 
 ## Storage Rules
 

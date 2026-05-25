@@ -4,6 +4,9 @@ Deepy supports MCP servers through the OpenAI Agents SDK. Deepy does not
 implement its own MCP protocol client; it maps your configuration to SDK MCP
 servers and passes connected servers to the agent.
 
+Use MCP when you want Deepy to call external tools such as search, databases,
+local services, or organization-specific context providers.
+
 Deepy uses two files:
 
 - `~/.deepy/config.toml`: Deepy MCP policy and preference settings.
@@ -47,6 +50,14 @@ Start Deepy and run:
 
 You should see the `tavily` server and its model-visible MCP tools.
 
+![Deepy MCP status](../asset/mcp-status.webp)
+
+When a server is marked with `roles: ["web_search"]`, Deepy can prefer that MCP
+tool for current-information search while keeping built-in WebSearch as a
+fallback.
+
+![Deepy using Tavily MCP search](../asset/mcp-search.webp)
+
 ## `~/.deepy/config.toml`
 
 All MCP policy fields are optional. Deepy has in-memory defaults, so most users
@@ -76,7 +87,7 @@ fallback_to_builtin = true
 | `enabled` | boolean | `true` | Enables MCP loading. Set to `false` to disable all MCP servers. |
 | `connect_timeout_seconds` | number | `10` | Timeout for connecting each MCP server. |
 | `cleanup_timeout_seconds` | number | `10` | Timeout for closing MCP servers during exit. |
-| `client_session_timeout_seconds` | number | `30` | SDK MCP session read timeout. This affects slow `tools/list` and `tools/call` responses. Increase this if MCP tools time out while waiting for a response. |
+| `client_session_timeout_seconds` | number | `30` | SDK MCP session read timeout. Increase this if slow `tools/list` or `tools/call` responses time out. |
 | `cache_tools_list` | boolean | `true` | Lets the SDK cache MCP tool lists for lower per-turn latency. |
 | `allow_project_config` | boolean | `false` | Allows `<project>/.deepy/mcp.json` to be loaded. Keep disabled unless you trust the project. |
 | `prefer_mcp_web_search` | boolean | `true` | Enables Deepy web-search preference guidance for detected MCP search tools. |
@@ -254,3 +265,10 @@ npx -y tavily-mcp@latest
 
 If `npx` is not found, install Node.js or use the full path to `npx` in
 `command`.
+
+If a server is skipped, check:
+
+- Missing environment variables referenced by `${NAME}` placeholders.
+- Invalid `transport`, missing `command`, or missing `url`.
+- Whether project MCP config is still disabled by `allow_project_config = false`.
+- Whether the stdio command works when run directly in the same shell.

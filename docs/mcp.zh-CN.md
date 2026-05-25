@@ -1,7 +1,9 @@
 # Deepy MCP 配置
 
-Deepy 通过 OpenAI Agents SDK 支持 MCP server。Deepy 不自己实现 MCP 协议
-client，而是把你的配置映射为 SDK MCP server，并把已连接的 server 交给 agent。
+Deepy 通过 OpenAI Agents SDK 支持 MCP server。Deepy 不自己实现 MCP 协议 client，
+而是把你的配置映射为 SDK MCP server，并把已连接的 server 交给 agent。
+
+当你希望 Deepy 调用外部工具时，可以使用 MCP，例如搜索、数据库、本地服务或组织内部上下文服务。
 
 Deepy 使用两个文件：
 
@@ -13,7 +15,7 @@ Deepy 使用两个文件：
 
 ## 最小 Tavily 配置
 
-先在 shell 里设置 API key：
+在 shell 中设置 API key：
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
@@ -45,6 +47,13 @@ export TAVILY_API_KEY="tvly-your-key"
 
 应该能看到 `tavily` server 以及暴露给模型的 MCP tools。
 
+![Deepy MCP 状态](../asset/mcp-status.webp)
+
+当 server 标记了 `roles: ["web_search"]` 时，Deepy 可以优先使用这个 MCP 工具进行当前信息搜索，
+同时保留内置 WebSearch 作为 fallback。
+
+![Deepy 使用 Tavily MCP 搜索](../asset/mcp-search.webp)
+
 ## `~/.deepy/config.toml`
 
 所有 MCP 策略字段都是可选的。Deepy 有内存默认值，所以大多数用户只需要配置
@@ -74,7 +83,7 @@ fallback_to_builtin = true
 | `enabled` | boolean | `true` | 是否启用 MCP。设为 `false` 会禁用所有 MCP server。 |
 | `connect_timeout_seconds` | number | `10` | 每个 MCP server 的连接超时时间。 |
 | `cleanup_timeout_seconds` | number | `10` | 退出时关闭 MCP server 的超时时间。 |
-| `client_session_timeout_seconds` | number | `30` | SDK MCP session 读超时。影响较慢的 `tools/list` 和 `tools/call` 响应。如果 MCP 工具等待响应时超时，可以调大它。 |
+| `client_session_timeout_seconds` | number | `30` | SDK MCP session 读超时。较慢的 `tools/list` 或 `tools/call` 超时时可以调大它。 |
 | `cache_tools_list` | boolean | `true` | 允许 SDK 缓存 MCP tool 列表，降低每轮延迟。 |
 | `allow_project_config` | boolean | `false` | 是否允许加载 `<project>/.deepy/mcp.json`。除非信任项目，否则保持关闭。 |
 | `prefer_mcp_web_search` | boolean | `true` | 是否启用 MCP 搜索工具优先的提示词引导。 |
@@ -88,11 +97,11 @@ fallback_to_builtin = true
 | `preferred_tools` | string array | `[]` | 可选的优先 MCP 搜索工具名列表。 |
 | `fallback_to_builtin` | boolean | `true` | MCP 搜索不可用或失败时，保留内置 `WebSearch` fallback。 |
 
-搜索优先级判断顺序：
+优先级顺序：
 
 1. `preferred_server` / `preferred_tools`
 2. `mcp.json` 中的 `roles = ["web_search"]`
-3. 名称启发式：server/tool/description 包含 `tavily`、`search`、
+3. 名称启发式：server/tool/description 中包含 `tavily`、`search`、
    `web_search` 或 `web-search`
 
 ## `~/.deepy/mcp.json`
@@ -109,14 +118,14 @@ fallback_to_builtin = true
 }
 ```
 
-`server-name` 会进入模型可见的 tool 名。例如 server 名是 `tavily`，tool 名是
-`tavily_search`，模型看到的是：
+`server-name` 会成为模型可见工具名的一部分。例如名为 `tavily` 的 server 暴露
+`tavily_search` 工具时，模型看到的是：
 
 ```text
 mcp_tavily__tavily_search
 ```
 
-server 名可以包含字母、数字、`.`、`_` 和 `-`。
+Server 名称可以包含字母、数字、`.`、`_` 和 `-`。
 
 ### 通用 server 字段
 
@@ -127,7 +136,7 @@ server 名可以包含字母、数字、`.`、`_` 和 `-`。
 | `roles` | string array | `[]` | Deepy 本地元数据。用 `["web_search"]` 标记优先搜索 server。 |
 | `preferred_tools` | string array | `[]` | Deepy 本地元数据，标记该 server 上优先使用的 tool 名。 |
 
-Deepy 会忽略未知字段，除非它们导致 server 定义变得不明确或无效。
+Deepy 会忽略未知字段，除非这些字段让 server 定义变得歧义或无效。
 
 ### Stdio server 字段
 
@@ -211,6 +220,27 @@ allow_project_config = true
 
 只对你信任的仓库开启项目级 MCP 配置。项目级 stdio server 可以启动本地命令。
 
+## Subagent 搜索继承
+
+内置 `explore` subagent 默认只会继承 Deepy 识别为 web/search 类的 MCP tools。
+Deepy 会保留稳定的 server 前缀工具名，例如 `mcp_tavily__tavily_search`，
+并且默认不会把非搜索 MCP tools 传给 subagent。
+
+自定义 subagent 可以关闭搜索继承：
+
+```md
+---
+name: docs-research
+description: Search docs and summarize references.
+mcp:
+  inherit_search: false
+---
+
+Read-only research instructions.
+```
+
+这个继承过程不会在状态输出里暴露 MCP secret。
+
 ## 排查问题
 
 在 Deepy 里使用 `/mcp` 查看 server 状态、tool 名和校验错误。
@@ -224,3 +254,10 @@ npx -y tavily-mcp@latest
 ```
 
 如果找不到 `npx`，安装 Node.js，或者在 `command` 里写 `npx` 的完整路径。
+
+如果某个 server 被跳过，检查：
+
+- `${NAME}` 占位符引用的环境变量是否缺失。
+- `transport` 是否无效，或者是否缺少 `command` / `url`。
+- 项目级 MCP 配置是否仍被 `allow_project_config = false` 禁用。
+- stdio 命令能否在同一个 shell 中直接运行。

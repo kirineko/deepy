@@ -1,21 +1,32 @@
-# Subagents
+# Deepy Subagents
 
-Deepy can delegate independent specialist work to subagents while the main Deepy
-agent keeps control of the final answer.
+Deepy can delegate independent specialist work to subagents while the main
+agent keeps control of the final answer. Subagents are useful when a task has a
+separable research, review, or verification slice.
 
-Built-ins:
+## Built-In Subagents
 
-- `explore`: read-only codebase, documentation, and web/search investigation.
-- `reviewer`: read-only correctness, security, maintainability, design, and
-  test-risk review.
-- `tester`: bug reproduction and verification through constrained `test_shell`.
+Deepy exposes built-ins as model-callable tools:
 
-Deepy exposes subagents as tools named `subagent_explore`, `subagent_reviewer`,
-and `subagent_tester`. Use is automatic when the main agent decides the task is
-large enough or specialized enough to delegate. The terminal shows compact
-`[Subagent] <name>` lifecycle lines and the final subagent report.
+| Subagent | Tool name | Use for |
+| --- | --- | --- |
+| `explore` | `subagent_explore` | Read-only codebase, documentation, and web/search investigation. |
+| `reviewer` | `subagent_reviewer` | Correctness, security, maintainability, design, and test-risk review. |
+| `tester` | `subagent_tester` | Bug reproduction and verification through constrained `test_shell`. |
 
-Limits:
+Use is automatic when the main agent decides the task is large enough or
+specialized enough to delegate. The terminal shows compact `[Subagent] <name>`
+lifecycle lines and the final subagent report.
+
+You can also route a request explicitly with slash commands such as:
+
+```text
+/explore inspect the auth flow and summarize risks
+/reviewer review the staged diff for regressions
+/tester reproduce the failing CLI test
+```
+
+## Limits
 
 - Subagents do not spawn other subagents.
 - Built-in subagents do not receive source mutation tools.
@@ -27,8 +38,9 @@ Limits:
 ## Custom Subagents
 
 Project custom subagents live in `.deepy/subagents/*.md`. User custom subagents
-live in `~/.deepy/subagents/*.md`. Project definitions override user definitions,
-and user definitions override built-ins with the same normalized name.
+live in `~/.deepy/subagents/*.md`. Project definitions override user
+definitions, and user definitions override built-ins with the same normalized
+name.
 
 Deepy does not load `.agents/skills` as subagents. That directory remains for
 Agent Skills.
@@ -54,6 +66,18 @@ Return likely causes, evidence, relevant paths, and unresolved questions.
 Do not modify files or run commands.
 ```
 
+Supported frontmatter fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `name` | yes | Stable subagent name. Project/user definitions with the same normalized name override lower-priority definitions. |
+| `description` | yes | Short description shown to the main agent for delegation decisions. |
+| `model` | no | `inherit` or another supported model selection strategy. |
+| `tools` | no | Explicit supported tool list for the subagent. |
+| `disallowedTools` | no | Supported tools to remove from the subagent. |
+| `mcp` | no | MCP inheritance policy, such as `inherit_search: false`. |
+| `max_turns` | no | Bounded max-turn limit. |
+
 Supported tools for custom subagents:
 
 - `Search`
@@ -66,6 +90,20 @@ Supported tools for custom subagents:
 
 Mutation tools such as `edit_text`, `write_file`, `apply_patch`, and raw
 `shell` are not supported for subagents in this version.
+
+## MCP Search Inheritance
+
+The built-in `explore` subagent may inherit MCP tools that Deepy identified as
+preferred web/search tools. Non-search MCP tools are not inherited by default.
+
+Custom subagents can opt out:
+
+```md
+mcp:
+  inherit_search: false
+```
+
+See [mcp.md](mcp.md) for MCP configuration details.
 
 ## `test_shell`
 
@@ -104,3 +142,14 @@ approval_required_patterns = ["make seed-db", "docker compose up *"]
 ```
 
 Global deny rules still override project allow patterns.
+
+## Good Custom Subagent Instructions
+
+Keep subagent instructions narrow and evidence-driven:
+
+```text
+Inspect only the assigned paths.
+Return findings with file paths and commands run.
+Do not modify files.
+Call out unresolved questions separately.
+```

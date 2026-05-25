@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Deepy 0.2.20 是支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent，启动时先显示 welcome 和 prompt，再后台检查更新和连接 MCP。"
+      content="Deepy 是面向真实项目工作的终端原生编程 Agent，整合 Rules、Skills、MCP、subagents、sessions 和可审查终端 UI。"
     >
-    <title>Deepy 0.2.20 - 终端编程 Agent</title>
+    <title>Deepy - 终端原生编程 Agent</title>
     <link rel="icon" href="asset/deepy-logo.webp" type="image/webp">
     <link rel="stylesheet" href="site.css">
   </head>
@@ -18,373 +18,345 @@
         <span>Deepy</span>
       </a>
       <nav>
-        <a href="#tui">TUI</a>
-        <a href="#capabilities">功能</a>
-        <a href="#skills">Skills</a>
-        <a href="#mcp">MCP</a>
-        <a href="#usage">使用</a>
-        <a href="#install">安装</a>
-        <a href="https://deepy.kirineko.tech/">安装站</a>
+        <a href="#quick-start">快速开始</a>
+        <a href="#preview">效果预览</a>
+        <a href="#ecosystem">生态</a>
+        <a href="#docs">文档</a>
+        <a href="https://deepy.kirineko.tech/">安装页面</a>
         <a href="https://github.com/kirineko/deepy">GitHub</a>
+        <a href="README.md">English</a>
       </nav>
     </header>
 
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-backdrop" aria-hidden="true">
-          <img src="asset/deepy-tui.webp" alt="">
-        </div>
         <div class="hero-copy">
-          <p class="release-kicker">Deepy 0.2.20</p>
           <h1 id="hero-title">Deepy</h1>
-          <p class="hero-lede">
-            支持 DeepSeek、OpenRouter 和小米 MiMo 的终端编程 Agent。0.2.20 优化
-            启动体验，welcome 和 prompt 会先出现，版本检查与 MCP 连接转入后台状态。
+          <p class="hero-lede">面向真实项目工作的终端原生编程 Agent。</p>
+          <p class="hero-body">
+            Deepy 在 shell 内整合 OpenAI Agents SDK 工具编排、项目 Rules、Agent Skills、
+            MCP、subagents、sessions 和可审查 UI，用来理解代码、修改文件、运行命令、
+            检索网页，并恢复长任务。
           </p>
           <div class="hero-actions" aria-label="主要操作">
-            <a class="button primary" href="https://deepy.kirineko.tech/">打开安装网站</a>
-            <a class="button secondary" href="#install">查看安装命令</a>
-            <a class="button secondary" href="#tui">查看 TUI</a>
+            <a class="button primary" href="#quick-start">开始使用</a>
+            <a class="button secondary" href="README.zh-CN.md">阅读 README</a>
+            <a class="button secondary" href="https://deepy.kirineko.tech/">打开安装页面</a>
           </div>
         </div>
-        <dl class="hero-facts" aria-label="Deepy 0.2.20 核心定位">
-          <div>
-            <dt>Version</dt>
-            <dd>0.2.20</dd>
-          </div>
-          <div>
-            <dt>Startup</dt>
-            <dd>Fast welcome, prompt-ready first, background MCP</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>Usage, context window, background tasks, and DeepSeek balance</dd>
-          </div>
-          <div>
-            <dt>Exit</dt>
-            <dd>Unified session summary for /exit and Ctrl+D</dd>
-          </div>
-        </dl>
+        <figure class="hero-visual">
+          <img src="asset/welcome.webp" alt="Deepy 终端启动界面" width="1180" height="570">
+          <figcaption>首次进入项目目录后直接运行 <code>deepy</code>，未配置时首轮会自动引导设置。</figcaption>
+        </figure>
       </section>
 
-      <section class="section overview" id="capabilities" aria-labelledby="capabilities-title">
+      <section class="section reasons" aria-labelledby="reasons-title">
         <div class="section-header">
-          <h2 id="capabilities-title">0.2.20 的重点</h2>
+          <h2 id="reasons-title">为什么使用 Deepy</h2>
           <p>
-            Deepy 继续保留 Skills、MCP、项目规则和可审查文件修改能力，同时增强
-            stable UI 启动响应：先显示 welcome 和 prompt，再后台处理更新检查与 MCP 连接。
+            Deepy 的重点不是把聊天窗口搬进终端，而是把真实项目里需要的上下文、
+            工具调用、文件修改、本地命令和长期会话放在一个可审查的工作流中。
           </p>
         </div>
-        <div class="capability-grid">
+        <div class="reason-grid">
           <article>
-            <h3>快速进入 welcome</h3>
-            <p>
-              启动时不再等待版本检查或 MCP 连接完成，用户可以更快看到 welcome 和输入框。
-            </p>
+            <h3>DeepSeek-first agent loop</h3>
+            <p>针对 DeepSeek V4 thinking 模式优化，同时支持 OpenAI 兼容 provider。</p>
           </article>
           <article>
-            <h3>启动状态可见</h3>
-            <p>
-              footer 会显示 `update checking`、`mcp connecting` 等启动 ghost 状态，连接完成后刷新为 MCP 数量。
-            </p>
+            <h3>透明终端执行</h3>
+            <p>thinking、工具调用、文件 diff、shell 输出、usage 和上下文压力都在 transcript 中可见。</p>
           </article>
           <article>
-            <h3>首轮模型调用等待 MCP</h3>
-            <p>
-              prompt 立即可用；如果用户在 MCP 就绪前提交，模型调用前会等待 MCP ready，并显示正常 runtime progress。
-            </p>
+            <h3>项目记忆与连续性</h3>
+            <p>Rules、JSONL sessions、<code>/resume</code>、<code>/compact</code> 和自动 compact 让长任务可恢复。</p>
           </article>
           <article>
-            <h3>跨平台文本处理</h3>
-            <p>
-              搜索路径遵守项目边界，跳过敏感、二进制和超大文件，并覆盖 UTF-16LE、UTF-8 BOM、UTF-8、GB18030。
-            </p>
+            <h3>可扩展 Agent 生态</h3>
+            <p>Agent Skills、MCP servers、subagents 和 Skill 市场让 Deepy 复用超出内置工具的工作流。</p>
           </article>
           <article>
-            <h3>实验性 Textual TUI</h3>
-            <p>
-              `deepy tui` 提供可滚动 transcript、独立 prompt 区、状态条、slash command 和文件引用提示。
-            </p>
+            <h3>实用编程控制面</h3>
+            <p>stale-write protection、<code>!cmd</code>、后台任务管理和 <code>/ps</code> / <code>/stop</code> 让本地执行更可控。</p>
           </article>
           <article>
-            <h3>Agent Skills 和 MCP</h3>
-            <p>
-              `/skills` 管理 Agent Skills 市场，`/mcp` 检查外部工具接入；Tavily 等 MCP 搜索工具可被优先使用。
-            </p>
-          </article>
-          <article>
-            <h3>项目会话连续性</h3>
-            <p>
-              JSONL session、`/resume`、自动 compact 和 durable summary 让长项目会话可以恢复和审查。
-            </p>
+            <h3>跨平台 shell 支持</h3>
+            <p>覆盖 POSIX shell、PowerShell、cmd、Windows 路径、UTF-8 输出和 CRLF 编辑。</p>
           </article>
         </div>
       </section>
 
-      <section class="section product-strip" id="tui" aria-labelledby="tui-title">
-        <div class="section-header compact">
-          <h2 id="tui-title">Textual TUI 和 `/status`</h2>
-          <p>
-            TUI 仍是 opt-in 实验入口，并已覆盖主要日常路径：对话、状态检查、退出总结和文件 diff 审阅。
-            `/status` 会在同一个面板里显示用量、上下文窗口和 DeepSeek 余额。
-          </p>
-        </div>
-        <div class="terminal-showcase" aria-label="Deepy TUI 和 status 截图">
-          <figure class="shot hero-shot">
-            <img src="asset/deepy-tui.webp" alt="Deepy Textual TUI 对话界面" width="2866" height="1748">
-            <figcaption>
-              <strong>Textual transcript and prompt</strong>
-              <span>对话记录、滚动状态、statusline、prompt 和快捷键提示都在 TUI 中保持可见。</span>
-            </figcaption>
-          </figure>
-          <div class="terminal-support">
-            <figure class="shot compact-shot">
-              <img src="asset/tui-status.webp" alt="Deepy TUI /status 用量和余额面板" width="1256" height="848">
-              <figcaption>
-                <strong>Compact status with balance</strong>
-                <span>`/status` 汇总 session/project usage、context window 和 DeepSeek 余额。</span>
-              </figcaption>
-            </figure>
-            <figure class="shot compact-shot">
-              <img src="asset/tui-summary.webp" alt="Deepy TUI 退出时的 session summary" width="1704" height="360">
-              <figcaption>
-                <strong>Unified exit summary</strong>
-                <span>TUI 退出后输出和稳定 UI 一致的 session summary，消息数与 token 用量可直接核对。</span>
-              </figcaption>
-            </figure>
-          </div>
-        </div>
-      </section>
-
-      <section class="section product-strip" id="skills" aria-labelledby="skills-title">
-        <div class="section-header compact">
-          <h2 id="skills-title">Skill 市场</h2>
-          <p>
-            Deepy 把“下载、解压、放到正确目录、查看已安装”这些步骤收进 `/skills` 菜单。
-            用户可以先浏览市场，再选择安装到用户目录或当前项目。
-          </p>
-        </div>
-        <div class="terminal-showcase" aria-label="Deepy Skill 市场截图">
-          <figure class="shot hero-shot">
-            <img src="asset/skill-market.webp" alt="Deepy /skills 市场列表" width="1800" height="509">
-            <figcaption>
-              <strong>Skill market browser</strong>
-              <span>输入 `/skills` 后直接进入市场列表，通过键盘上下选择并查看 skill 描述。</span>
-            </figcaption>
-          </figure>
-          <div class="terminal-support">
-            <figure class="shot compact-shot">
-              <img src="asset/skill-install-target.webp" alt="Deepy skill 安装范围选择" width="1800" height="183">
-              <figcaption>
-                <strong>User or project install</strong>
-                <span>安装前先选择用户级或项目级路径，避免把临时项目需求写进全局目录。</span>
-              </figcaption>
-            </figure>
-            <figure class="shot compact-shot">
-              <img src="asset/installed-skills-list.webp" alt="Deepy 已安装 skills 管理列表" width="1800" height="278">
-              <figcaption>
-                <strong>Installed skills manager</strong>
-                <span>已安装 skills 可以统一查看、卸载和更新，也能识别用户自行创建或解压的 skill。</span>
-              </figcaption>
-            </figure>
-          </div>
-        </div>
-      </section>
-
-      <section class="section workflows" id="mcp" aria-labelledby="workflow-title">
+      <section class="section quick-start" id="quick-start" aria-labelledby="quick-start-title">
         <div class="section-header">
-          <h2 id="workflow-title">规则、Skills 和 MCP 在同一个会话里协作</h2>
+          <h2 id="quick-start-title">快速开始</h2>
           <p>
-            0.2.0 的重点不是堆更多命令，而是让模型在终端里按正确的上下文工作：项目规则先加载，
-            skill 按需披露，当前信息查询优先走用户配置的 MCP 工具。
+            安装后进入项目目录直接运行 <code>deepy</code>。如果还没有配置过，Deepy
+            会在首次启动时引导填写 provider、API key、模型和主题。
           </p>
         </div>
-        <div class="workflow-grid" aria-label="Deepy 0.2.20 工作流截图">
-          <figure class="workflow-card diff-card">
-            <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 [AGENTS.md]" width="1800" height="679">
-            <figcaption>
-              <span>01</span>
-              <h3>`[AGENTS.md]` 状态可见</h3>
-              <p>当当前项目存在规则文件时，状态栏会显示 `[AGENTS.md]`，提醒用户模型正受项目规则约束。</p>
-            </figcaption>
-          </figure>
-          <figure class="workflow-card">
-            <img src="asset/skill-call-completion.webp" alt="Deepy /skill 名称补全" width="1378" height="332">
-            <figcaption>
-              <span>02</span>
-              <h3>`/skill:&lt;name&gt;` 主动调用</h3>
-              <p>输入 `/skill:` 后出现候选提示，用户不用记住已安装 skill 的完整名称。</p>
-            </figcaption>
-          </figure>
-          <figure class="workflow-card">
-            <img src="asset/mcp-status.webp" alt="Deepy /mcp 显示 Tavily MCP 工具状态" width="1600" height="587">
-            <figcaption>
-              <span>03</span>
-              <h3>`/mcp` 查看工具接入状态</h3>
-              <p>MCP server、连接状态、工具数量和被标记为 web-search 的工具都可以直接检查。</p>
-            </figcaption>
-          </figure>
-          <figure class="workflow-card">
-            <img src="asset/mcp-search.webp" alt="Deepy 调用 Tavily MCP 搜索" width="1800" height="690">
-            <figcaption>
-              <span>04</span>
-              <h3>Tavily MCP 参与真实搜索</h3>
-              <p>模型进行当前信息查询时会优先调用 Tavily MCP；若 MCP 不可用，内置 WebSearch 仍可兜底。</p>
-            </figcaption>
-          </figure>
-          <figure class="workflow-card">
-            <img src="asset/edit-diff.webp" alt="Deepy 代码修改和 diff 预览" width="1734" height="1350">
-            <figcaption>
-              <span>05</span>
-              <h3>文件修改仍然可审查</h3>
-              <p>文件工具显示整行 diff、按文件分段的语法高亮和路径信息，用户能快速确认 Agent 的文件改动。</p>
-            </figcaption>
-          </figure>
-          <figure class="workflow-card">
-            <img src="asset/command_mode.webp" alt="Deepy 本地命令模式" width="1742" height="742">
-            <figcaption>
-              <span>06</span>
-              <h3>`!cmd` 不经过模型</h3>
-              <p>用户清楚自己要执行什么时，可直接把命令交给当前 shell，输出仍进入上下文。</p>
-            </figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section class="section feature-table" aria-labelledby="details-title">
-        <div class="section-header compact">
-          <h2 id="details-title">运行保障</h2>
-          <p>
-            Skills、MCP、session history、compact、theme 和跨平台 shell 都服务于同一个目标：
-            让真实项目里的 Agent 会话可继续、可审查、可恢复。
-          </p>
-        </div>
-        <div class="detail-table" role="table" aria-label="Deepy 功能详细说明">
-          <div class="detail-row" role="row">
-            <strong role="cell">Agent Skills</strong>
-            <span role="cell">内置 `skill-creator` 和 `skill-installer`，外部 skill 使用标准 `SKILL.md` 结构并从 `~/.agents/skills` / `.agents/skills` 加载。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">MCP</strong>
-            <span role="cell">通过 OpenAI Agents SDK 接入 stdio 和 Streamable HTTP MCP server；项目级 MCP 配置默认禁用，避免仓库自动启动本地命令。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">Web research</strong>
-            <span role="cell">有 MCP web-search 工具时优先使用 MCP；内置 WebSearch 使用 SearXNG / DuckDuckGo fallback，WebFetch 用于直接读取 URL。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">TodoList & statusline</strong>
-            <span role="cell">工具进度、TodoList 当前任务、运行时状态行和多行输入 transcript 统一在终端 UI 中展示，减少覆盖和重复输出。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">Session history</strong>
-            <span role="cell">`/resume`、`deepy sessions list`、`deepy sessions show` 读取项目本地 JSONL 历史，跨进程继续同一项目上下文。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">Durable compact</strong>
-            <span role="cell">自动 compact 会先归档原 session，再写入摘要与近期消息；失败时保留原历史，避免半写入状态。</span>
-          </div>
-          <div class="detail-row" role="row">
-            <strong role="cell">Windows</strong>
-            <span role="cell">PowerShell/cmd 方言、Windows 路径、UTF-8 输出、CRLF 文本编辑和非交互本地命令 pipe 路径都有测试覆盖。</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="section usage" id="usage" aria-labelledby="usage-title">
-        <div class="section-header">
-          <h2 id="usage-title">基础使用</h2>
-          <p>第一次使用时只需要完成安装、配置 DeepSeek API key，然后在项目目录启动 Deepy。</p>
-        </div>
-        <div class="usage-layout">
+        <div class="steps">
           <article>
-            <h3>1. 初始化配置</h3>
-            <p>交互式设置 API key、模型和 UI 主题。</p>
-            <pre><code>deepy config setup</code></pre>
-          </article>
-          <article>
-            <h3>2. 进入项目</h3>
-            <p>Deepy 会以当前目录作为项目根目录，读取本地规则、skills 和 session。</p>
-            <pre><code>cd your-project
-deepy</code></pre>
-          </article>
-          <article>
-            <h3>3. 常用交互命令</h3>
-            <p>命令都在终端输入框中使用。</p>
-            <pre><code>/skills          管理和安装 Agent Skills
-/skill:docx      主动调用某个 skill
-/mcp             查看 MCP server 状态
-/status          查看用量、上下文和 DeepSeek 余额
-/init            创建或更新 AGENTS.md
-/model           选择模型和 thinking 强度
-/resume          恢复历史会话
-@src/app.py      引用项目文件
-!pytest -q       本地执行非交互命令</code></pre>
-          </article>
-        </div>
-      </section>
-
-      <section class="section install" id="install" aria-labelledby="install-title">
-        <div class="section-header compact">
-          <h2 id="install-title">安装指南</h2>
-          <p>
-            推荐先打开安装网站 <a href="https://deepy.kirineko.tech/">deepy.kirineko.tech</a>。
-            Deepy 的 Python 包名是 `deepy-cli`，安装后的命令是 `deepy`。MCP 和 Skills 都可以在安装后按需配置。
-          </p>
-        </div>
-        <div class="install-grid">
-          <article>
-            <span class="step-number">01</span>
+            <span>01</span>
             <h3>安装 uv</h3>
             <pre><code># macOS / Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Windows PowerShell
-powershell -ExecutionPolicy ByPass -c `
-  "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
           </article>
           <article>
-            <span class="step-number">02</span>
-            <h3>配置 uv 镜像</h3>
-            <p>Linux / macOS: `~/.config/uv/uv.toml`，Windows: `%AppData%\uv\uv.toml`。</p>
+            <span>02</span>
+            <h3>可选：配置 uv 镜像</h3>
+            <p>网络访问 PyPI 较慢时再配置。Linux / macOS 使用 <code>~/.config/uv/uv.toml</code>，Windows 使用 <code>%AppData%\uv\uv.toml</code>。</p>
             <pre><code>[[index]]
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
 default = true</code></pre>
           </article>
           <article>
-            <span class="step-number">03</span>
+            <span>03</span>
             <h3>安装 Deepy</h3>
             <pre><code>uv tool install deepy-cli</code></pre>
           </article>
           <article>
-            <span class="step-number">04</span>
-            <h3>配置并启动</h3>
-            <pre><code>deepy config setup
-
-cd your-project
+            <span>04</span>
+            <h3>进入项目并启动</h3>
+            <pre><code>cd your-project
 deepy</code></pre>
           </article>
+        </div>
+      </section>
+
+      <section class="section preview" id="preview" aria-labelledby="preview-title">
+        <div class="section-header">
+          <h2 id="preview-title">效果预览</h2>
+          <p>
+            Deepy 把模型 reasoning、WebFetch、文件修改和本地命令输出留在同一条终端
+            transcript 中，方便用户审查每一步发生了什么。
+          </p>
+        </div>
+        <div class="showcase-grid">
+          <figure class="shot wide">
+            <img src="asset/webfetch-shell-thinking.webp" alt="Deepy thinking、WebFetch 和 shell 输出" width="2070" height="1390">
+            <figcaption>
+              <strong>终端里的 Agent 工作流</strong>
+              <span>reasoning、WebFetch、shell 输出和状态行集中显示。</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="asset/edit-diff.webp" alt="Deepy 代码修改和 diff 预览" width="2070" height="1410">
+            <figcaption>
+              <strong>带 diff 的代码修改</strong>
+              <span>文件工具展示路径、整行 diff 和语法高亮，便于继续前审查。</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="asset/websearch.webp" alt="Deepy Web 检索工作流" width="2070" height="1410">
+            <figcaption>
+              <strong>搜索和抓取</strong>
+              <span>使用 WebSearch / WebFetch 获取外部上下文，并把结果带回项目会话。</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="asset/command_mode.webp" alt="Deepy 本地命令模式" width="2070" height="1410">
+            <figcaption>
+              <strong><code>!cmd</code> 本地命令</strong>
+              <span>用户明确要执行命令时可直接交给当前 shell，输出仍写入上下文。</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section interface" aria-labelledby="interface-title">
+        <div class="section-header">
+          <h2 id="interface-title">稳定 UI 与实验 TUI</h2>
+          <p>
+            默认 <code>deepy</code> 启动稳定的 Rich/prompt-toolkit 终端 UI。
+            <code>deepy tui</code> 是可选 Textual 界面，提供可滚动 transcript、
+            slash command、<code>@file</code> 提示、状态界面和 Deepy 自有 diff view。
+          </p>
+        </div>
+        <div class="showcase-grid">
+          <figure class="shot wide">
+            <img src="asset/deepy-tui.webp" alt="Deepy Textual TUI 对话界面" width="2070" height="1410">
+            <figcaption>
+              <strong>Textual transcript and prompt</strong>
+              <span>TUI 仍是 opt-in 实验入口，适合尝试更清晰的 transcript 和工具输出布局。</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="asset/tui-status.webp" alt="Deepy TUI status 面板" width="2070" height="1410">
+            <figcaption>
+              <strong><code>/status</code> 状态面板</strong>
+              <span>汇总 session/project usage、context window 和 DeepSeek 余额。</span>
+            </figcaption>
+          </figure>
+          <figure class="shot slim">
+            <img src="asset/tui-summary.webp" alt="Deepy TUI 退出时的 session summary" width="1716" height="360">
+            <figcaption>
+              <strong>统一退出总结</strong>
+              <span>TUI 退出后输出和稳定 UI 一致的 session summary。</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section ecosystem" id="ecosystem" aria-labelledby="ecosystem-title">
+        <div class="section-header">
+          <h2 id="ecosystem-title">Rules、Skills 和 MCP</h2>
+          <p>
+            Rules、Skills 和 MCP 是三个独立特性：Rules 约束项目工作方式，Skills
+            提供可复用能力包，MCP 连接外部工具和上下文服务。
+          </p>
+        </div>
+        <div class="ecosystem-grid">
+          <article class="ecosystem-card">
+            <h3>Rules</h3>
+            <p>
+              Deepy 自动加载全局和项目内的 <code>AGENTS.md</code>。项目内 Rules
+              按从仓库根目录到当前目录的顺序叠加，越靠近当前工作目录优先级越高。
+            </p>
+            <figure class="shot embedded">
+              <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 AGENTS.md Rules 已加载" width="2070" height="1410">
+              <figcaption>
+                <strong>Rules 状态可见</strong>
+                <span>当前项目加载 <code>AGENTS.md</code> 后，状态栏会明确显示 Rules 已生效。</span>
+              </figcaption>
+            </figure>
+          </article>
+          <article class="ecosystem-card">
+            <h3>Skills</h3>
+            <p>
+              Deepy 发现项目级、用户级和内置 Skills。Skill 市场支持浏览、安装到用户或项目
+              scope、查看已安装项、更新和卸载。
+            </p>
+            <figure class="shot embedded">
+              <img src="asset/skill-market.webp" alt="Deepy Skills 市场列表" width="2070" height="1410">
+              <figcaption>
+                <strong>Skills 市场</strong>
+                <span>输入 <code>/skills</code> 后浏览市场条目、说明和安装状态。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot embedded">
+              <img src="asset/skill-install-target.webp" alt="Deepy Skill 安装范围选择" width="2070" height="422">
+              <figcaption>
+                <strong>项目级或用户级安装</strong>
+                <span>安装前选择目标 scope，避免临时项目能力污染全局目录。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot embedded">
+              <img src="asset/installed-skills-list.webp" alt="Deepy 已安装 Skills 管理列表" width="2070" height="536">
+              <figcaption>
+                <strong>已安装 Skills 管理</strong>
+                <span>统一查看、更新、卸载市场安装项，也能识别手动放置的 Skills。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot embedded">
+              <img src="asset/skill-call-completion.webp" alt="Deepy Skill 名称补全" width="2070" height="1410">
+              <figcaption>
+                <strong><code>/&lt;name&gt;</code> 主动调用</strong>
+                <span>输入 <code>/</code> 加 Skill 名称即可直接调用某个 Skill。</span>
+              </figcaption>
+            </figure>
+          </article>
+          <article class="ecosystem-card">
+            <h3>MCP</h3>
+            <p>
+              MCP 通过 OpenAI Agents SDK 接入 stdio 和 Streamable HTTP server。
+              项目级 MCP 默认禁用，只有信任仓库时才开启。
+            </p>
+            <figure class="shot embedded">
+              <img src="asset/mcp-status.webp" alt="Deepy MCP server 状态面板" width="1376" height="358">
+              <figcaption>
+                <strong>MCP 状态</strong>
+                <span><code>/mcp</code> 可检查 server、连接状态、工具数量和 web-search 角色。</span>
+              </figcaption>
+            </figure>
+            <figure class="shot embedded">
+              <img src="asset/mcp-search.webp" alt="Deepy 调用 Tavily MCP 搜索" width="2062" height="1286">
+              <figcaption>
+                <strong>MCP 参与真实搜索</strong>
+                <span>有 web-search 角色的 MCP 工具时优先使用 MCP，内置 WebSearch 作为兜底。</span>
+              </figcaption>
+            </figure>
+          </article>
+        </div>
+      </section>
+
+      <section class="section resources" id="docs" aria-labelledby="docs-title">
+        <div class="section-header">
+          <h2 id="docs-title">学习资源</h2>
+          <p>
+            README 放用户上手路径；专题文档继续拆分 MCP、subagents、UI/TUI 和教学视频，
+            中英文版本在同一张表中对齐。
+          </p>
+        </div>
+        <div class="resource-table" role="table" aria-label="Deepy 学习资源">
+          <div class="resource-row header" role="row">
+            <strong role="columnheader">主题</strong>
+            <strong role="columnheader">中文</strong>
+            <strong role="columnheader">English</strong>
+          </div>
+          <div class="resource-row" role="row">
+            <span role="cell">教学视频</span>
+            <a role="cell" data-label="中文" href="docs/tutorial-videos.zh-CN.md">docs/tutorial-videos.zh-CN.md</a>
+            <a role="cell" data-label="English" href="docs/tutorial-videos.md">docs/tutorial-videos.md</a>
+          </div>
+          <div class="resource-row" role="row">
+            <span role="cell">MCP 配置与排查</span>
+            <a role="cell" data-label="中文" href="docs/mcp.zh-CN.md">docs/mcp.zh-CN.md</a>
+            <a role="cell" data-label="English" href="docs/mcp.md">docs/mcp.md</a>
+          </div>
+          <div class="resource-row" role="row">
+            <span role="cell">Subagents</span>
+            <a role="cell" data-label="中文" href="docs/subagents.zh-CN.md">docs/subagents.zh-CN.md</a>
+            <a role="cell" data-label="English" href="docs/subagents.md">docs/subagents.md</a>
+          </div>
+          <div class="resource-row" role="row">
+            <span role="cell">稳定 UI 与实验 TUI</span>
+            <a role="cell" data-label="中文" href="docs/deepy-ui-and-tui.zh-CN.md">docs/deepy-ui-and-tui.zh-CN.md</a>
+            <a role="cell" data-label="English" href="docs/deepy-ui-and-tui.md">docs/deepy-ui-and-tui.md</a>
+          </div>
+        </div>
+        <div class="resource-actions">
+          <a class="button primary" href="https://space.bilibili.com/560507/lists/8171057">打开 Bilibili 教学合集</a>
+          <a class="button secondary" href="README.zh-CN.md">中文 README</a>
+          <a class="button secondary" href="README.md">English README</a>
+        </div>
+      </section>
+
+      <section class="section commands" aria-labelledby="commands-title">
+        <div class="section-header">
+          <h2 id="commands-title">常用命令</h2>
+          <p>命令参考保持和 README 一致：快速路径只需要安装、进入项目并运行 <code>deepy</code>。</p>
+        </div>
+        <div class="command-grid">
           <article>
-            <span class="step-number">05</span>
-            <h3>可选：配置 Tavily MCP</h3>
-            <pre><code>{
-  "mcpServers": {
-    "tavily": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "tavily-mcp"],
-      "env": {"TAVILY_API_KEY": "${TAVILY_API_KEY}"},
-      "roles": ["web_search"]
-    }
-  }
-}</code></pre>
+            <h3>CLI</h3>
+            <pre><code>deepy --version
+deepy
+deepy tui
+deepy doctor
+deepy status
+deepy sessions list
+deepy run "summarize this project"</code></pre>
+          </article>
+          <article>
+            <h3>交互式输入</h3>
+            <pre><code>/model                  选择 provider、模型和 thinking 模式
+/status                 查看用量、上下文压力和 DeepSeek 余额
+/resume                 恢复历史项目会话
+/mcp                    查看 MCP server 状态和工具
+/skills                 管理本地和市场 Skills
+/&lt;name&gt; [request]       直接调用某个 Skill
+@src/app.py             引用项目文件
+!pytest -q              直接执行本地非交互命令</code></pre>
           </article>
         </div>
       </section>
     </main>
 
     <footer>
-      <span>Deepy 0.2.20</span>
+      <span>Deepy</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>
