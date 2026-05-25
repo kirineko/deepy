@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://deepy.kirineko.tech/"><strong>Install Website</strong></a>
+  <a href="https://deepy.kirineko.tech/"><strong>Install</strong></a>
   ·
-  <a href="https://kirineko.github.io/deepy/">GitHub Pages</a>
+  <a href="https://kirineko.github.io/deepy/">Home</a>
   ·
-  <a href="README.zh-CN.md">中文文档</a>
+  <a href="README.zh-CN.md">中文</a>
 </p>
 
 ![Deepy terminal welcome screen](asset/welcome.webp)

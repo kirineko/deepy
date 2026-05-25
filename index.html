@@ -22,9 +22,9 @@
         <a href="#preview">效果预览</a>
         <a href="#ecosystem">生态</a>
         <a href="#docs">文档</a>
-        <a href="https://deepy.kirineko.tech/">安装页面</a>
+        <a href="https://deepy.kirineko.tech/">安装</a>
         <a href="https://github.com/kirineko/deepy">GitHub</a>
-        <a href="README.md">English</a>
+        <a href="https://github.com/kirineko/deepy/blob/main/README.md">English</a>
       </nav>
     </header>
 
@@ -39,9 +39,9 @@
             检索网页，并恢复长任务。
           </p>
           <div class="hero-actions" aria-label="主要操作">
-            <a class="button primary" href="#quick-start">开始使用</a>
-            <a class="button secondary" href="README.zh-CN.md">阅读 README</a>
-            <a class="button secondary" href="https://deepy.kirineko.tech/">打开安装页面</a>
+            <a class="button primary" href="#quick-start">开始</a>
+            <a class="button secondary" href="https://github.com/kirineko/deepy/blob/main/README.zh-CN.md">文档</a>
+            <a class="button secondary" href="https://deepy.kirineko.tech/">安装</a>
           </div>
         </div>
         <figure class="hero-visual">
@@ -134,7 +134,7 @@ deepy</code></pre>
             transcript 中，方便用户审查每一步发生了什么。
           </p>
         </div>
-        <div class="showcase-grid">
+        <div class="showcase-grid single">
           <figure class="shot wide">
             <img src="asset/webfetch-shell-thinking.webp" alt="Deepy thinking、WebFetch 和 shell 输出" width="2070" height="1390">
             <figcaption>
@@ -142,21 +142,21 @@ deepy</code></pre>
               <span>reasoning、WebFetch、shell 输出和状态行集中显示。</span>
             </figcaption>
           </figure>
-          <figure class="shot">
+          <figure class="shot wide">
             <img src="asset/edit-diff.webp" alt="Deepy 代码修改和 diff 预览" width="2070" height="1410">
             <figcaption>
               <strong>带 diff 的代码修改</strong>
               <span>文件工具展示路径、整行 diff 和语法高亮，便于继续前审查。</span>
             </figcaption>
           </figure>
-          <figure class="shot">
+          <figure class="shot wide">
             <img src="asset/websearch.webp" alt="Deepy Web 检索工作流" width="2070" height="1410">
             <figcaption>
               <strong>搜索和抓取</strong>
               <span>使用 WebSearch / WebFetch 获取外部上下文，并把结果带回项目会话。</span>
             </figcaption>
           </figure>
-          <figure class="shot">
+          <figure class="shot wide">
             <img src="asset/command_mode.webp" alt="Deepy 本地命令模式" width="2070" height="1410">
             <figcaption>
               <strong><code>!cmd</code> 本地命令</strong>
@@ -175,26 +175,12 @@ deepy</code></pre>
             slash command、<code>@file</code> 提示、状态界面和 Deepy 自有 diff view。
           </p>
         </div>
-        <div class="showcase-grid">
+        <div class="showcase-grid single">
           <figure class="shot wide">
             <img src="asset/deepy-tui.webp" alt="Deepy Textual TUI 对话界面" width="2070" height="1410">
             <figcaption>
               <strong>Textual transcript and prompt</strong>
               <span>TUI 仍是 opt-in 实验入口，适合尝试更清晰的 transcript 和工具输出布局。</span>
-            </figcaption>
-          </figure>
-          <figure class="shot">
-            <img src="asset/tui-status.webp" alt="Deepy TUI status 面板" width="2070" height="1410">
-            <figcaption>
-              <strong><code>/status</code> 状态面板</strong>
-              <span>汇总 session/project usage、context window 和 DeepSeek 余额。</span>
-            </figcaption>
-          </figure>
-          <figure class="shot slim">
-            <img src="asset/tui-summary.webp" alt="Deepy TUI 退出时的 session summary" width="1716" height="360">
-            <figcaption>
-              <strong>统一退出总结</strong>
-              <span>TUI 退出后输出和稳定 UI 一致的 session summary。</span>
             </figcaption>
           </figure>
         </div>
@@ -209,75 +195,44 @@ deepy</code></pre>
           </p>
         </div>
         <div class="ecosystem-grid">
-          <article class="ecosystem-card">
-            <h3>Rules</h3>
-            <p>
-              Deepy 自动加载全局和项目内的 <code>AGENTS.md</code>。项目内 Rules
-              按从仓库根目录到当前目录的顺序叠加，越靠近当前工作目录优先级越高。
-            </p>
-            <figure class="shot embedded">
+          <article class="ecosystem-card feature-card">
+            <figure class="shot">
               <img src="asset/agents-md-loaded.webp" alt="Deepy 状态栏显示 AGENTS.md Rules 已加载" width="2070" height="1410">
-              <figcaption>
-                <strong>Rules 状态可见</strong>
-                <span>当前项目加载 <code>AGENTS.md</code> 后，状态栏会明确显示 Rules 已生效。</span>
-              </figcaption>
             </figure>
+            <div class="feature-copy">
+              <h3>Rules</h3>
+              <p>
+                Deepy 自动加载全局和项目内的 <code>AGENTS.md</code>。项目内 Rules
+                按从仓库根目录到当前目录的顺序叠加，越靠近当前工作目录优先级越高。
+              </p>
+              <p>加载后，状态栏会明确显示 <code>AGENTS.md</code> 已生效。</p>
+            </div>
           </article>
-          <article class="ecosystem-card">
-            <h3>Skills</h3>
-            <p>
-              Deepy 发现项目级、用户级和内置 Skills。Skill 市场支持浏览、安装到用户或项目
-              scope、查看已安装项、更新和卸载。
-            </p>
-            <figure class="shot embedded">
+          <article class="ecosystem-card feature-card">
+            <figure class="shot">
               <img src="asset/skill-market.webp" alt="Deepy Skills 市场列表" width="2070" height="1410">
-              <figcaption>
-                <strong>Skills 市场</strong>
-                <span>输入 <code>/skills</code> 后浏览市场条目、说明和安装状态。</span>
-              </figcaption>
             </figure>
-            <figure class="shot embedded">
-              <img src="asset/skill-install-target.webp" alt="Deepy Skill 安装范围选择" width="2070" height="422">
-              <figcaption>
-                <strong>项目级或用户级安装</strong>
-                <span>安装前选择目标 scope，避免临时项目能力污染全局目录。</span>
-              </figcaption>
-            </figure>
-            <figure class="shot embedded">
-              <img src="asset/installed-skills-list.webp" alt="Deepy 已安装 Skills 管理列表" width="2070" height="536">
-              <figcaption>
-                <strong>已安装 Skills 管理</strong>
-                <span>统一查看、更新、卸载市场安装项，也能识别手动放置的 Skills。</span>
-              </figcaption>
-            </figure>
-            <figure class="shot embedded">
-              <img src="asset/skill-call-completion.webp" alt="Deepy Skill 名称补全" width="2070" height="1410">
-              <figcaption>
-                <strong><code>/&lt;name&gt;</code> 主动调用</strong>
-                <span>输入 <code>/</code> 加 Skill 名称即可直接调用某个 Skill。</span>
-              </figcaption>
-            </figure>
+            <div class="feature-copy">
+              <h3>Skills</h3>
+              <p>
+                Deepy 发现项目级、用户级和内置 Skills。Skill 市场支持浏览、安装到用户或项目
+                scope、查看已安装项、更新和卸载。
+              </p>
+              <p>通过 <code>/skills</code> 统一管理市场和本地 Skills。</p>
+            </div>
           </article>
-          <article class="ecosystem-card">
-            <h3>MCP</h3>
-            <p>
-              MCP 通过 OpenAI Agents SDK 接入 stdio 和 Streamable HTTP server。
-              项目级 MCP 默认禁用，只有信任仓库时才开启。
-            </p>
-            <figure class="shot embedded">
-              <img src="asset/mcp-status.webp" alt="Deepy MCP server 状态面板" width="1376" height="358">
-              <figcaption>
-                <strong>MCP 状态</strong>
-                <span><code>/mcp</code> 可检查 server、连接状态、工具数量和 web-search 角色。</span>
-              </figcaption>
-            </figure>
-            <figure class="shot embedded">
+          <article class="ecosystem-card feature-card">
+            <figure class="shot">
               <img src="asset/mcp-search.webp" alt="Deepy 调用 Tavily MCP 搜索" width="2062" height="1286">
-              <figcaption>
-                <strong>MCP 参与真实搜索</strong>
-                <span>有 web-search 角色的 MCP 工具时优先使用 MCP，内置 WebSearch 作为兜底。</span>
-              </figcaption>
             </figure>
+            <div class="feature-copy">
+              <h3>MCP</h3>
+              <p>
+                MCP 通过 OpenAI Agents SDK 接入 stdio 和 Streamable HTTP server。
+                项目级 MCP 默认禁用，只有信任仓库时才开启。
+              </p>
+              <p>有 web-search 角色的 MCP 工具时优先使用 MCP，内置 WebSearch 作为兜底。</p>
+            </div>
           </article>
         </div>
       </section>
@@ -285,10 +240,7 @@ deepy</code></pre>
       <section class="section resources" id="docs" aria-labelledby="docs-title">
         <div class="section-header">
           <h2 id="docs-title">学习资源</h2>
-          <p>
-            README 放用户上手路径；专题文档继续拆分 MCP、subagents、UI/TUI 和教学视频，
-            中英文版本在同一张表中对齐。
-          </p>
+          <p>从上手、配置到扩展能力，按主题选择对应文档或视频。</p>
         </div>
         <div class="resource-table" role="table" aria-label="Deepy 学习资源">
           <div class="resource-row header" role="row">
@@ -298,29 +250,29 @@ deepy</code></pre>
           </div>
           <div class="resource-row" role="row">
             <span role="cell">教学视频</span>
-            <a role="cell" data-label="中文" href="docs/tutorial-videos.zh-CN.md">docs/tutorial-videos.zh-CN.md</a>
-            <a role="cell" data-label="English" href="docs/tutorial-videos.md">docs/tutorial-videos.md</a>
+            <a role="cell" data-label="中文" href="https://github.com/kirineko/deepy/blob/main/docs/tutorial-videos.zh-CN.md">中文教程清单</a>
+            <a role="cell" data-label="English" href="https://github.com/kirineko/deepy/blob/main/docs/tutorial-videos.md">Tutorial list</a>
           </div>
           <div class="resource-row" role="row">
             <span role="cell">MCP 配置与排查</span>
-            <a role="cell" data-label="中文" href="docs/mcp.zh-CN.md">docs/mcp.zh-CN.md</a>
-            <a role="cell" data-label="English" href="docs/mcp.md">docs/mcp.md</a>
+            <a role="cell" data-label="中文" href="https://github.com/kirineko/deepy/blob/main/docs/mcp.zh-CN.md">MCP 配置指南</a>
+            <a role="cell" data-label="English" href="https://github.com/kirineko/deepy/blob/main/docs/mcp.md">MCP guide</a>
           </div>
           <div class="resource-row" role="row">
             <span role="cell">Subagents</span>
-            <a role="cell" data-label="中文" href="docs/subagents.zh-CN.md">docs/subagents.zh-CN.md</a>
-            <a role="cell" data-label="English" href="docs/subagents.md">docs/subagents.md</a>
+            <a role="cell" data-label="中文" href="https://github.com/kirineko/deepy/blob/main/docs/subagents.zh-CN.md">Subagents 指南</a>
+            <a role="cell" data-label="English" href="https://github.com/kirineko/deepy/blob/main/docs/subagents.md">Subagents guide</a>
           </div>
           <div class="resource-row" role="row">
             <span role="cell">稳定 UI 与实验 TUI</span>
-            <a role="cell" data-label="中文" href="docs/deepy-ui-and-tui.zh-CN.md">docs/deepy-ui-and-tui.zh-CN.md</a>
-            <a role="cell" data-label="English" href="docs/deepy-ui-and-tui.md">docs/deepy-ui-and-tui.md</a>
+            <a role="cell" data-label="中文" href="https://github.com/kirineko/deepy/blob/main/docs/deepy-ui-and-tui.zh-CN.md">UI 与 TUI 对比</a>
+            <a role="cell" data-label="English" href="https://github.com/kirineko/deepy/blob/main/docs/deepy-ui-and-tui.md">UI and TUI guide</a>
           </div>
         </div>
         <div class="resource-actions">
           <a class="button primary" href="https://space.bilibili.com/560507/lists/8171057">打开 Bilibili 教学合集</a>
-          <a class="button secondary" href="README.zh-CN.md">中文 README</a>
-          <a class="button secondary" href="README.md">English README</a>
+          <a class="button secondary" href="https://github.com/kirineko/deepy/blob/main/README.zh-CN.md">中文 README</a>
+          <a class="button secondary" href="https://github.com/kirineko/deepy/blob/main/README.md">English README</a>
         </div>
       </section>
 

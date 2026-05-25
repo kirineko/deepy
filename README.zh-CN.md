@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://deepy.kirineko.tech/"><strong>安装页面</strong></a>
+  <a href="https://deepy.kirineko.tech/"><strong>安装</strong></a>
   ·
-  <a href="https://kirineko.github.io/deepy/">项目主页</a>
+  <a href="https://kirineko.github.io/deepy/">主页</a>
   ·
   <a href="README.md">English</a>
 </p>
