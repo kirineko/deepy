@@ -5,18 +5,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from deepy.skills import SkillInfo
-from deepy.update_check import VersionUpdate
-from deepy.ui.styles import DARK_PALETTE, UiPalette
 from deepy.ui.slash_commands import (
     BUILTIN_SLASH_COMMANDS,
     format_slash_command_description,
 )
+from deepy.ui.styles import DARK_PALETTE, UiPalette
+from deepy.update_check import VersionUpdate
 
 
 @dataclass(frozen=True)
@@ -32,9 +31,12 @@ class WelcomeSetting:
 
 
 CORE_WELCOME_COMMANDS = (
-    "/resume",
+    "/help",
     "/new",
+    "/resume",
+    "/model",
     "/skills",
+    "/status",
 )
 
 CORE_SHORTCUT_TIPS = (
@@ -44,17 +46,22 @@ CORE_SHORTCUT_TIPS = (
 )
 
 COMPACT_COMMAND_DESCRIPTIONS = {
-    "/skills": "Manage skills",
-    "/new": "New session",
-    "/resume": "Resume session",
+    "/help": "Show commands and shortcuts",
+    "/model": "Change provider or model",
+    "/new": "Start a fresh session",
+    "/resume": "Continue previous session",
+    "/skills": "Install and manage skills",
+    "/status": "Show usage and context",
     "/exit": "Quit",
 }
 
 DEEPY_ASCII_LOGO = (
-    "   .----.",
-    "  | >_ |  o",
-    "   '----'",
-    "    Deepy",
+    "    .--------",
+    "   /  >_ o /|  ",
+    "  /_______/ |",
+    "  |       | /",
+    "   '------'",
+    "     Deepy",
 )
 
 
@@ -71,17 +78,21 @@ def format_home_relative_path(value: str | Path, home: str | Path | None = None)
 
 def build_welcome_tips(skills: list[SkillInfo]) -> list[WelcomeTip]:
     del skills
-    slash_tips = [
-        WelcomeTip(
-            label=item.label,
-            description=COMPACT_COMMAND_DESCRIPTIONS.get(
-                item.label,
-                format_slash_command_description(item.description),
-            ),
+    slash_by_label = {item.label: item for item in BUILTIN_SLASH_COMMANDS}
+    slash_tips = []
+    for label in CORE_WELCOME_COMMANDS:
+        item = slash_by_label.get(label)
+        if item is None:
+            continue
+        slash_tips.append(
+            WelcomeTip(
+                label=item.label,
+                description=COMPACT_COMMAND_DESCRIPTIONS.get(
+                    item.label,
+                    format_slash_command_description(item.description),
+                ),
+            )
         )
-        for item in BUILTIN_SLASH_COMMANDS
-        if item.label in CORE_WELCOME_COMMANDS
-    ]
     return [*slash_tips, *CORE_SHORTCUT_TIPS]
 
 
@@ -103,11 +114,17 @@ def build_welcome_settings(
         WelcomeSetting("Version", _format_version_value(current_version, version_update)),
         WelcomeSetting("Provider", provider),
         WelcomeSetting("Model", model),
-        WelcomeSetting("Thinking", thinking_mode or (reasoning_effort if thinking_enabled else "none")),
+        WelcomeSetting(
+            "Thinking", thinking_mode or (reasoning_effort if thinking_enabled else "none")
+        ),
         WelcomeSetting("CWD", format_home_relative_path(project_root, home=home)),
     ]
     if theme:
-        value = theme if not resolved_theme or resolved_theme == theme else f"{theme} -> {resolved_theme}"
+        value = (
+            theme
+            if not resolved_theme or resolved_theme == theme
+            else f"{theme} -> {resolved_theme}"
+        )
         settings.append(WelcomeSetting("Theme", value))
     if version_update is not None:
         settings.append(WelcomeSetting("Update", version_update.install_hint))
@@ -133,24 +150,121 @@ def build_deepy_ascii_logo(*, palette: UiPalette | None = None) -> Text:
     return logo
 
 
-def _build_section(
-    title: str,
-    rows: Sequence[WelcomeSetting | WelcomeTip],
+def _build_welcome_brand(*, palette: UiPalette) -> Table:
+    intro = Text()
+    intro.append("\n")
+    intro.append("Welcome to Deepy\n", style=f"bold {palette.accent}")
+    intro.append(
+        "Terminal coding agent for DeepSeek\n",
+        style=palette.markdown_bold,
+    )
+    intro.append("Read, edit, run tools, and keep context.", style=palette.muted)
+
+    brand = Table.grid(padding=(0, 2), expand=True)
+    brand.add_column(no_wrap=True)
+    brand.add_column(ratio=1)
+    brand.add_row(Text(""), Text(""))
+    brand.add_row(build_deepy_ascii_logo(palette=palette), intro)
+    return brand
+
+
+def _build_welcome_info(settings: Sequence[WelcomeSetting], *, palette: UiPalette) -> Text:
+    info = Text()
+    info.append("Session\n\n", style=f"bold {palette.markdown_bold}")
+    for line in _compact_setting_lines(settings):
+        info.append(line.label, style=palette.accent)
+        info.append(f" {line.value}\n", style=palette.markdown_bold)
+    if info.plain.endswith("\n"):
+        info.rstrip()
+    return info
+
+
+def _compact_setting_lines(settings: Sequence[WelcomeSetting]) -> list[WelcomeSetting]:
+    by_label = {item.label: item.value for item in settings}
+    lines: list[WelcomeSetting] = []
+    provider = by_label.get("Provider")
+    if provider:
+        lines.append(WelcomeSetting("Provider", provider))
+    model = by_label.get("Model")
+    thinking = by_label.get("Thinking")
+    if model:
+        lines.append(WelcomeSetting("Model", model))
+    if thinking:
+        lines.append(WelcomeSetting("Reasoning", _format_reasoning_value(thinking)))
+    if cwd := by_label.get("CWD"):
+        lines.append(WelcomeSetting("CWD", _compact_welcome_value(cwd, max_chars=22)))
+    if theme := by_label.get("Theme"):
+        lines.append(WelcomeSetting("Theme", theme))
+    if version := by_label.get("Version"):
+        lines.append(WelcomeSetting("Version", version))
+    if update := by_label.get("Update"):
+        lines.append(WelcomeSetting("Update", update))
+    return lines
+
+
+def _compact_welcome_value(value: str, *, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return f"{value[: max(0, max_chars - 3)]}..."
+
+
+def _format_reasoning_value(thinking: str) -> str:
+    if thinking == "none":
+        return "disabled"
+    if thinking in {"enabled", "disabled"}:
+        return thinking
+    return f"enabled · effort {thinking}"
+
+
+def _build_welcome_commands(tips: Sequence[WelcomeTip], *, palette: UiPalette) -> Text:
+    commands = [tip for tip in tips if tip.label in CORE_WELCOME_COMMANDS]
+    text = Text()
+    text.append("Commands\n\n", style=f"bold {palette.markdown_bold}")
+    label_width = max((len(tip.label) for tip in commands), default=0)
+    for index, tip in enumerate(commands):
+        if index:
+            text.append("\n")
+        text.append(tip.label.ljust(label_width), style=f"bold {palette.accent}")
+        text.append(f"  {tip.description}", style=palette.markdown_bold)
+    return text
+
+
+def _build_welcome_sections(
+    settings: Sequence[WelcomeSetting],
+    tips: Sequence[WelcomeTip],
     *,
     palette: UiPalette,
 ) -> Table:
-    section = Table.grid()
-    section.add_column()
-    section.add_row(Text(title, style=palette.markdown_bold))
-    section.add_row(Text(""))
+    sections = Table.grid(padding=(0, 3), expand=True)
+    sections.add_column(ratio=6)
+    sections.add_column(ratio=8)
+    sections.add_row(
+        _build_welcome_info(settings, palette=palette),
+        _build_welcome_commands(tips, palette=palette),
+    )
+    return sections
 
-    body = Table.grid(padding=(0, 2))
-    body.add_column(style=palette.accent, no_wrap=True)
-    body.add_column(style=palette.markdown_bold)
-    for row in rows:
-        body.add_row(row.label, row.description if isinstance(row, WelcomeTip) else row.value)
-    section.add_row(body)
-    return section
+
+def _build_welcome_main(
+    settings: Sequence[WelcomeSetting],
+    tips: Sequence[WelcomeTip],
+    *,
+    palette: UiPalette,
+) -> Table:
+    main = Table.grid(padding=(0, 3), expand=True)
+    main.add_column(ratio=3)
+    main.add_column(no_wrap=True)
+    main.add_column(ratio=5)
+    main.add_row(
+        _build_welcome_brand(palette=palette),
+        _welcome_divider(palette=palette),
+        _build_welcome_sections(settings, tips, palette=palette),
+    )
+    return main
+
+
+def _welcome_divider(*, palette: UiPalette) -> Text:
+    return Text("\n".join("│" for _ in range(8)), style=palette.panel_border)
 
 
 def build_welcome_panel(
@@ -185,32 +299,13 @@ def build_welcome_panel(
     )
     tips = build_welcome_tips(skills)
 
-    hero = Table.grid(padding=(0, 3), expand=False)
-    hero.add_column()
-    hero.add_column(ratio=1)
-
-    intro = Text()
-    intro.append("Deepy\n", style=f"bold {palette.assistant}")
-    intro.append("Terminal coding agent for OpenAI-compatible models.\n", style=palette.markdown_bold)
-    intro.append("Read, edit, run tools, and keep project context.", style=palette.muted)
-
-    hero.add_row(build_deepy_ascii_logo(palette=palette), intro)
-
-    body = Table.grid(padding=(0, 4), expand=False)
-    body.add_column()
-    body.add_column()
-    body.add_row(
-        _build_section("Session", settings, palette=palette),
-        _build_section("Commands", tips[:10], palette=palette),
-    )
+    body = _build_welcome_main(settings, tips[:10], palette=palette)
 
     return Panel(
-        Group(
-            hero,
-            Text(""),
-            body,
-        ),
-        title="Deepy is ready",
+        body,
+        title="Deepy",
+        title_align="left",
         border_style=palette.panel_border,
-        expand=False,
+        padding=(0, 1),
+        expand=True,
     )

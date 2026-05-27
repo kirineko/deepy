@@ -249,8 +249,8 @@ def test_render_todo_board_shows_progress_and_current_task():
     console.print(board)
     rendered = console.export_text()
 
-    assert "Todo List 1/3" in rendered
-    assert "Current: Implement todo board" in rendered
+    assert "Progress 1/3 · Current: Implement todo board" in rendered
+    assert "Todo List" not in rendered
     assert "[x] Inspect code" in rendered
     assert "[*] Implement todo board" in rendered
     assert "[ ] Run tests" in rendered
@@ -502,7 +502,7 @@ def test_render_tool_output_omits_success_summary_when_update_diff_is_shown():
     )
     console = Console(record=True, width=120)
 
-    console.print(render_tool_output(output))
+    console.print(render_tool_output(output, width=120))
 
     rendered = console.export_text()
     assert "[Update] ok - file" not in rendered
@@ -619,11 +619,40 @@ def test_render_shell_output_block_uses_plain_tool_text_without_background():
         }
     )
 
-    panel = render_shell_output_block(output, palette=DARK_PALETTE)
+    block = render_shell_output_block(output, palette=DARK_PALETTE, width=40)
 
-    assert panel is not None
-    assert panel.renderable.style == DARK_PALETTE.tool
-    assert " on " not in str(panel.renderable.style)
+    assert block is not None
+    assert block.plain.startswith("  │ line 1")
+    assert cell_len(block.plain) == 40
+    assert " on " not in str(block.spans[0].style)
+
+
+def test_render_todo_board_uses_full_width_rail_block():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Todo list updated",
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [
+                    {"id": "one", "content": "Inspect code", "status": "completed"},
+                    {"id": "two", "content": "Implement board", "status": "in_progress"},
+                ],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    block = render_todo_board(output, palette=DARK_PALETTE, width=64)
+
+    assert block is not None
+    lines = block.plain.splitlines()
+    assert lines[0].startswith("  │ Progress 1/2 · Current: Implement board")
+    assert lines[1].startswith("  │ [x] Inspect code")
+    assert all(cell_len(line) == 64 for line in lines)
+    completed_span = next(span for span in block.spans if "strike" in str(span.style))
+    assert block.plain[completed_span.start : completed_span.end] == "[x] Inspect code"
 
 
 def test_render_shell_output_block_ignores_non_shell_tools():

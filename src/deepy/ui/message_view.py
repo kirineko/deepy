@@ -593,7 +593,7 @@ def render_tool_output(
     todo_board = render_todo_board(output, palette=palette, width=width)
     if todo_board:
         parts.append(todo_board)
-    shell_output = render_shell_output_block(output, palette=palette)
+    shell_output = render_shell_output_block(output, palette=palette, width=width)
     if shell_output:
         parts.append(shell_output)
     if diff:
@@ -606,7 +606,7 @@ def render_todo_board(
     *,
     palette: UiPalette | None = None,
     width: int | None = None,
-) -> Panel | None:
+) -> Text | None:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
     if not view.metadata or view.metadata.get("kind") != "todo_list":
@@ -618,26 +618,28 @@ def render_todo_board(
     current = next((item for item in todos if item.status == "in_progress"), None)
     if current is None:
         current = next((item for item in todos if item.status == "pending"), None)
-    content_width = _todo_content_width(width)
-    lines = Text()
+    content_width = _rail_content_width(width)
+    rows: list[tuple[str, str]] = []
     if current is not None:
-        lines.append("Current: ", style=f"bold {palette.info}")
-        lines.append(_truncate_cells(current.content, content_width), style=palette.info)
-        lines.append("\n")
+        rows.append(
+            (
+                f"Progress {counts['completed']}/{counts['total']} · Current: "
+                f"{_truncate_cells(current.content, content_width)}",
+                f"bold {palette.info}",
+            )
+        )
+    else:
+        rows.append((f"Progress {counts['completed']}/{counts['total']}", f"bold {palette.info}"))
     for item in todos:
         marker, style = _todo_marker_and_style(item.status, palette)
-        lines.append(f"{marker} ", style=style)
         text = _truncate_cells(item.content, content_width)
         item_style = f"strike {palette.muted}" if item.status == "completed" else style
-        lines.append(text, style=item_style)
-        lines.append("\n")
-    if lines.plain.endswith("\n"):
-        lines.rstrip()
-    return Panel(
-        lines,
-        title=f"Todo List {counts['completed']}/{counts['total']}",
-        border_style=palette.panel_border,
-        expand=False,
+        rows.append((f"{marker} {text}", item_style))
+    return _render_rail_block(
+        rows,
+        width=width,
+        rail_style=palette.panel_border,
+        default_style=palette.info,
     )
 
 
@@ -645,16 +647,17 @@ def render_shell_output_block(
     output: str,
     *,
     palette: UiPalette | None = None,
-) -> Panel | None:
+    width: int | None = None,
+) -> Text | None:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
     if view.name != "shell" or not view.output:
         return None
-    return Panel(
-        Text(view.output.rstrip("\n"), style=palette.tool),
-        title=format_tool_display_label("shell"),
-        border_style=palette.tool,
-        expand=False,
+    return _render_rail_block(
+        [(line, palette.tool) for line in view.output.rstrip("\n").splitlines()],
+        width=width,
+        rail_style=palette.tool,
+        default_style=palette.tool,
     )
 
 
@@ -728,11 +731,42 @@ def _todo_marker_and_style(status: str, palette: UiPalette) -> tuple[str, str]:
     return "[ ]", palette.muted
 
 
-def _todo_content_width(width: int | None) -> int:
+def _rail_content_width(width: int | None) -> int:
+    return max(16, _rail_target_width(width) - cell_len(_rail_prefix()))
+
+
+def _rail_target_width(width: int | None) -> int:
     if width is None or width <= 0:
-        return 80
-    # Account for panel border, padding, marker, and a small safety margin.
-    return max(16, min(100, width - 12))
+        return 88
+    return max(20, width)
+
+
+def _rail_prefix() -> str:
+    return "  │ "
+
+
+def _render_rail_block(
+    rows: list[tuple[str, str]],
+    *,
+    width: int | None,
+    rail_style: str,
+    default_style: str,
+) -> Text:
+    target_width = _rail_target_width(width)
+    content_width = _rail_content_width(width)
+    prefix = _rail_prefix()
+    rendered = Text()
+    for index, (raw_line, style) in enumerate(rows):
+        if index:
+            rendered.append("\n")
+        line = _truncate_cells(raw_line, content_width)
+        line_style = style or default_style
+        rendered.append(prefix, style=rail_style)
+        rendered.append(line, style=line_style)
+        padding = target_width - cell_len(prefix) - cell_len(line)
+        if padding > 0:
+            rendered.append(" " * padding, style=default_style)
+    return rendered
 
 
 def _truncate_cells(text: str, width: int) -> str:

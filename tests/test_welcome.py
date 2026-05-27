@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.console import Console
 
 from deepy.skills import SkillInfo
@@ -48,7 +49,9 @@ def test_build_welcome_tips_includes_builtins_and_loaded_skills_only(tmp_path):
     assert "/plan" not in labels
     assert "/resume" in labels
     assert "/new" in labels
+    assert "/model" in labels
     assert "/skills" in labels
+    assert "/status" in labels
     assert "/exit" not in labels
     assert "Enter" not in labels
     assert "Shift+Enter" not in labels
@@ -127,11 +130,10 @@ def test_build_welcome_settings_shows_available_update(tmp_path):
 def test_build_deepy_ascii_logo_contains_terminal_mark():
     rendered = build_deepy_ascii_logo().plain
 
-    assert ".----." in rendered
+    assert ".--------" in rendered
     assert ">_" in rendered
     assert "Deepy" in rendered
     assert ".-''''-." not in rendered
-    assert "____" not in rendered
 
 
 def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
@@ -154,11 +156,49 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
     rendered = console.export_text()
     assert "Deepy" in rendered
     assert ">_" in rendered
-    assert "Terminal coding agent" in rendered
+    assert ".--------" in rendered
+    assert "Welcome to Deepy" in rendered
+    assert "Terminal" in rendered
+    assert "DeepSeek" in rendered
+    assert "Read, edit" in rendered
     assert "0.1.0" in rendered
     assert "deepseek" in rendered
     assert "deepseek-v4-pro" in rendered
-    assert "Thinking" in rendered
+    assert "Reasoning" in rendered
     assert "Theme" in rendered
     assert "light" in rendered
+    assert "/help" in rendered
+    assert "/model" in rendered
     assert "/resume" in rendered
+
+
+def test_build_welcome_panel_prefers_wide_low_strip(tmp_path):
+    console = Console(record=True, width=120)
+
+    console.print(
+        build_welcome_panel(
+            model="deepseek-v4-pro",
+            thinking_enabled=True,
+            reasoning_effort="max",
+            project_root=tmp_path,
+            skills=[],
+            current_version="0.1.0",
+            home=tmp_path.parent,
+            theme="dark",
+            resolved_theme="dark",
+        )
+    )
+
+    rendered = console.export_text()
+    lines = rendered.splitlines()
+    assert max(cell_len(line) for line in lines) == 120
+    assert len(lines) >= 10
+    assert ".--------" in rendered
+    assert "Terminal" in rendered
+    assert "DeepSeek" in rendered
+    assert "Read, edit" in rendered
+    assert "Session" in rendered
+    assert "Commands" in rendered
+    assert "│" in rendered
+    assert "/help" in rendered
+    assert "/status" in rendered

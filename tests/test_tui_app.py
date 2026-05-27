@@ -1161,6 +1161,7 @@ async def test_tui_skill_management_screen_uses_compact_market_rows(tmp_path, mo
             )
         ],
     )
+    monkeypatch.setattr("deepy.tui.app.list_installed_skills", lambda: [])
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(120, 32)) as pilot:

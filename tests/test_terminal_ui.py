@@ -997,8 +997,9 @@ def test_print_stream_event_renders_todo_board_separate_from_footer():
 
     rendered = console.export_text()
     assert "[Todo]  ok - 1/2 - Implement board" in rendered
-    assert "Todo List 1/2" in rendered
-    assert "Current: Implement board" in rendered
+    assert "Progress 1/2 · Current: Implement board" in rendered
+    assert "  │ [x] Inspect code" in rendered
+    assert "Todo List" not in rendered
     assert "model deepseek" not in rendered
     assert "ctx " not in rendered
 
@@ -3268,7 +3269,7 @@ def test_run_interactive_renders_welcome_and_prompt_before_delayed_mcp_connect(t
     )
 
     assert result == 0
-    assert "Deepy is ready" in console.export_text()
+    assert "Deepy" in console.export_text()
     assert any("mcp connecting" in toolbar for toolbar in observed_toolbars)
 
 
@@ -3396,7 +3397,8 @@ def test_run_interactive_shows_fast_version_update_in_welcome(tmp_path, monkeypa
 
     rendered = console.export_text()
     assert result == 0
-    assert "9.9.9 available from PyPI" in rendered
+    assert "9.9.9 available" in rendered
+    assert "PyPI" in rendered
     assert "uv tool upgrade deepy-cli" in rendered
 
 

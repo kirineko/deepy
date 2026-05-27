@@ -969,7 +969,7 @@ def _handle_local_command(
             status_style(result.ok, palette),
         )
     )
-    shell_output = render_shell_output_block(tool_output, palette=palette)
+    shell_output = render_shell_output_block(tool_output, palette=palette, width=console.width)
     if shell_output:
         console.print(shell_output)
 
@@ -3619,7 +3619,7 @@ def _print_stream_event(
         if _should_print_tool_output_debug(view):
             console.print(Text("Tool output JSON:", style=palette.muted))
             console.print(Text(_format_tool_output_debug(event.text), style=palette.muted))
-        shell_output = render_shell_output_block(event.text, palette=palette)
+        shell_output = render_shell_output_block(event.text, palette=palette, width=console.width)
         if shell_output:
             console.print(shell_output)
         todo_board = render_todo_board(event.text, palette=palette, width=console.width)
