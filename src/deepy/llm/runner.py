@@ -20,6 +20,11 @@ from deepy.utils import json as json_utils
 from deepy.utils import launch_notify_script, log_api_error, log_debug_event
 
 from .agent import build_deepy_agent
+from .cache_context import (
+    build_cache_prefix_snapshot,
+    reset_current_cache_prefix_snapshot,
+    set_current_cache_prefix_snapshot,
+)
 from .compaction import ContextCompactionError, ensure_context_ready
 from .context import build_session_input_callback
 from .events import DeepyStreamEvent, normalize_stream_event
@@ -93,12 +98,25 @@ async def run_prompt_once(
         preferred_mcp_web_search_tools=mcp_runtime.preferred_web_search_tools,
         emit_event=emit_event,
     )
+    prefix_snapshot = build_cache_prefix_snapshot(
+        resolved_settings,
+        system_instructions=str(getattr(agent, "instructions", "") or ""),
+        tools=list(getattr(agent, "tools", []) or []),
+        mcp_servers=list(getattr(agent, "mcp_servers", []) or []),
+        model_settings=resolved_provider.model_settings,
+        skill_names=[str(getattr(skill, "name", "")) for skill in loaded_skills],
+        runtime_context_key=str(root),
+    )
+    session.record_cache_prefix_snapshot(prefix_snapshot)
     started_at = time.time()
     try:
         readiness = await ensure_context_ready(
             session,
             resolved_settings,
             provider=resolved_provider,
+            prefix_snapshot=prefix_snapshot,
+            prefix_tools=list(getattr(agent, "tools", []) or []),
+            prefix_mcp_servers=list(getattr(agent, "mcp_servers", []) or []),
             additional_input=prompt,
         )
     except ContextCompactionError as exc:
@@ -137,7 +155,9 @@ async def run_prompt_once(
     usage = TokenUsage()
     interrupt_task: asyncio.Task[bool] | None = None
     session_baseline_count = len(await session.get_items())
+    prefix_token: Any | None = None
     try:
+        prefix_token = set_current_cache_prefix_snapshot(prefix_snapshot)
         result = Runner.run_streamed(
             agent,
             input=prompt,
@@ -181,7 +201,13 @@ async def run_prompt_once(
                 _cancel_stream_result(result, mode=cancel_mode)
                 interrupted = True
                 break
+        if prefix_token is not None:
+            reset_current_cache_prefix_snapshot(prefix_token)
+            prefix_token = None
     except MaxTurnsExceeded:
+        if prefix_token is not None:
+            reset_current_cache_prefix_snapshot(prefix_token)
+            prefix_token = None
         interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
         result_usage = usage_from_run_result(result)
         if result_usage.known:
@@ -198,6 +224,9 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except APIStatusError as exc:
+        if prefix_token is not None:
+            reset_current_cache_prefix_snapshot(prefix_token)
+            prefix_token = None
         interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
         log_api_error(
             {
@@ -230,6 +259,9 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except ModelBehaviorError as exc:
+        if prefix_token is not None:
+            reset_current_cache_prefix_snapshot(prefix_token)
+            prefix_token = None
         interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
         log_api_error(
             {
@@ -261,6 +293,9 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except Exception as exc:
+        if prefix_token is not None:
+            reset_current_cache_prefix_snapshot(prefix_token)
+            prefix_token = None
         await _finish_interrupt_task(interrupt_task)
         log_api_error(
             {

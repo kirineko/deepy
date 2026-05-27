@@ -33,6 +33,7 @@ def test_build_slash_commands_orders_builtins_subagents_then_skills():
         "ps",
         "reset",
         "resume",
+        "sessions",
         "skills",
         "status",
         "stop",
@@ -76,10 +77,11 @@ def test_filter_slash_commands_ranks_bare_slash_by_user_intent():
 
     ranked = filter_slash_commands(items, "/")
     names = [item.name for item in ranked]
-    assert names[:9] == [
+    assert names[:10] == [
         "help",
         "new",
         "resume",
+        "sessions",
         "model",
         "skills",
         "status",
@@ -87,7 +89,7 @@ def test_filter_slash_commands_ranks_bare_slash_by_user_intent():
         "mcp",
         "exit",
     ]
-    assert names[9:12] == ["explore", "reviewer", "tester"]
+    assert names[10:13] == ["explore", "reviewer", "tester"]
     assert names.index("skill-writer") < names.index("reset")
     assert names.index("code-review") < names.index("reset")
 
@@ -122,6 +124,7 @@ def test_find_exact_slash_command_returns_builtins():
     assert find_exact_slash_command(items, "/new").kind == "new"
     assert find_exact_slash_command(items, "/init").kind == "init"
     assert find_exact_slash_command(items, "/skills").kind == "skills"
+    assert find_exact_slash_command(items, "/sessions").kind == "sessions"
     assert find_exact_slash_command(items, "/model").kind == "model"
     assert find_exact_slash_command(items, "/input-suggestion").kind == "input-suggestion"
     assert find_exact_slash_command(items, "/mcp").kind == "mcp"

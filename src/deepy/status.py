@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from deepy.config import Settings
+from deepy.llm.cache_context import format_cache_usage
 from deepy.mcp import mcp_policy_to_dict
 from deepy.prompts.runtime_context import build_runtime_context
 from deepy.sessions import list_session_entries
@@ -57,6 +58,9 @@ class StatusReport:
     active_session_usage: dict[str, Any] | None = None
     project_usage: dict[str, Any] | None = None
     latest_context_window_tokens: int | None = None
+    cache_prefix_generation: int | None = None
+    cache_break_reason: str | None = None
+    cache_usage: dict[str, Any] | None = None
     balance: BalanceStatus | None = None
 
 
@@ -97,6 +101,11 @@ def build_status_report(
         active_session_usage=active_entry.usage if active_entry is not None else None,
         project_usage=project_usage or None,
         latest_context_window_tokens=latest_context_tokens,
+        cache_prefix_generation=active_entry.cache_prefix_generation
+        if active_entry is not None
+        else None,
+        cache_break_reason=active_entry.cache_break_reason if active_entry is not None else None,
+        cache_usage=active_entry.cache_usage if active_entry is not None else None,
         balance=balance,
     )
 
@@ -116,6 +125,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
             f"Session usage: {_format_status_usage(report.active_session_usage)}",
+            f"Session cache: {_format_cache_status(report)}",
             f"Project usage: {_format_status_usage(report.project_usage)}",
             f"Context window: {_format_context_window_status(report)}",
             (
@@ -148,6 +158,9 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "active_session_usage": report.active_session_usage,
         "project_usage": report.project_usage,
         "latest_context_window_tokens": report.latest_context_window_tokens,
+        "cache_prefix_generation": report.cache_prefix_generation,
+        "cache_break_reason": report.cache_break_reason,
+        "cache_usage": report.cache_usage,
         "balance": balance_status_to_dict(report.balance),
     }
 
@@ -224,6 +237,7 @@ def format_compact_status_report(report: StatusReport) -> str:
         ("api", "configured" if report.api_key_configured else "missing"),
         ("balance", format_balance_status(report.balance)),
         ("session usage", _format_status_usage(report.active_session_usage)),
+        ("session cache", _format_cache_status(report)),
         ("project usage", _format_status_usage(report.project_usage)),
         ("ctx", _format_context_window_status(report)),
         ("project", str(report.project_root)),
@@ -278,6 +292,18 @@ def _format_status_usage(usage: dict[str, Any] | None) -> str:
         return "unknown"
     prefix = f"requests {normalized.requests:,} · " if normalized.requests else ""
     return f"{prefix}{format_usage_line(normalized)}"
+
+
+def _format_cache_status(report: StatusReport) -> str:
+    parts = []
+    if report.cache_prefix_generation is not None:
+        parts.append(f"prefix gen {report.cache_prefix_generation}")
+    usage = format_cache_usage(report.cache_usage)
+    if usage != "unknown":
+        parts.append(usage)
+    if report.cache_break_reason:
+        parts.append(f"last break: {report.cache_break_reason}")
+    return " · ".join(parts) if parts else "unknown"
 
 
 def _format_context_window_status(report: StatusReport) -> str:

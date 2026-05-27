@@ -9,6 +9,7 @@ from agents import OpenAIChatCompletionsModel
 
 from deepy.config import Settings
 
+from .cache_context import capture_sdk_request_shape
 from .replay import (
     sanitize_chat_completion_stream_event,
     sanitize_model_input_for_chat_completions,
@@ -42,6 +43,14 @@ class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        capture_sdk_request_shape(
+            system_instructions=system_instructions,
+            input=input,
+            model=str(getattr(self, "model", "")),
+            model_settings=args[0] if args else None,
+            tools=args[1] if len(args) > 1 and isinstance(args[1], list) else None,
+            mcp_servers=None,
+        )
         response = await super()._fetch_response(
             system_instructions,
             sanitize_model_input_for_chat_completions(input),

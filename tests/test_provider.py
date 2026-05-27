@@ -13,6 +13,12 @@ from deepy.llm.provider import (
     should_replay_chat_completion_reasoning_content,
     should_replay_deepseek_reasoning_content,
 )
+from deepy.llm.cache_context import (
+    build_cache_prefix_snapshot,
+    capture_cache_prefix_diagnostics,
+    set_current_cache_prefix_snapshot,
+    reset_current_cache_prefix_snapshot,
+)
 from deepy.llm.thinking import build_model_settings
 
 
@@ -453,6 +459,47 @@ async def test_deepy_model_sanitizes_replay_before_chat_completion_fetch(monkeyp
     )
 
     assert captured_input == [[call, output]]
+
+
+@pytest.mark.asyncio
+async def test_deepy_model_captures_sdk_request_shape_without_secrets(monkeypatch):
+    from agents import OpenAIChatCompletionsModel
+
+    diagnostics = []
+
+    async def fake_fetch(self, system_instructions, input, *args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
+    settings = Settings(model=ModelConfig(api_key="sk-test"))
+    model = build_provider_bundle(settings).model
+    snapshot = build_cache_prefix_snapshot(
+        settings,
+        system_instructions="system",
+        model_settings=build_model_settings(settings),
+    )
+
+    with capture_cache_prefix_diagnostics(diagnostics.append):
+        token = set_current_cache_prefix_snapshot(snapshot)
+        try:
+            await model._fetch_response(
+                "system",
+                [{"role": "user", "content": "hi"}],
+                build_model_settings(settings),
+                [],
+                None,
+                [],
+                object(),
+                object(),
+                stream=False,
+            )
+        finally:
+            reset_current_cache_prefix_snapshot(token)
+
+    assert diagnostics
+    assert diagnostics[0].prefix_snapshot is not None
+    assert diagnostics[0].sdk_request_shape["system_instructions"] == "system"
+    assert "sk-test" not in str(diagnostics[0].sdk_request_shape)
 
 
 @pytest.mark.asyncio

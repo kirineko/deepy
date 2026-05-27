@@ -10,6 +10,9 @@ from deepy.todos import todo_state_prompt_text
 from deepy.usage import TokenUsage, usage_from_run_result
 
 from .context import estimate_tokens_for_item, estimate_tokens_for_items
+from .cache_context import (
+    CachePrefixSnapshot,
+)
 from .provider import ProviderBundle, build_provider_bundle
 from .replay import sanitize_sdk_items_for_replay
 
@@ -49,6 +52,9 @@ async def compact_session(
     provider: ProviderBundle | None = None,
     reason: CompactionReason,
     focus_instruction: str | None = None,
+    prefix_snapshot: CachePrefixSnapshot | None = None,
+    prefix_tools: list[Any] | None = None,
+    prefix_mcp_servers: list[Any] | None = None,
 ) -> CompactionResult:
     items = await session.get_items()
     before_estimated_tokens = session.context_token_state().active_tokens
@@ -75,12 +81,20 @@ async def compact_session(
         )
 
     to_compact, to_preserve = prepared
+    model_kwargs: dict[str, Any] = {}
+    if prefix_snapshot is not None:
+        model_kwargs["prefix_snapshot"] = prefix_snapshot
+    if prefix_tools is not None:
+        model_kwargs["prefix_tools"] = prefix_tools
+    if prefix_mcp_servers is not None:
+        model_kwargs["prefix_mcp_servers"] = prefix_mcp_servers
     summary, usage = await run_compaction_model(
         to_compact,
         settings,
         provider=provider,
         focus_instruction=focus_instruction,
         todo_state=session.todo_state(),
+        **model_kwargs,
     )
     replacement = sanitize_sdk_items_for_replay(
         [build_compact_summary_message(summary), *to_preserve]
@@ -115,6 +129,9 @@ async def ensure_context_ready(
     settings: Settings,
     *,
     provider: ProviderBundle | None = None,
+    prefix_snapshot: CachePrefixSnapshot | None = None,
+    prefix_tools: list[Any] | None = None,
+    prefix_mcp_servers: list[Any] | None = None,
     additional_input: str | None = None,
 ) -> ContextReadiness:
     additional_tokens = estimate_tokens_for_item(additional_input or "")
@@ -126,11 +143,19 @@ async def ensure_context_ready(
     )
     compacted: CompactionResult | None = None
     if trigger_tokens >= settings.context.resolved_compact_threshold:
+        compaction_kwargs: dict[str, Any] = {}
+        if prefix_snapshot is not None:
+            compaction_kwargs["prefix_snapshot"] = prefix_snapshot
+        if prefix_tools is not None:
+            compaction_kwargs["prefix_tools"] = prefix_tools
+        if prefix_mcp_servers is not None:
+            compaction_kwargs["prefix_mcp_servers"] = prefix_mcp_servers
         compacted = await compact_session(
             session,
             settings,
             provider=provider,
             reason="auto",
+            **compaction_kwargs,
         )
 
     after_state = session.context_token_state()
@@ -193,6 +218,9 @@ async def run_compaction_model(
     provider: ProviderBundle | None = None,
     focus_instruction: str | None = None,
     todo_state: list[dict[str, str]] | None = None,
+    prefix_snapshot: CachePrefixSnapshot | None = None,
+    prefix_tools: list[Any] | None = None,
+    prefix_mcp_servers: list[Any] | None = None,
 ) -> tuple[str, TokenUsage]:
     from agents import Agent, RunConfig, Runner
 
@@ -202,12 +230,21 @@ async def run_compaction_model(
         focus_instruction=focus_instruction,
         todo_context=todo_state_prompt_text(todo_state or []),
     )
+    instructions = "Create a compact continuation summary. Do not call tools."
+    if prefix_snapshot is not None and prefix_snapshot.system_instructions:
+        instructions = (
+            f"{prefix_snapshot.system_instructions}\n\n"
+            "Deepy context compaction task: create a compact continuation summary. "
+            "Do not call tools."
+        )
     agent = Agent(
         name="Deepy Context Compactor",
-        instructions="Create a compact continuation summary. Do not call tools.",
+        instructions=instructions,
         model=resolved_provider.model,
         model_settings=resolved_provider.model_settings,
-        tools=[],
+        tools=list(prefix_tools or []),
+        mcp_servers=list(prefix_mcp_servers or []),
+        mcp_config={"include_server_in_tool_names": True},
     )
     result = await Runner.run(
         agent,

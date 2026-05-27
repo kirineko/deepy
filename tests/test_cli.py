@@ -8,6 +8,7 @@ from argparse import Namespace
 
 from deepy.cli import _doctor, main
 from deepy.sessions import DeepySession
+from deepy.usage import TokenUsage
 
 
 def test_config_show_json_masks_secret(tmp_path, capsys):
@@ -449,7 +450,52 @@ def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
     assert payload == {
         "session_id": "s1",
         "usage": None,
+        "cache_prefix_generation": 0,
+        "cache_break_reason": None,
+        "cache_usage": None,
         "items": [{"role": "user", "content": "hello"}],
+    }
+
+
+def test_sessions_list_and_show_include_cache_metadata(tmp_path, capsys, monkeypatch):
+    project_root = tmp_path / uuid.uuid4().hex
+    project_root.mkdir()
+    monkeypatch.chdir(project_root)
+    session = DeepySession.create(project_root, session_id="s1")
+    asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
+    session.record_usage(
+        TokenUsage(
+            prompt_tokens=100,
+            completion_tokens=5,
+            total_tokens=105,
+            prompt_cache_hit_tokens=80,
+            prompt_cache_miss_tokens=20,
+        )
+    )
+    session.record_cache_break("prefix changed: tools")
+
+    list_code = main(["sessions", "list"])
+    list_output = capsys.readouterr().out
+    show_code = main(["sessions", "show", "s1"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert list_code == 0
+    assert "cache=gen 1" in list_output
+    assert "fresh input 20" in list_output
+    assert "cached input 80 (80.0% hit)" in list_output
+    assert "break prefix changed: tools" in list_output
+    assert show_code == 0
+    assert payload["cache_prefix_generation"] == 1
+    assert payload["cache_break_reason"] == "prefix changed: tools"
+    assert payload["cache_usage"] == {
+        "hit_tokens": 80,
+        "miss_tokens": 20,
+        "last_hit_tokens": 80,
+        "last_miss_tokens": 20,
+        "last_hit_ratio": 0.8,
+        "known_turns": 1,
+        "unknown_turns": 0,
+        "hit_ratio": 0.8,
     }
 
 

@@ -48,13 +48,23 @@ def test_status_report_to_dict_is_json_ready(tmp_path):
     assert payload["reasoning_mode"] == "max"
     assert payload["reserved_context_tokens"] == 50000
     assert payload["input_suggestions_enabled"] is True
+    assert "cache_usage" in payload
 
 
 def test_status_report_includes_usage_context_and_balance(tmp_path):
     from deepy.sessions import DeepySession
 
     session = DeepySession.create(tmp_path, session_id="s1")
-    session.record_usage({"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120})
+    session.record_usage(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_cache_hit_tokens": 75,
+            "prompt_cache_miss_tokens": 25,
+        }
+    )
+    session.record_cache_break("prefix changed: tools")
 
     report = build_status_report(
         tmp_path,
@@ -67,10 +77,16 @@ def test_status_report_includes_usage_context_and_balance(tmp_path):
     assert report.active_session_usage is not None
     assert report.project_usage is not None
     assert report.latest_context_window_tokens == 120
+    assert report.cache_prefix_generation == 1
+    assert report.cache_break_reason == "prefix changed: tools"
+    assert report.cache_usage is not None
     assert "Deepy Status" in rendered
     assert "balance" in rendered
     assert "available" in rendered
     assert "session usage" in rendered
+    assert "session cache" in rendered
+    assert "75.0% hit" in rendered
+    assert "prefix changed: tools" in rendered
     assert "project usage" in rendered
 
 

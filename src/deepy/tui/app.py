@@ -138,6 +138,7 @@ from deepy.ui.slash_commands import is_subagent_slash_command
 from deepy.ui.model_picker import provider_api_key_reconfiguration_message, thinking_mode_choices
 from deepy.ui.welcome import format_home_relative_path
 from deepy.usage import context_window_usage, format_usage_line
+from deepy.llm.cache_context import format_cache_hit_rate, format_cache_usage
 from deepy.utils import json as json_utils
 
 
@@ -648,6 +649,7 @@ class DeepyTuiApp(App[None]):
             f"- MCP: `{'enabled' if report.mcp.get('enabled') else 'disabled'}`",
             f"- Config: `{self.settings.path or 'unknown'}`",
             f"- Session usage: `{format_usage_line(report.active_session_usage) if report.active_session_usage else 'unknown'}`",
+            f"- Session cache: `{_format_tui_cache_status(_tui_session_entry(self.project_root, self.state.session_id))}`",
             f"- Project usage: `{format_usage_line(report.project_usage) if report.project_usage else 'unknown'}`",
         ]
         if balance is not None:
@@ -1631,13 +1633,13 @@ class DeepyTuiApp(App[None]):
         self.state = set_status(self.state, status)
         self._set_status_bar(status)
         self.query_one("#side-status", Static).update(
-            f"Project: {self.project_root}\n"
-            f"Provider: {self.settings.model.provider}\n"
-            f"Model: {self.settings.model.name}\n"
-            f"Thinking: {self.settings.model.reasoning_mode}\n"
-            f"Session: {self.state.session_id or 'new'}\n"
-            f"Skills: {', '.join(self.controller.loaded_skill_names) or 'none'}"
-            + (f"\n\nTodos:\n{self._todo_text}" if self._todo_text else "")
+            _format_tui_side_status(
+                self.project_root,
+                self.settings,
+                self.state.session_id,
+                self.controller.loaded_skill_names,
+                self._todo_text,
+            )
         )
 
     def _set_status_bar(self, status: str) -> None:
@@ -2064,14 +2066,63 @@ def _build_tui_status_context(
         running = background_tasks.running_count()
         if running:
             segments.append(f"bg {running}")
+    session_entry = _tui_session_entry(project_root, session_id)
     segments.append(
         _format_tui_context_window_status(
-            _tui_session_entry(project_root, session_id),
+            session_entry,
             settings.context.window_tokens,
             settings.context.resolved_compact_threshold,
         )
     )
+    segments.append(_format_tui_status_cache_hit_rate(session_entry))
     return " · ".join(segments)
+
+
+def _format_tui_status_cache_hit_rate(session_entry: Any | None) -> str:
+    if session_entry is None:
+        return "cache --"
+    hit_rate = format_cache_hit_rate(getattr(session_entry, "cache_usage", None))
+    if hit_rate == "unknown":
+        return "cache --"
+    return f"cache {hit_rate}"
+
+
+def _format_tui_side_status(
+    project_root: Path,
+    settings: Settings,
+    session_id: str | None,
+    loaded_skill_names: list[str],
+    todo_text: str,
+) -> str:
+    session_entry = _tui_session_entry(project_root, session_id)
+    lines = [
+        f"Project: {project_root}",
+        f"Provider: {settings.model.provider}",
+        f"Model: {settings.model.name}",
+        f"Thinking: {settings.model.reasoning_mode}",
+        f"Session: {session_id or 'new'}",
+        f"Cache: {_format_tui_cache_status(session_entry)}",
+        f"Skills: {', '.join(loaded_skill_names) or 'none'}",
+    ]
+    if todo_text:
+        lines.extend(["", "Todos:", todo_text])
+    return "\n".join(lines)
+
+
+def _format_tui_cache_status(session_entry: Any | None) -> str:
+    if session_entry is None:
+        return "unknown"
+    parts: list[str] = []
+    generation = getattr(session_entry, "cache_prefix_generation", 0)
+    if generation:
+        parts.append(f"gen {generation}")
+    usage = format_cache_usage(getattr(session_entry, "cache_usage", None))
+    if usage != "unknown":
+        parts.append(usage)
+    reason = getattr(session_entry, "cache_break_reason", None)
+    if reason:
+        parts.append(f"break {reason}")
+    return " · ".join(parts) if parts else "unknown"
 
 
 def _tui_session_entry(project_root: Path, session_id: str | None) -> Any | None:
@@ -2139,12 +2190,8 @@ def _format_tui_context_window_status(
         used_tokens = usage.used_tokens if usage is not None else None
     if used_tokens is None:
         return f"ctx unknown/{window_text}"
-    remaining_tokens = max(window_tokens - used_tokens, 0)
     percentage = used_tokens / window_tokens * 100
-    status = (
-        f"ctx {_format_token_count_short(used_tokens)}/{window_text} "
-        f"({percentage:.1f}%, {_format_token_count_short(remaining_tokens)} left)"
-    )
+    status = f"ctx {_format_token_count_short(used_tokens)}/{window_text} ({percentage:.1f}%)"
     if compact_threshold > 0 and used_tokens >= compact_threshold:
         status = f"{status} · compact next"
     return status

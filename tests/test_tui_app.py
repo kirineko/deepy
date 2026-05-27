@@ -1221,6 +1221,9 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         id="s1",
         latest_context_window_tokens=900,
         usage=None,
+        cache_prefix_generation=2,
+        cache_break_reason="prefix changed: tools",
+        cache_usage={"hit_tokens": 80, "miss_tokens": 20},
     )
     monkeypatch.setattr("deepy.tui.app.list_session_entries", lambda project_root: [entry])
     monkeypatch.setattr(
@@ -1258,8 +1261,14 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         assert "cwd" in left
         assert "mcp 1" in left
         assert "bg 1" in left
-        assert "ctx 900/1K" in left
+        assert "ctx 900/1K (90.0%)" in left
+        assert "left" not in left
         assert "compact next" in left
+        assert "cache 80%" in left
+        assert "cache gen 2" not in left
+        assert "80.0% hit" not in left
+        assert "Cache: gen 2" in app.query_one("#side-status").content
+        assert "prefix changed: tools" in app.query_one("#side-status").content
         app.background_tasks.stop_all(force_after_grace=True)
         app.exit()
 

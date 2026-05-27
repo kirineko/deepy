@@ -385,7 +385,7 @@ async def test_run_prompt_once_runs_auto_compaction_before_model_call(monkeypatc
     calls: list[str] = []
     emitted: list[str] = []
 
-    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None):
+    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None, **kwargs):
         calls.append(additional_input)
         return ContextReadiness(
             session_id=session.session_id,
@@ -417,7 +417,7 @@ async def test_run_prompt_once_runs_auto_compaction_before_model_call(monkeypatc
 
 @pytest.mark.asyncio
 async def test_run_prompt_once_blocks_when_pre_run_compaction_fails(monkeypatch, tmp_path):
-    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None):
+    async def fake_ensure_context_ready(session, settings, *, provider=None, additional_input=None, **kwargs):
         raise ContextCompactionError("too large")
 
     class FakeRunner:

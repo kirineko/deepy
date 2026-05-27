@@ -2868,10 +2868,39 @@ def test_format_context_footer_shows_latest_request_context_window_only(tmp_path
         ),
     )
 
-    assert "ctx 4K/10K (35.1%, 6K left)" in toolbar
+    assert "ctx 4K/10K (35.1%)" in toolbar
+    assert "left" not in toolbar
     assert "ctx win" not in toolbar
     assert "compact ~" not in toolbar
     assert "compact next" not in toolbar
+
+
+def test_format_context_footer_shows_cache_health(tmp_path):
+    session = DeepySession.create(tmp_path, session_id="s1")
+    asyncio.run(session.add_items([{"role": "user", "content": "large prompt"}]))
+    session.record_usage(
+        {
+            "prompt_tokens": 3_500,
+            "completion_tokens": 10,
+            "total_tokens": 3_510,
+            "prompt_cache_hit_tokens": 2_800,
+            "prompt_cache_miss_tokens": 700,
+        }
+    )
+    session.record_cache_break("prefix changed: tools")
+
+    toolbar = _format_context_footer(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(
+            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+        ),
+    )
+
+    assert "cache 80%" in toolbar
+    assert "fresh input 700" not in toolbar
+    assert "cached input 2,800" not in toolbar
 
 
 def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_path):
@@ -2888,7 +2917,8 @@ def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_p
         ),
     )
 
-    assert "ctx 9K/10K (85.1%, 1K left)" in toolbar
+    assert "ctx 9K/10K (85.1%)" in toolbar
+    assert "left" not in toolbar
     assert "ctx win" not in toolbar
     assert "compact next" in toolbar
 
@@ -2908,7 +2938,8 @@ async def test_format_context_footer_uses_compacted_context_window_checkpoint(tm
         ),
     )
 
-    assert "ctx 100/10K (1.0%, 10K left)" in toolbar
+    assert "ctx 100/10K (1.0%)" in toolbar
+    assert "left" not in toolbar
     assert "ctx win" not in toolbar
     assert "compact next" not in toolbar
 
@@ -3238,9 +3269,10 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "model deepseek-v4-pro " not in str(toolbar_texts)
     assert "thinking max" not in str(toolbar_texts)
     assert f"cwd {tmp_path}" in str(toolbar_texts)
-    assert "ctx 900/1K (90.0%, 100 left) · compact next" in toolbar_texts[1]
+    assert "ctx 900/1K (90.0%) · compact next" in toolbar_texts[1]
     assert "ctx unknown/1K" in toolbar_texts[2]
-    assert "ctx 50/1K (5.0%, 950 left)" in toolbar_texts[3]
+    assert "ctx 50/1K (5.0%)" in toolbar_texts[3]
+    assert "left" not in str(toolbar_texts)
     assert "ctx win" not in str(toolbar_texts)
     assert "compact ~" not in str(toolbar_texts)
 

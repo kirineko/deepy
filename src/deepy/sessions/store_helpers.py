@@ -74,6 +74,23 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             on session_items(session_id, seq);
         """
     )
+    _ensure_column(conn, "sessions", "cache_prefix_fingerprint", "text")
+    _ensure_column(conn, "sessions", "cache_prefix_snapshot_json", "text")
+    _ensure_column(conn, "sessions", "cache_prefix_generation", "integer not null default 0")
+    _ensure_column(conn, "sessions", "cache_break_reason", "text")
+    _ensure_column(conn, "sessions", "cache_usage_json", "text")
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    declaration: str,
+) -> None:
+    rows = conn.execute(f"pragma table_info({table})").fetchall()
+    if any(row[1] == column for row in rows):
+        return
+    conn.execute(f"alter table {table} add column {column} {declaration}")
 
 
 def next_seq(conn: sqlite3.Connection, session_id: str) -> int:

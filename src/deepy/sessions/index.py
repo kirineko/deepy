@@ -36,6 +36,10 @@ class SessionEntry:
     last_usage_record_count: int | None = None
     todo_state: list[dict[str, str]] | None = None
     session_cost: dict[str, Any] | None = None
+    cache_prefix_fingerprint: str | None = None
+    cache_prefix_generation: int = 0
+    cache_break_reason: str | None = None
+    cache_usage: dict[str, Any] | None = None
 
 
 def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> list[SessionEntry]:
@@ -73,6 +77,10 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                     json_loads_or_none(row["todo_state_json"])
                 ),
                 session_cost=json_object(row["session_cost_json"]),
+                cache_prefix_fingerprint=_optional_str(row["cache_prefix_fingerprint"]),
+                cache_prefix_generation=coerce_int(row["cache_prefix_generation"], 0),
+                cache_break_reason=_optional_str(row["cache_break_reason"]),
+                cache_usage=json_object(row["cache_usage_json"]),
             )
         )
     return entries
@@ -87,3 +95,7 @@ def clear_session_processes(
     with session._transaction() as conn:
         session._ensure_session_row(conn)
         session._update_session_metadata(conn, processes=None)
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None

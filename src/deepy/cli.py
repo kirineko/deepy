@@ -29,6 +29,7 @@ from .config import (
 )
 from .config.settings import DEFAULT_UI_THEME, UI_THEMES
 from .errors import format_error_display
+from .llm.cache_context import format_cache_usage
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
 from .sessions import DeepySession, list_session_entries
@@ -593,7 +594,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
         for entry in entries:
             print(
                 f"{entry.id}\tupdated={entry.updated_at}\thistory_estimate={entry.active_tokens}\t"
-                f"{format_usage_line(entry.usage)}"
+                f"{format_usage_line(entry.usage)}\tcache={_format_session_cache(entry)}"
             )
         return 0
     if args.sessions_command == "show":
@@ -608,12 +609,31 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
                 {
                     "session_id": args.session_id,
                     "usage": entry.usage if entry is not None else None,
+                    "cache_prefix_generation": entry.cache_prefix_generation
+                    if entry is not None
+                    else 0,
+                    "cache_break_reason": entry.cache_break_reason if entry is not None else None,
+                    "cache_usage": entry.cache_usage if entry is not None else None,
                     "items": items,
                 }
             )
         )
         return 0
     return 1
+
+
+def _format_session_cache(entry: Any) -> str:
+    parts = []
+    generation = getattr(entry, "cache_prefix_generation", 0)
+    if generation:
+        parts.append(f"gen {generation}")
+    usage = format_cache_usage(getattr(entry, "cache_usage", None))
+    if usage != "unknown":
+        parts.append(usage)
+    reason = getattr(entry, "cache_break_reason", None)
+    if reason:
+        parts.append(f"break {reason}")
+    return " · ".join(parts) if parts else "unknown"
 
 
 def _cmd_skills(args: argparse.Namespace) -> int:

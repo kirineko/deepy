@@ -13,6 +13,8 @@ from deepy.sessions import (
     project_sessions_dir,
 )
 from deepy.llm.context import estimate_tokens_for_item
+from deepy.llm.cache_context import build_cache_prefix_snapshot
+from deepy.config.settings import ModelConfig, Settings
 
 
 def test_project_code_matches_deepcode_shape(tmp_path):
@@ -207,6 +209,62 @@ async def test_session_record_usage_accumulates_token_usage(tmp_path):
     latest_usage = session.latest_context_window_usage()
     assert latest_usage is not None
     assert latest_usage.used_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_session_persists_cache_prefix_and_usage_metadata(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepySession.create(project, deepy_home=home, session_id="s1")
+    snapshot = build_cache_prefix_snapshot(
+        Settings(model=ModelConfig(api_key="sk-test")),
+        system_instructions="stable",
+    )
+
+    state = session.record_cache_prefix_snapshot(snapshot)
+    session.record_usage(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "total_tokens": 105,
+            "prompt_cache_hit_tokens": 75,
+            "prompt_cache_miss_tokens": 25,
+        }
+    )
+    session.record_cache_break("prefix changed: tools")
+
+    entry = list_session_entries(project, deepy_home=home)[0]
+    restored = DeepySession.open(project, "s1", deepy_home=home).cache_context_state()
+    assert state.prefix_generation == 1
+    assert entry.cache_prefix_fingerprint == snapshot.fingerprint
+    assert entry.cache_prefix_generation == 2
+    assert entry.cache_break_reason == "prefix changed: tools"
+    assert entry.cache_usage is not None
+    assert entry.cache_usage["hit_tokens"] == 75
+    assert entry.cache_usage["miss_tokens"] == 25
+    assert restored.cache_hit_ratio == 0.75
+
+
+@pytest.mark.asyncio
+async def test_session_records_cache_break_when_prefix_snapshot_changes(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepySession.create(project, deepy_home=home, session_id="s1")
+    first = build_cache_prefix_snapshot(
+        Settings(model=ModelConfig(api_key="sk-test")),
+        system_instructions="stable",
+    )
+    second = build_cache_prefix_snapshot(
+        Settings(model=ModelConfig(api_key="sk-test", name="deepseek-v4-flash")),
+        system_instructions="stable",
+    )
+
+    session.record_cache_prefix_snapshot(first)
+    changed = session.record_cache_prefix_snapshot(second)
+
+    assert changed.prefix_generation == 2
+    assert changed.prefix_fingerprint == second.fingerprint
+    assert changed.cache_break_reason == "prefix changed: model"
 
 
 @pytest.mark.asyncio

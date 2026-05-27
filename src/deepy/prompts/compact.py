@@ -113,7 +113,8 @@ def build_compact_prompt(
             "or reconcile progress:\n"
             f"{todo_context.strip()}"
         )
-    return f"{COMPACT_PROMPT_BASE}{focus}{todo}\n\nconversation below:\n\n```jsonl\n{jsonl}\n```"
+    instruction = f"{COMPACT_PROMPT_BASE}{focus}{todo}"
+    return f"conversation below:\n\n```jsonl\n{jsonl}\n```\n\n{instruction}"
 
 
 def build_compact_summary_message(summary: str) -> dict[str, str]:

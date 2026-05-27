@@ -8,7 +8,11 @@ from deepy.llm.compaction import (
     compact_session,
     ensure_context_ready,
     prepare_compaction_items,
+    run_compaction_model,
 )
+from deepy.llm.cache_context import build_cache_prefix_snapshot
+from deepy.llm.provider import ProviderBundle
+from agents import ModelSettings
 from deepy.sessions import DeepySession, list_session_entries
 from deepy.usage import TokenUsage
 
@@ -29,6 +33,43 @@ def test_prepare_compaction_items_preserves_recent_messages_and_tool_group():
     assert to_compact == [{"role": "user", "content": "old"}]
     assert to_preserve[0]["type"] == "function_call"
     assert to_preserve[-1] == {"role": "user", "content": "continue"}
+
+
+@pytest.mark.asyncio
+async def test_run_compaction_model_uses_active_model_settings_and_prefix(monkeypatch):
+    captured = {}
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, prompt, max_turns, run_config):
+            captured["model"] = getattr(agent.model, "model", agent.model)
+            captured["settings"] = agent.model_settings
+            captured["instructions"] = agent.instructions
+            captured["tools"] = agent.tools
+            captured["prompt"] = prompt
+            return type("Result", (), {"final_output": "<summary>summary</summary>"})()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    settings = Settings()
+    prefix = build_cache_prefix_snapshot(settings, system_instructions="stable prefix")
+    tool = object()
+    active_settings = ModelSettings(include_usage=True, store=False)
+
+    summary, usage = await run_compaction_model(
+        [{"role": "user", "content": "old"}],
+        settings,
+        provider=ProviderBundle(client=object(), model="active-model", model_settings=active_settings),
+        prefix_snapshot=prefix,
+        prefix_tools=[tool],
+    )
+
+    assert summary == "<summary>summary</summary>"
+    assert usage.known is False
+    assert captured["model"] == "active-model"
+    assert captured["settings"] is active_settings
+    assert "stable prefix" in captured["instructions"]
+    assert captured["tools"] == [tool]
+    assert captured["prompt"].index("```jsonl") < captured["prompt"].index("Your task is")
 
 
 @pytest.mark.asyncio
@@ -93,6 +134,9 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
     assert session.todo_state() == [
         {"id": "one", "content": "Continue implementation", "status": "in_progress"}
     ]
+    cache_state = session.cache_context_state()
+    assert cache_state.prefix_generation == 1
+    assert cache_state.cache_break_reason == "history rewritten: manual compaction"
 
 
 @pytest.mark.asyncio

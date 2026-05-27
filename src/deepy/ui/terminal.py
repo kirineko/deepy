@@ -49,6 +49,7 @@ from deepy.input_suggestions import (
     generate_input_suggestion,
     is_eligible_for_input_suggestion,
 )
+from deepy.llm.cache_context import format_cache_hit_rate, format_cache_usage
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
@@ -138,8 +139,7 @@ from deepy.ui.model_picker import (
     provider_api_key_reconfiguration_message,
     thinking_mode_choices,
 )
-from deepy.ui.welcome import build_welcome_panel
-from deepy.ui.welcome import format_home_relative_path
+from deepy.ui.welcome import build_welcome_panel, format_home_relative_path
 from deepy.usage import TokenUsage, context_window_usage, format_usage_line
 from deepy.utils import json as json_utils
 
@@ -1416,7 +1416,7 @@ def _handle_slash_command(
         for entry in entries:
             console.print(
                 f"{entry.id}\tupdated={entry.updated_at}\thistory_estimate={entry.active_tokens}\t"
-                f"{format_usage_line(entry.usage)}"
+                f"{format_usage_line(entry.usage)}\tcache={_format_session_cache_for_list(entry)}"
             )
         return current_session_id
     if command.name == "status":
@@ -2886,21 +2886,42 @@ def _build_status_footer(
     else:
         segments.append(StatusFooterSegment("cwd unknown", "metadata"))
 
-    window_tokens = settings.context.window_tokens
-    compact_threshold = settings.context.resolved_compact_threshold
-    if window_tokens <= 0:
-        segments.append(StatusFooterSegment("ctx unknown", "context"))
-        return StatusFooter(tuple(segments)).with_active(active_work)
-
     session_entry = _session_entry(project_root, session_id)
-    segments.append(
+    segments.extend(
+        [
         StatusFooterSegment(
-            _format_context_window_status(session_entry, window_tokens, compact_threshold),
+            _format_context_window_status(
+                session_entry,
+                settings.context.window_tokens,
+                settings.context.resolved_compact_threshold,
+            ),
             "context",
-        )
+        ),
+        StatusFooterSegment(_format_session_cache_hit_rate(session_entry), "context"),
+        ]
     )
-
     return StatusFooter(tuple(segments)).with_active(active_work)
+
+
+def _format_session_cache_hit_rate(session_entry: SessionEntry | None) -> str:
+    if session_entry is None:
+        return "cache --"
+    hit_rate = format_cache_hit_rate(session_entry.cache_usage)
+    if hit_rate == "unknown":
+        return "cache --"
+    return f"cache {hit_rate}"
+
+
+def _format_session_cache_for_list(entry: SessionEntry) -> str:
+    parts = []
+    if entry.cache_prefix_generation:
+        parts.append(f"gen {entry.cache_prefix_generation}")
+    usage = format_cache_usage(entry.cache_usage)
+    if usage != "unknown":
+        parts.append(usage)
+    if entry.cache_break_reason:
+        parts.append(f"break {entry.cache_break_reason}")
+    return " · ".join(parts) if parts else "unknown"
 
 
 def _format_context_window_status(
@@ -2909,6 +2930,8 @@ def _format_context_window_status(
     compact_threshold: int,
 ) -> str:
     window_text = _format_token_count_short(window_tokens)
+    if window_tokens <= 0:
+        return "ctx unknown"
     if session_entry is not None and session_entry.latest_context_window_tokens is not None:
         used_tokens = session_entry.latest_context_window_tokens
     else:
@@ -2921,12 +2944,8 @@ def _format_context_window_status(
         used_tokens = usage.used_tokens if usage is not None else None
     if used_tokens is None:
         return f"ctx unknown/{window_text}"
-    remaining_tokens = max(window_tokens - used_tokens, 0)
     percentage = used_tokens / window_tokens * 100
-    status = (
-        f"ctx {_format_token_count_short(used_tokens)}/{window_text} "
-        f"({percentage:.1f}%, {_format_token_count_short(remaining_tokens)} left)"
-    )
+    status = f"ctx {_format_token_count_short(used_tokens)}/{window_text} ({percentage:.1f}%)"
     if compact_threshold > 0 and used_tokens >= compact_threshold:
         status = f"{status} · compact next"
     return status

@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from deepy.llm.context import estimate_tokens_for_item
+from deepy.llm.cache_context import (
+    CacheContextState,
+    CachePrefixSnapshot,
+    build_cache_usage_update,
+    cache_break_reason_for_snapshot_change,
+)
 from deepy.llm.replay import sanitize_sdk_items_for_replay
 from deepy.todos import normalize_persisted_todo_state
 from deepy.usage import (
@@ -188,6 +194,8 @@ class DeepySession:
                 last_usage_tokens=state.last_usage_tokens,
                 pending_tokens=state.pending_tokens,
                 last_usage_record_count=state.last_usage_record_count,
+                cache_break_reason="history rewritten: pop item",
+                increment_cache_generation=True,
             )
             self._loaded_items = sanitize_sdk_items_for_replay(items)
             return json_loads(row["payload_json"])
@@ -205,6 +213,11 @@ class DeepySession:
                 last_usage_record_count=0,
                 todo_state=[],
                 session_cost=None,
+                cache_prefix_fingerprint=None,
+                cache_prefix_snapshot=None,
+                cache_break_reason=None,
+                cache_usage=None,
+                reset_cache_generation=True,
             )
         self._loaded_items = []
 
@@ -213,10 +226,16 @@ class DeepySession:
         items: list[dict[str, Any]],
         *,
         active_tokens: int | None = None,
+        cache_break_reason: str = "history rewritten: replace items",
     ) -> None:
         with self._transaction() as conn:
             self._ensure_session_row(conn)
-            self._replace_items_conn(conn, items, active_tokens=active_tokens)
+            self._replace_items_conn(
+                conn,
+                items,
+                active_tokens=active_tokens,
+                cache_break_reason=cache_break_reason,
+            )
         self._loaded_items = sanitize_sdk_items_for_replay([dict(item) for item in items])
 
     async def archive_and_replace_items(
@@ -249,7 +268,12 @@ class DeepySession:
                     json_dumps(snapshot),
                 ),
             )
-            self._replace_items_conn(conn, items, active_tokens=active_tokens)
+            self._replace_items_conn(
+                conn,
+                items,
+                active_tokens=active_tokens,
+                cache_break_reason=f"history rewritten: {reason} compaction",
+            )
         self._loaded_items = sanitize_sdk_items_for_replay([dict(item) for item in items])
         return archive_id
 
@@ -267,6 +291,10 @@ class DeepySession:
                 conn,
                 active_tokens=checkpoint_tokens,
                 usage=accumulated.to_dict(),
+                cache_usage=build_cache_usage_update(
+                    json_object(row["cache_usage_json"]),
+                    normalized,
+                ),
                 latest_context_window_tokens=latest_context_usage.used_tokens
                 if latest_context_usage is not None
                 else None,
@@ -322,6 +350,62 @@ class DeepySession:
         row = self._session_row()
         return json_object(row["session_cost_json"]) if row is not None else None
 
+    def cache_context_state(self) -> CacheContextState:
+        row = self._session_row()
+        if row is None:
+            return CacheContextState()
+        return CacheContextState(
+            prefix_fingerprint=_optional_str(row["cache_prefix_fingerprint"]),
+            prefix_generation=coerce_int(row["cache_prefix_generation"], 0),
+            cache_break_reason=_optional_str(row["cache_break_reason"]),
+            cache_usage=json_object(row["cache_usage_json"]),
+        )
+
+    def record_cache_prefix_snapshot(self, snapshot: CachePrefixSnapshot) -> CacheContextState:
+        with self._transaction() as conn:
+            row = self._ensure_session_row(conn)
+            previous_fingerprint = _optional_str(row["cache_prefix_fingerprint"])
+            previous_snapshot = _cache_prefix_snapshot_from_row(row)
+            reason: str | None = None
+            increment = False
+            generation = coerce_int(row["cache_prefix_generation"], 0)
+            if previous_fingerprint is None:
+                generation = max(generation, 1)
+            elif previous_fingerprint != snapshot.fingerprint:
+                reason = (
+                    cache_break_reason_for_snapshot_change(previous_snapshot, snapshot)
+                    if previous_snapshot is not None
+                    else "prefix changed"
+                )
+                increment = True
+            self._update_session_metadata(
+                conn,
+                cache_prefix_fingerprint=snapshot.fingerprint,
+                cache_prefix_snapshot=snapshot.to_dict(),
+                cache_prefix_generation=generation,
+                cache_break_reason=reason,
+                increment_cache_generation=increment,
+            )
+            updated = conn.execute(
+                "select * from sessions where id = ?",
+                (self.session_id,),
+            ).fetchone()
+            return CacheContextState(
+                prefix_fingerprint=_optional_str(updated["cache_prefix_fingerprint"]),
+                prefix_generation=coerce_int(updated["cache_prefix_generation"], 0),
+                cache_break_reason=_optional_str(updated["cache_break_reason"]),
+                cache_usage=json_object(updated["cache_usage_json"]),
+            )
+
+    def record_cache_break(self, reason: str) -> None:
+        with self._transaction() as conn:
+            self._ensure_session_row(conn)
+            self._update_session_metadata(
+                conn,
+                cache_break_reason=reason,
+                increment_cache_generation=True,
+            )
+
     def context_token_state(self, items: list[dict[str, Any]] | None = None) -> ContextTokenState:
         source = items if items is not None else self._load_items()
         row = self._session_row()
@@ -362,6 +446,13 @@ class DeepySession:
         input_suggestion_usage: dict[str, Any] | None = None,
         session_cost: object = _UNSET,
         processes: object = _UNSET,
+        cache_prefix_fingerprint: str | None = None,
+        cache_prefix_snapshot: dict[str, Any] | None = None,
+        cache_prefix_generation: int | None = None,
+        cache_break_reason: str | None = None,
+        cache_usage: dict[str, Any] | None = None,
+        increment_cache_generation: bool = False,
+        reset_cache_generation: bool = False,
     ) -> None:
         with self._transaction() as conn:
             self._update_session_metadata(
@@ -376,6 +467,13 @@ class DeepySession:
                 input_suggestion_usage=input_suggestion_usage,
                 session_cost=session_cost,
                 processes=processes,
+                cache_prefix_fingerprint=cache_prefix_fingerprint,
+                cache_prefix_snapshot=cache_prefix_snapshot,
+                cache_prefix_generation=cache_prefix_generation,
+                cache_break_reason=cache_break_reason,
+                cache_usage=cache_usage,
+                increment_cache_generation=increment_cache_generation,
+                reset_cache_generation=reset_cache_generation,
             )
 
     @contextmanager
@@ -430,6 +528,7 @@ class DeepySession:
         items: list[dict[str, Any]],
         *,
         active_tokens: int | None,
+        cache_break_reason: str | None = None,
     ) -> None:
         conn.execute("delete from session_items where session_id = ?", (self.session_id,))
         now = _now_ms()
@@ -458,6 +557,8 @@ class DeepySession:
             last_usage_tokens=estimated_tokens,
             pending_tokens=0,
             last_usage_record_count=len(items),
+            cache_break_reason=cache_break_reason,
+            increment_cache_generation=bool(cache_break_reason),
         )
 
     def _update_session_metadata(
@@ -474,8 +575,15 @@ class DeepySession:
         input_suggestion_usage: dict[str, Any] | None = None,
         session_cost: object = _UNSET,
         processes: object = _UNSET,
+        cache_prefix_fingerprint: str | None = None,
+        cache_prefix_snapshot: dict[str, Any] | None = None,
+        cache_prefix_generation: int | None = None,
+        cache_break_reason: str | None = None,
+        cache_usage: dict[str, Any] | None = None,
+        increment_cache_generation: bool = False,
+        reset_cache_generation: bool = False,
     ) -> None:
-        self._ensure_session_row(conn)
+        row = self._ensure_session_row(conn)
         assignments: dict[str, Any] = {
             "updated_at": _now_ms(),
             "item_count": item_count(conn, self.session_id),
@@ -504,6 +612,25 @@ class DeepySession:
             assignments["processes_json"] = (
                 json_dumps(processes) if isinstance(processes, dict) else None
             )
+        if cache_prefix_fingerprint is not None:
+            assignments["cache_prefix_fingerprint"] = cache_prefix_fingerprint
+        if cache_prefix_snapshot is not None:
+            assignments["cache_prefix_snapshot_json"] = json_dumps(cache_prefix_snapshot)
+        if cache_prefix_generation is not None:
+            assignments["cache_prefix_generation"] = max(cache_prefix_generation, 0)
+        if cache_break_reason is not None:
+            assignments["cache_break_reason"] = cache_break_reason
+        if cache_usage is not None:
+            assignments["cache_usage_json"] = json_dumps(cache_usage)
+        if reset_cache_generation:
+            assignments["cache_prefix_generation"] = 0
+            assignments["cache_prefix_fingerprint"] = None
+            assignments["cache_prefix_snapshot_json"] = None
+            assignments["cache_break_reason"] = None
+            assignments["cache_usage_json"] = None
+        elif increment_cache_generation:
+            current_generation = coerce_int(row["cache_prefix_generation"], 0)
+            assignments["cache_prefix_generation"] = current_generation + 1
         title, status = preview_from_items(self._load_items_conn(conn, limit=80))
         assignments["title"] = title
         assignments["status"] = status
@@ -586,3 +713,34 @@ class DeepySession:
                     last_usage_record_count=last_usage_record_count,
                 )
         return ContextTokenState(active_tokens=self._estimate_active_tokens(items))
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _cache_prefix_snapshot_from_row(row: sqlite3.Row) -> CachePrefixSnapshot | None:
+    payload = json_object(row["cache_prefix_snapshot_json"])
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return CachePrefixSnapshot(
+            provider=str(payload.get("provider") or ""),
+            model=str(payload.get("model") or ""),
+            base_url_host=str(payload.get("base_url_host") or ""),
+            reasoning_mode=str(payload.get("reasoning_mode") or ""),
+            model_settings=dict(payload.get("model_settings") or {}),
+            system_instructions=str(payload.get("system_instructions") or ""),
+            tools=tuple(
+                item for item in payload.get("tools") or () if isinstance(item, dict)
+            ),
+            mcp_tools=tuple(
+                item for item in payload.get("mcp_tools") or () if isinstance(item, dict)
+            ),
+            skill_names=tuple(
+                str(item) for item in payload.get("skill_names") or () if str(item)
+            ),
+            runtime_context_key=str(payload.get("runtime_context_key") or ""),
+        )
+    except Exception:
+        return None
