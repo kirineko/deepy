@@ -51,9 +51,9 @@ def test_status_report_to_dict_is_json_ready(tmp_path):
 
 
 def test_status_report_includes_usage_context_and_balance(tmp_path):
-    from deepy.sessions import DeepyJsonlSession
+    from deepy.sessions import DeepySession
 
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session.record_usage({"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120})
 
     report = build_status_report(

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from deepy.llm.runner import RunSummary
-from deepy.sessions import list_session_entries
-from deepy.sessions.jsonl import project_sessions_dir
+from deepy.sessions import DeepySession, list_session_entries
 from deepy.sessions.manager import DeepySessionManager
 
 
@@ -67,12 +64,9 @@ async def test_session_manager_append_and_compact_session(monkeypatch, tmp_path)
 
     result = await manager.compact_session("s1", focus_instruction="keep decisions")
 
-    from deepy.sessions import DeepyJsonlSession
-
-    items = await DeepyJsonlSession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
+    items = await DeepySession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
     assert result.compacted is True
-    assert result.archive_path is not None
-    assert result.archive_path.exists()
+    assert result.archive_id is not None
     assert "Previous context has been compacted" in items[0]["content"]
     assert items[1:] == [
         {"role": "assistant", "content": "two"},
@@ -88,33 +82,15 @@ async def test_session_manager_compact_keeps_short_session_unchanged(tmp_path):
     result = await manager.compact_session("s1")
 
     assert result.compacted is False
-    from deepy.sessions import DeepyJsonlSession
-
-    items = await DeepyJsonlSession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
+    items = await DeepySession.open(tmp_path, "s1", deepy_home=tmp_path / "home").get_items()
     assert items == [{"role": "user", "content": "hello"}]
 
 
 def test_session_manager_interrupts_active_session_and_clears_processes(monkeypatch, tmp_path):
     home = tmp_path / "home"
-    sessions_dir = project_sessions_dir(tmp_path, home)
-    sessions_dir.mkdir(parents=True)
-    sessions_dir.joinpath("sessions-index.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "sessions": [
-                    {
-                        "id": "s1",
-                        "path": "s1.jsonl",
-                        "activeTokens": 0,
-                        "createdAt": 1,
-                        "updatedAt": 2,
-                        "processes": {"123": {"startTime": "now", "command": "pytest"}},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    session = DeepySession.create(tmp_path, deepy_home=home, session_id="s1")
+    session._touch_index(
+        processes={"123": {"startTime": "now", "command": "pytest"}},
     )
     killed_groups: list[int] = []
 

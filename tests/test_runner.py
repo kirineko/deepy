@@ -17,7 +17,7 @@ from deepy.config.settings import LoggingConfig, NotifyConfig
 from deepy.llm.compaction import ContextCompactionError, ContextReadiness
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import DEFAULT_MAX_TURNS, format_deepseek_api_error, run_prompt_once
-from deepy.sessions import DeepyJsonlSession
+from deepy.sessions import DeepySession
 
 
 class FakeStream:
@@ -842,7 +842,7 @@ async def test_run_prompt_once_interrupt_rolls_back_only_persisted_user_input(
         should_interrupt=lambda: True,
     )
 
-    items = await DeepyJsonlSession.open(tmp_path, summary.session_id).get_items()
+    items = await DeepySession.open(tmp_path, summary.session_id).get_items()
     assert summary.status == "interrupted"
     assert items == []
     assert streams[0].cancel_calls == ["immediate"]
@@ -883,7 +883,7 @@ async def test_run_prompt_once_interrupt_preserves_tool_suffix_and_marks_turn(
         should_interrupt=lambda: True,
     )
 
-    items = await DeepyJsonlSession.open(tmp_path, summary.session_id).get_items()
+    items = await DeepySession.open(tmp_path, summary.session_id).get_items()
     assert summary.status == "interrupted"
     assert items[:2] == [
         {"role": "user", "content": "read then stop"},

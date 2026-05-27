@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from deepy.config import Settings, load_settings
-from deepy.sessions.jsonl import DeepyJsonlSession
+from deepy.sessions import DeepySession
 from deepy.skills import find_skill
 from deepy.mcp import DeepyMcpRuntime
 from deepy.todos import normalize_todo_items
@@ -68,9 +68,7 @@ async def run_prompt_once(
     root = (project_root or Path.cwd()).resolve()
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
-    session = (
-        DeepyJsonlSession.open(root, session_id) if session_id else DeepyJsonlSession.create(root)
-    )
+    session = DeepySession.open(root, session_id) if session_id else DeepySession.create(root)
     initial_todos, _ = normalize_todo_items(session.todo_state())
     runtime = ToolRuntime(
         cwd=root,
@@ -145,7 +143,7 @@ async def run_prompt_once(
             input=prompt,
             max_turns=max_turns,
             run_config=run_config,
-            session=session,  # ty: ignore[invalid-argument-type] - DeepyJsonlSession matches the SDK Session protocol at runtime.
+            session=session,  # ty: ignore[invalid-argument-type] - DeepySession matches the SDK Session protocol at runtime.
         )
         if should_interrupt is not None:
             interrupt_task = asyncio.create_task(
@@ -530,7 +528,7 @@ async def _finish_interrupt_task(task: asyncio.Task[bool] | None) -> bool:
 
 
 async def _reconcile_interrupted_session_tail(
-    session: DeepyJsonlSession,
+    session: DeepySession,
     *,
     baseline_count: int,
     prompt: str,

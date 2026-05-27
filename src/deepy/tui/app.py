@@ -44,7 +44,7 @@ from deepy.llm.runner import RunSummary
 from deepy.mcp import load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
-from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.sessions import DeepySession, SessionEntry, list_session_entries
 from deepy.session_cost import balance_snapshot_to_dict, should_track_session_cost, supports_session_cost
 from deepy.sessions.manager import DeepySessionManager
 from deepy.skill_market import (
@@ -1038,9 +1038,9 @@ class DeepyTuiApp(App[None]):
                 )
             )
             session = (
-                DeepyJsonlSession.open(self.project_root, self.state.session_id)
+                DeepySession.open(self.project_root, self.state.session_id)
                 if self.state.session_id
-                else DeepyJsonlSession.create(self.project_root)
+                else DeepySession.create(self.project_root)
             )
             await session.add_items(build_synthetic_shell_transcript_items(command_input.raw_text, result))
             self.state = set_session_id(self.state, session.session_id)
@@ -1402,7 +1402,7 @@ class DeepyTuiApp(App[None]):
         self._clear_input_suggestion()
         if not summary.session_id or summary.pending_questions:
             return
-        session = DeepyJsonlSession.open(self.project_root, summary.session_id)
+        session = DeepySession.open(self.project_root, summary.session_id)
         items = await session.get_items()
         if not is_eligible_for_input_suggestion(
             items,
@@ -1540,7 +1540,7 @@ class DeepyTuiApp(App[None]):
 
     async def _restore_transcript(self, session_id: str) -> None:
         await self._clear_transcript()
-        session = DeepyJsonlSession.open(self.project_root, session_id)
+        session = DeepySession.open(self.project_root, session_id)
         try:
             items = await session.get_items(limit=80)
         except Exception as exc:
@@ -1690,7 +1690,7 @@ class DeepyTuiApp(App[None]):
                 None,
             )
             try:
-                messages = DeepyJsonlSession.open(
+                messages = DeepySession.open(
                     self.project_root,
                     self.state.session_id,
                 ).get_items_sync()
@@ -1718,7 +1718,7 @@ class DeepyTuiApp(App[None]):
         if not session_id or self._pending_session_cost_start is None:
             return
         try:
-            DeepyJsonlSession.open(self.project_root, session_id).record_session_cost_start(
+            DeepySession.open(self.project_root, session_id).record_session_cost_start(
                 self._pending_session_cost_start
             )
         except Exception:
@@ -1739,7 +1739,7 @@ class DeepyTuiApp(App[None]):
             captured_at_ms=_now_ms(),
         )
         try:
-            DeepyJsonlSession.open(self.project_root, session_id).record_session_cost_end(snapshot)
+            DeepySession.open(self.project_root, session_id).record_session_cost_end(snapshot)
         except Exception:
             return
 
@@ -1787,7 +1787,7 @@ class DeepyTuiApp(App[None]):
 
 async def _load_session_items(project_root: Path, session_id: str) -> list[dict[str, Any]]:
     try:
-        return await DeepyJsonlSession.open(project_root, session_id).get_items()
+        return await DeepySession.open(project_root, session_id).get_items()
     except Exception:
         return []
 

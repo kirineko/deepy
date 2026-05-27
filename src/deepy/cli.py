@@ -31,7 +31,7 @@ from .config.settings import DEFAULT_UI_THEME, UI_THEMES
 from .errors import format_error_display
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
-from .sessions import DeepyJsonlSession, list_session_entries
+from .sessions import DeepySession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .status import build_status_report, format_status_report, status_report_to_dict
 from .usage import TokenUsage, format_usage_line, usage_from_run_result
@@ -597,7 +597,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
             )
         return 0
     if args.sessions_command == "show":
-        session = DeepyJsonlSession.open(Path.cwd(), args.session_id)
+        session = DeepySession.open(Path.cwd(), args.session_id)
         items = asyncio.run(session.get_items())
         entry = next(
             (item for item in list_session_entries(Path.cwd()) if item.id == args.session_id),

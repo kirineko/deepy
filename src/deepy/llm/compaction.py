@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 from deepy.config import Settings
 from deepy.prompts.compact import build_compact_prompt, build_compact_summary_message
-from deepy.sessions.jsonl import DeepyJsonlSession
+from deepy.sessions import DeepySession
 from deepy.todos import todo_state_prompt_text
 from deepy.usage import TokenUsage, usage_from_run_result
 
@@ -30,7 +28,7 @@ class CompactionResult:
     before_tokens: int
     after_tokens: int
     preserved_item_count: int
-    archive_path: Path | None = None
+    archive_id: str | None = None
     usage: TokenUsage | None = None
     message: str = ""
 
@@ -45,7 +43,7 @@ class ContextReadiness:
 
 
 async def compact_session(
-    session: DeepyJsonlSession,
+    session: DeepySession,
     settings: Settings,
     *,
     provider: ProviderBundle | None = None,
@@ -88,17 +86,15 @@ async def compact_session(
         [build_compact_summary_message(summary), *to_preserve]
     )
     after_tokens = _estimate_compacted_tokens(replacement, usage)
-    archive_path = _archive_path(session.path)
     try:
-        if session.path.exists():
-            session.path.replace(archive_path)
-        await session.replace_items(replacement, active_tokens=after_tokens)
+        archive_id = await session.archive_and_replace_items(
+            replacement,
+            active_tokens=after_tokens,
+            reason=reason,
+            before_tokens=before_tokens,
+            after_tokens=after_tokens,
+        )
     except Exception as exc:
-        if archive_path.exists():
-            with contextlib_suppress_all():
-                if session.path.exists():
-                    session.path.unlink()
-                archive_path.replace(session.path)
         raise ContextCompactionError(f"Failed to write compacted session: {exc}") from exc
 
     return CompactionResult(
@@ -108,14 +104,14 @@ async def compact_session(
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         preserved_item_count=len(to_preserve),
-        archive_path=archive_path,
+        archive_id=archive_id,
         usage=usage,
         message="Context compacted.",
     )
 
 
 async def ensure_context_ready(
-    session: DeepyJsonlSession,
+    session: DeepySession,
     settings: Settings,
     *,
     provider: ProviderBundle | None = None,
@@ -271,21 +267,3 @@ def _expand_preserve_start_for_tool_group(items: list[dict[str, Any]], preserve_
 def _call_id(item: dict[str, Any]) -> str:
     value = item.get("call_id") or item.get("id")
     return value if isinstance(value, str) else ""
-
-
-def _archive_path(path: Path) -> Path:
-    timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-    candidate = path.with_name(f"{path.stem}.compact-{timestamp}{path.suffix}")
-    index = 1
-    while candidate.exists():
-        candidate = path.with_name(f"{path.stem}.compact-{timestamp}-{index}{path.suffix}")
-        index += 1
-    return candidate
-
-
-class contextlib_suppress_all:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        return True

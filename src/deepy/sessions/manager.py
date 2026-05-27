@@ -10,9 +10,9 @@ from deepy.config import Settings, load_settings
 from deepy.llm.compaction import CompactionResult, compact_session
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import RunSummary, run_prompt_once
-from deepy.utils import json as json_utils
 
-from .jsonl import DeepyJsonlSession, list_session_entries, project_sessions_dir
+from .index import clear_session_processes, list_session_entries
+from .session import DeepySession
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class DeepySessionManager:
         self.active_session_id = session_id
 
     async def append_sdk_items(self, session_id: str, items: list[dict[str, Any]]) -> None:
-        session = DeepyJsonlSession.open(
+        session = DeepySession.open(
             self.project_root,
             session_id,
             deepy_home=self.deepy_home,
@@ -76,7 +76,7 @@ class DeepySessionManager:
         *,
         focus_instruction: str | None = None,
     ) -> CompactionResult:
-        session = DeepyJsonlSession.open(
+        session = DeepySession.open(
             self.project_root,
             session_id,
             deepy_home=self.deepy_home,
@@ -181,20 +181,4 @@ def _clear_session_processes(
     session_id: str,
     deepy_home: Path | None,
 ) -> None:
-    index_path = project_sessions_dir(project_root, deepy_home) / "sessions-index.json"
-    if not index_path.is_file():
-        return
-    try:
-        raw = json_utils.loads(index_path.read_text(encoding="utf-8") or "{}")
-    except Exception:
-        return
-    changed = False
-    entries = raw.get("sessions")
-    if not isinstance(entries, list):
-        return
-    for entry in entries:
-        if isinstance(entry, dict) and entry.get("id") == session_id:
-            entry["processes"] = None
-            changed = True
-    if changed:
-        index_path.write_text(json_utils.dumps_pretty(raw) + "\n", encoding="utf-8")
+    clear_session_processes(project_root, session_id, deepy_home)

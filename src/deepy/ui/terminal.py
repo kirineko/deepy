@@ -55,7 +55,7 @@ from deepy.llm.runner import RunSummary, run_prompt_once
 from deepy.mcp import DeepyMcpRuntime, format_mcp_status
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
-from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.sessions import DeepySession, SessionEntry, list_session_entries
 from deepy.session_cost import (
     balance_snapshot_to_dict,
     should_track_session_cost,
@@ -704,7 +704,7 @@ def _prepare_input_suggestion(
     if suggestion is None:
         return
     controller.set_suggestion(suggestion.text)
-    session = DeepyJsonlSession.open(project_root, summary.session_id)
+    session = DeepySession.open(project_root, summary.session_id)
     session.record_input_suggestion_usage(
         suggestion.usage,
         model=suggestion.model,
@@ -717,7 +717,7 @@ async def _generate_input_suggestion_for_summary(
     settings: Settings,
     summary: RunSummary,
 ) -> InputSuggestion | None:
-    session = DeepyJsonlSession.open(project_root, summary.session_id)
+    session = DeepySession.open(project_root, summary.session_id)
     items = await session.get_items()
     if not is_eligible_for_input_suggestion(
         items,
@@ -967,9 +967,9 @@ def _handle_local_command(
         console.print(shell_output)
 
     session = (
-        DeepyJsonlSession.open(project_root, current_session_id)
+        DeepySession.open(project_root, current_session_id)
         if current_session_id
-        else DeepyJsonlSession.create(project_root)
+        else DeepySession.create(project_root)
     )
     try:
         asyncio.run(
@@ -1815,7 +1815,7 @@ def _handle_compact_command(
     if not current_session_id:
         console.print(f"[{palette.muted}]No active session to compact.[/]")
         return current_session_id
-    session = DeepyJsonlSession.open(project_root, current_session_id)
+    session = DeepySession.open(project_root, current_session_id)
     try:
         items = asyncio.run(session.get_items())
     except Exception as exc:
@@ -2525,7 +2525,7 @@ def _history_tool_output_event(item: dict[str, Any]) -> DeepyStreamEvent:
 
 def _load_session_items(project_root: Path, session_id: str) -> list[dict[str, Any]]:
     try:
-        return asyncio.run(DeepyJsonlSession.open(project_root, session_id).get_items())
+        return asyncio.run(DeepySession.open(project_root, session_id).get_items())
     except Exception:
         return []
 
@@ -2710,7 +2710,7 @@ def _print_exit_summary(
             None,
         )
         try:
-            messages = asyncio.run(DeepyJsonlSession.open(project_root, session_id).get_items())
+            messages = asyncio.run(DeepySession.open(project_root, session_id).get_items())
         except Exception:
             messages = []
     console.print(
@@ -2747,7 +2747,7 @@ def _record_session_cost_start(
     if not session_id or snapshot is None:
         return
     try:
-        DeepyJsonlSession.open(project_root, session_id).record_session_cost_start(snapshot)
+        DeepySession.open(project_root, session_id).record_session_cost_start(snapshot)
     except Exception:
         return
 
@@ -2760,7 +2760,7 @@ def _record_session_cost_end(project_root: Path, session_id: str, settings: Sett
         captured_at_ms=_now_ms(),
     )
     try:
-        DeepyJsonlSession.open(project_root, session_id).record_session_cost_end(snapshot)
+        DeepySession.open(project_root, session_id).record_session_cost_end(snapshot)
     except Exception:
         return
 

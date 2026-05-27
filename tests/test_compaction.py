@@ -9,7 +9,7 @@ from deepy.llm.compaction import (
     ensure_context_ready,
     prepare_compaction_items,
 )
-from deepy.sessions import DeepyJsonlSession, list_session_entries
+from deepy.sessions import DeepySession, list_session_entries
 from deepy.usage import TokenUsage
 
 
@@ -52,7 +52,7 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
         )
 
     monkeypatch.setattr("deepy.llm.compaction.run_compaction_model", fake_run_compaction_model)
-    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items(
         [
             {"role": "user", "content": "old"},
@@ -79,8 +79,7 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
     items = await session.get_items()
     assert result.compacted is True
     assert result.before_tokens == 24_000
-    assert result.archive_path is not None
-    assert result.archive_path.exists()
+    assert result.archive_id is not None
     assert "Important summary." in items[0]["content"]
     assert "hidden" not in items[0]["content"]
     assert items[1:] == [
@@ -108,12 +107,17 @@ async def test_compact_session_restores_archive_when_rewrite_fails(monkeypatch, 
     ):
         return "summary", TokenUsage(completion_tokens=1, total_tokens=1)
 
-    async def fail_replace_items(self, items, *, active_tokens=None):
+    async def fail_archive_and_replace_items(
+        self, items, *, active_tokens, reason, before_tokens, after_tokens
+    ):
         raise OSError("disk full")
 
     monkeypatch.setattr("deepy.llm.compaction.run_compaction_model", fake_run_compaction_model)
-    monkeypatch.setattr("deepy.sessions.jsonl.DeepyJsonlSession.replace_items", fail_replace_items)
-    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    monkeypatch.setattr(
+        "deepy.sessions.session.DeepySession.archive_and_replace_items",
+        fail_archive_and_replace_items,
+    )
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     original = [
         {"role": "user", "content": "old"},
         {"role": "assistant", "content": "recent"},
@@ -124,7 +128,7 @@ async def test_compact_session_restores_archive_when_rewrite_fails(monkeypatch, 
     with pytest.raises(ContextCompactionError, match="Failed to write compacted session"):
         await compact_session(session, Settings(), reason="manual")
 
-    restored = await DeepyJsonlSession.open(
+    restored = await DeepySession.open(
         tmp_path,
         "s1",
         deepy_home=tmp_path / "home",
@@ -134,7 +138,7 @@ async def test_compact_session_restores_archive_when_rewrite_fails(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_ensure_context_ready_blocks_when_auto_compaction_cannot_fit(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items([{"role": "user", "content": "x" * 1000}])
 
     with pytest.raises(ContextCompactionError, match="could not be compacted enough"):
@@ -172,7 +176,7 @@ async def test_ensure_context_ready_does_not_compact_after_short_latest_context_
         )()
 
     monkeypatch.setattr("deepy.llm.compaction.compact_session", fake_compact_session)
-    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items([{"role": "user", "content": "large prompt"}])
     session.record_usage({"prompt_tokens": 900, "completion_tokens": 5, "total_tokens": 905})
     await session.add_items(
@@ -219,7 +223,7 @@ async def test_ensure_context_ready_compacts_when_latest_context_usage_reaches_t
         )()
 
     monkeypatch.setattr("deepy.llm.compaction.compact_session", fake_compact_session)
-    session = DeepyJsonlSession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items([{"role": "user", "content": "large prompt"}])
     session.record_usage({"prompt_tokens": 850, "completion_tokens": 5, "total_tokens": 855})
 

@@ -6,15 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from deepy.sessions import DeepyJsonlSession, list_session_entries
-from deepy.sessions.jsonl import project_sessions_dir
+from deepy.sessions import DeepySession, list_session_entries, project_sessions_dir
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.mark.asyncio
-async def test_session_jsonl_fixture_replays_python_sdk_items(tmp_path):
+async def test_session_store_ignores_legacy_jsonl_fixture(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     deepy_home = tmp_path / "home"
@@ -26,17 +25,11 @@ async def test_session_jsonl_fixture_replays_python_sdk_items(tmp_path):
         sessions_dir / "fixture-session.jsonl",
     )
 
-    entries = list_session_entries(project_root, deepy_home=deepy_home)
-    session = DeepyJsonlSession.open(project_root, "fixture-session", deepy_home=deepy_home)
+    session = DeepySession.open(project_root, "fixture-session", deepy_home=deepy_home)
     items = await session.get_items()
 
-    assert entries[0].processes == {
-        "4242": {"command": "pytest", "startTime": "2026-05-11T00:00:00.000Z"}
-    }
-    assert [item["role"] for item in items] == ["user", "assistant", "assistant", "tool", "user"]
-    assert items[2]["tool_calls"][0]["id"] == "call-read"
-    assert items[3]["tool_call_id"] == "call-read"
-    assert isinstance(items[4]["content"], list)
+    assert list_session_entries(project_root, deepy_home=deepy_home) == []
+    assert items == []
 
 
 def test_tool_fixture_covers_planned_cases():

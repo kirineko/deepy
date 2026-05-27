@@ -32,7 +32,7 @@ also supporting OpenAI-compatible providers.
   supporting OpenAI-compatible providers such as OpenRouter and Xiaomi MiMo.
 - **Transparent terminal execution**: thinking, tool calls, diffs, shell output,
   usage, and context pressure stay visible in the transcript.
-- **Project memory and continuity**: `AGENTS.md` rules, JSONL sessions,
+- **Project memory and continuity**: `AGENTS.md` rules, local SQLite sessions,
   `/resume`, `/compact`, automatic compacting, and context-window status keep
   long project work recoverable.
 - **Extensible agent ecosystem**: Agent Skills, MCP servers, subagents, and
@@ -250,6 +250,10 @@ deepy sessions list
 deepy sessions show <session-id>
 deepy run "summarize this project"
 ```
+
+Deepy stores active project sessions in a local SQLite session store. Historical
+JSONL session files from older Deepy versions are not imported, listed, or
+resumed by current session commands.
 
 Inside the interactive terminal:
 

@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from deepy.sessions import DeepyJsonlSession, list_session_entries
+from deepy.sessions import DeepySession, list_session_entries
 from deepy.ui.local_command import (
     LocalCommandResult,
     _read_pipe_output,
@@ -430,7 +430,7 @@ def test_synthetic_shell_transcript_uses_agents_sdk_tool_item_shape(tmp_path):
 
 @pytest.mark.asyncio
 async def test_synthetic_shell_transcript_round_trips_through_session(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(tmp_path / "project", deepy_home=tmp_path / "home", session_id="s1")
     result = LocalCommandResult(
         command="printf ok",
         output="ok",
@@ -461,7 +461,7 @@ async def test_synthetic_shell_transcript_round_trips_through_session(tmp_path):
 async def test_windows_synthetic_shell_transcript_stores_sanitized_output(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    session = DeepyJsonlSession.create(project, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(project, deepy_home=tmp_path / "home", session_id="s1")
     script = (
         "import sys; "
         "sys.stdout.buffer.write("
@@ -485,7 +485,7 @@ async def test_windows_synthetic_shell_transcript_stores_sanitized_output(tmp_pa
 async def test_windows_synthetic_shell_transcript_stores_decoded_output(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    session = DeepyJsonlSession.create(project, deepy_home=tmp_path / "home", session_id="s1")
+    session = DeepySession.create(project, deepy_home=tmp_path / "home", session_id="s1")
     script = "import sys; sys.stdout.buffer.write('状态: 正常\\n'.encode('gb18030'))"
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
     result = _run_windows_test_command(command, project)

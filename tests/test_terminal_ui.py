@@ -19,7 +19,7 @@ from deepy.config import ContextConfig, ModelConfig, Settings, UiConfig, load_se
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.mcp import McpServerStatus
-from deepy.sessions import DeepyJsonlSession, SessionEntry, list_session_entries
+from deepy.sessions import DeepySession, SessionEntry, list_session_entries
 from deepy.skill_market import MarketSkill
 from deepy.status import BalanceInfo, BalanceStatus
 from deepy.usage import TokenUsage
@@ -420,7 +420,7 @@ def test_resume_slash_command_selects_session_from_prompt(tmp_path, monkeypatch)
 
 def test_resume_slash_command_prints_selected_session_history(tmp_path):
     console = Console(record=True)
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     asyncio.run(
         session.add_items(
             [
@@ -1976,7 +1976,7 @@ def test_compact_slash_command_runs_manager_and_reports_success(monkeypatch, tmp
             message="Context compacted.",
         )
 
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
     monkeypatch.setattr("deepy.sessions.manager.DeepySessionManager.compact_session", fake_compact_session)
     console = Console(record=True)
@@ -2741,7 +2741,7 @@ def test_format_token_count_short_uses_compact_units():
 
 def test_print_usage_footer_only_shows_turn_usage(tmp_path):
     console = Console(record=True)
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session._touch_index(active_tokens=900)
 
     _print_usage_footer(
@@ -2769,7 +2769,7 @@ def test_print_usage_footer_only_shows_turn_usage(tmp_path):
 
 
 def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session._touch_index(active_tokens=200)
 
     toolbar = _format_context_footer(
@@ -2828,7 +2828,7 @@ def test_format_context_footer_ignores_empty_agents_md(tmp_path):
 
 
 def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session._touch_index(
         active_tokens=200,
         usage={"prompt_tokens": 900, "completion_tokens": 10, "total_tokens": 910},
@@ -2849,18 +2849,14 @@ def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(t
 
 
 def test_format_context_footer_shows_latest_request_context_window_only(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session._touch_index(
         active_tokens=9_000,
         last_usage_tokens=9_000,
         pending_tokens=0,
         last_usage_record_count=0,
     )
-    session.path.parent.mkdir(parents=True, exist_ok=True)
-    session.path.write_text(
-        '{"role":"user","content":"large prompt","meta":{"sdk_item":{"role":"user","content":"large prompt"}}}\n',
-        encoding="utf-8",
-    )
+    asyncio.run(session.add_items([{"role": "user", "content": "large prompt"}]))
     session.record_usage({"prompt_tokens": 3_500, "completion_tokens": 10, "total_tokens": 3_510})
 
     toolbar = _format_context_footer(
@@ -2879,12 +2875,8 @@ def test_format_context_footer_shows_latest_request_context_window_only(tmp_path
 
 
 def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
-    session.path.parent.mkdir(parents=True, exist_ok=True)
-    session.path.write_text(
-        '{"role":"user","content":"large prompt","meta":{"sdk_item":{"role":"user","content":"large prompt"}}}\n',
-        encoding="utf-8",
-    )
+    session = DeepySession.create(tmp_path, session_id="s1")
+    asyncio.run(session.add_items([{"role": "user", "content": "large prompt"}]))
     session.record_usage({"prompt_tokens": 8_500, "completion_tokens": 10, "total_tokens": 8_510})
 
     toolbar = _format_context_footer(
@@ -2903,7 +2895,7 @@ def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_p
 
 @pytest.mark.asyncio
 async def test_format_context_footer_uses_compacted_context_window_checkpoint(tmp_path):
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     session.record_usage({"prompt_tokens": 8_500, "completion_tokens": 10, "total_tokens": 8_510})
     await session.replace_items([{"role": "user", "content": "summary"}], active_tokens=100)
 
@@ -3209,7 +3201,7 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
             prompt_tokens=900 if prompt == "first" else 50,
             total_tokens=900 if prompt == "first" else 50,
         )
-        DeepyJsonlSession.create(tmp_path, session_id=session_id).record_usage(usage)
+        DeepySession.create(tmp_path, session_id=session_id).record_usage(usage)
         return RunSummary(output=f"answer {prompt}", session_id=session_id, complete=True, usage=usage)
 
     monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
@@ -3303,7 +3295,7 @@ def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_p
 
     entries = list_session_entries(tmp_path)
     session_id = entries[0].id
-    items = asyncio.run(DeepyJsonlSession.open(tmp_path, session_id).get_items())
+    items = asyncio.run(DeepySession.open(tmp_path, session_id).get_items())
     rendered = console.export_text()
 
     assert result == 0

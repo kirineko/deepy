@@ -7,7 +7,7 @@ import uuid
 from argparse import Namespace
 
 from deepy.cli import _doctor, main
-from deepy.sessions import DeepyJsonlSession
+from deepy.sessions import DeepySession
 
 
 def test_config_show_json_masks_secret(tmp_path, capsys):
@@ -439,7 +439,7 @@ def test_sessions_show_prints_items(tmp_path, capsys, monkeypatch):
     project_root = tmp_path / uuid.uuid4().hex
     project_root.mkdir()
     monkeypatch.chdir(project_root)
-    session = DeepyJsonlSession.create(project_root, session_id="s1")
+    session = DeepySession.create(project_root, session_id="s1")
     asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
 
     code = main(["sessions", "show", "s1"])

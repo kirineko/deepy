@@ -39,7 +39,7 @@ from deepy.tui.widgets import (
     UserBlock,
     decode_kitty_text_sequences,
 )
-from deepy.sessions import DeepyJsonlSession
+from deepy.sessions import DeepySession
 from deepy.ui.local_command import LocalCommandResult
 from deepy.ui.slash_commands import build_subagent_slash_prompt
 from deepy.usage import TokenUsage
@@ -183,7 +183,7 @@ async def test_tui_ctrl_d_confirm_exits_with_summary(tmp_path, monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_tui_exit_summary_counts_session_messages(tmp_path) -> None:
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     await session.add_items(
         [
             {"role": "user", "content": "hello"},
@@ -892,7 +892,7 @@ async def test_tui_local_command_runs_renders_and_persists_without_model_turn(tm
         assert model_calls == []
         assert app.state.session_id is not None
         assert any("hello" in block.body for block in app.query(ToolBlock))
-        session = DeepyJsonlSession.open(tmp_path, app.state.session_id)
+        session = DeepySession.open(tmp_path, app.state.session_id)
         items = await session.get_items()
         assert items[0]["role"] == "user"
         assert items[0]["content"] == "!echo hello"
@@ -2291,7 +2291,7 @@ async def test_tui_compact_command_reports_result(tmp_path, monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     write_output = json.dumps(
         {
             "ok": True,
@@ -2351,7 +2351,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
-    session = DeepyJsonlSession.create(tmp_path, session_id="s1")
+    session = DeepySession.create(tmp_path, session_id="s1")
     await session.add_items([{"role": "user", "content": "hello"}])
     session.record_usage({"prompt_tokens": 120, "completion_tokens": 4, "total_tokens": 124})
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
