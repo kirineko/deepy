@@ -541,6 +541,8 @@ def build_tool_params_snippet(
                 project_root=project_root,
             )
         return args.strip()
+    if tool_name == "Read":
+        return _format_read_params_snippet(parsed, project_root=project_root) or args.strip()
     parsed_params = _string_key_dict(parsed)
     if parsed_params is None:
         return args.strip()
@@ -902,6 +904,8 @@ def _format_tool_params_snippet(
         return _format_update_params_snippet(args, project_root=project_root)
     if tool_name == "Search":
         return _format_search_params_snippet(args, project_root=project_root)
+    if tool_name == "Read":
+        return _format_read_params_snippet(args, project_root=project_root)
 
     if tool_name == "shell":
         command = args.get("command")
@@ -920,6 +924,45 @@ def _format_tool_params_snippet(
     if tool_name == "Read":
         return _shorten_project_path(text, project_root=project_root)
     return text
+
+
+def _format_read_params_snippet(value: Any, *, project_root: str | None) -> str:
+    paths = _read_paths_from_value(value)
+    if not paths:
+        return ""
+    return ", ".join(_shorten_project_path(path, project_root=project_root) for path in paths)
+
+
+def _read_paths_from_value(value: Any) -> list[str]:
+    paths: list[str] = []
+    _collect_read_paths(value, paths)
+    return paths
+
+
+def _collect_read_paths(value: Any, paths: list[str]) -> None:
+    if isinstance(value, str):
+        _append_unique_path(paths, value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_read_paths(item, paths)
+        return
+    if not isinstance(value, dict):
+        return
+    for key in ("path", "file_path"):
+        path = _string_or_none(value.get(key))
+        if path:
+            _append_unique_path(paths, path)
+    for key in ("paths", "files"):
+        items = value.get(key)
+        if isinstance(items, list):
+            for item in items:
+                _collect_read_paths(item, paths)
+
+
+def _append_unique_path(paths: list[str], path: str) -> None:
+    if path not in paths:
+        paths.append(path)
 
 
 def _format_write_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:

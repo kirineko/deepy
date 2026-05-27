@@ -1090,6 +1090,42 @@ def test_format_tool_call_summary_formats_read_arguments():
     )
 
 
+def test_format_tool_call_summary_formats_read_path_list():
+    summary = format_tool_call_summary(
+        "Read",
+        json.dumps(
+            [
+                {"path": "/repo/Cargo.toml"},
+                {"path": "/repo/src"},
+                {"path": "/repo/src/main.rs"},
+            ]
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "[Read] Cargo.toml, src, src/main.rs"
+    assert "/repo" not in summary
+    assert '"path"' not in summary
+    assert "[{" not in summary
+
+
+def test_format_tool_call_summary_formats_read_nested_paths():
+    summary = format_tool_call_summary(
+        "Read",
+        json.dumps(
+            {
+                "paths": [
+                    "/repo/src/main.rs",
+                    {"file_path": "/repo/src/bin"},
+                ]
+            }
+        ),
+        project_root="/repo",
+    )
+
+    assert summary == "[Read] src/main.rs, src/bin"
+
+
 def test_format_tool_call_summary_formats_search_arguments():
     summary = format_tool_call_summary(
         "Search",
