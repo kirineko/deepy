@@ -3495,7 +3495,12 @@ def _print_stream_event(
         todo_board = render_todo_board(event.text, palette=palette, width=console.width)
         if todo_board:
             console.print(todo_board)
-        diff = render_tool_diff_preview(event.text, palette=palette, width=console.width)
+        diff = render_tool_diff_preview(
+            event.text,
+            palette=palette,
+            width=console.width,
+            project_root=project_root,
+        )
         if diff:
             console.print(diff)
         return

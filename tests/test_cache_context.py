@@ -20,8 +20,8 @@ from deepy.llm.cache_context import (
 def test_cache_prefix_snapshot_is_deterministic_and_changes_by_component():
     settings = Settings(model=ModelConfig(api_key="sk-test"))
     tool = SimpleNamespace(
-        name="read_file",
-        description="Read a file",
+        name="Read",
+        description="Read files",
         params_json_schema={"type": "object", "properties": {"path": {"type": "string"}}},
     )
 

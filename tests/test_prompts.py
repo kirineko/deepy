@@ -235,12 +235,12 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "## WebSearch" in prompt
     assert "## WebFetch" in prompt
     assert "## shell" in prompt
-    assert "Use `edit_text` for one small single-file exact edit" in prompt
-    assert "Use structured `apply_patch.operations` when a change has multiple edits in one file" in prompt
+    assert "Use `Update` for exact text replacements" in prompt
+    assert "multiple files in one call" in prompt
     assert "*** Begin Patch" not in prompt
-    assert "`write_file` for new files or explicit whole-file replacement" in prompt
+    assert "`Write` only for new files or explicit whole-file replacement" in prompt
     assert "`modify` is a compatibility alias" not in prompt
-    assert "exact `edit_text` edits can establish the managed snapshot internally" in prompt
+    assert "do not copy or invent freshness tokens" in prompt
     assert "Run shell commands using the Runtime context's command dialect" in prompt
     assert "Match visible thinking/reasoning language" in prompt
     assert "you MUST write visible thinking/reasoning in Chinese" in prompt
@@ -251,7 +251,9 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "Skip `todo_write` for simple questions" in prompt
     assert "Do not treat it as subagent" in prompt
     assert "## modify" not in prompt
-    assert "## read_file" in prompt
+    assert "## Read" in prompt
+    assert "## Write" in prompt
+    assert "## Update" in prompt
     assert "## todo_write" in prompt
     assert "plan approval" in prompt
     assert "## AskUserQuestion" in prompt
@@ -260,8 +262,6 @@ def test_system_prompt_includes_rules_default_skill_and_skills(tmp_path):
     assert "wait for the user's response" in prompt
     assert "Custom answer" in prompt
     assert "high-impact trade-offs" in prompt
-    assert "For new files, Deepy writes UTF-8 without BOM by default" in prompt
-    assert "whole-file replacement requires `overwrite=true`" in prompt
     assert "demo - Demo skill" in prompt
     assert "Skill protocol:" in prompt
     assert "call `load_skill`" in prompt

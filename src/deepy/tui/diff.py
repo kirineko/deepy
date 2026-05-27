@@ -39,17 +39,19 @@ def diff_view_from_tool_output(
     max_lines: int = MAX_RENDERED_DIFF_LINES,
 ) -> TuiDiffView | None:
     view = parse_tool_output(output)
-    if view.ok is not True or view.name.lower() not in {"write_file", "edit_text", "apply_patch"}:
+    if view.ok is not True or view.name.lower() not in {"write", "update"}:
         return None
     raw = view.diff_preview or view.diff
     if not raw:
         return None
-    sections: tuple[DiffPreview, ...] = ()
-    if view.name.lower() == "apply_patch":
-        sections = tuple(split_diff_preview_sections(raw))
-    preview = _aggregate_diff_sections(sections, fallback=parse_diff_preview_view(raw, path=view.path))
+    parsed_sections = tuple(split_diff_preview_sections(raw))
+    sections, section_truncated = _truncate_diff_sections(parsed_sections, max_lines=max_lines)
+    preview = _aggregate_diff_sections(
+        sections,
+        fallback=parse_diff_preview_view(raw, path=view.path),
+    )
     lines = preview.lines
-    truncated = view.name.lower() != "apply_patch" and len(lines) > max_lines
+    truncated = section_truncated or len(lines) > max_lines
     if truncated:
         lines = lines[:max_lines]
     return TuiDiffView(
@@ -71,6 +73,8 @@ def render_unified_diff_text(view: TuiDiffView) -> str:
             if index:
                 lines.append("")
             lines.extend(_render_diff_preview_text_lines(section))
+        if view.truncated:
+            lines.append("... diff truncated ...")
         return "\n".join(lines)
     return "\n".join(_render_diff_preview_text_lines(_view_as_preview(view), truncated=view.truncated))
 
@@ -113,6 +117,8 @@ def render_unified_diff_rich(
                 )
                 for line in preview.lines
             )
+        if view.truncated:
+            renderables.append(Text("... diff truncated ...", style=palette.diff_context))
         return Group(*renderables)
     preview = _view_as_preview(view)
     syntax = diff_preview_syntax(preview, palette)
@@ -141,6 +147,37 @@ def _aggregate_diff_sections(sections: tuple[DiffPreview, ...], *, fallback: Dif
         removed=sum(section.removed for section in sections),
         lines=lines,
     )
+
+
+def _truncate_diff_sections(
+    sections: tuple[DiffPreview, ...],
+    *,
+    max_lines: int,
+) -> tuple[tuple[DiffPreview, ...], bool]:
+    if not sections:
+        return (), False
+    remaining = max(0, max_lines)
+    truncated = False
+    limited: list[DiffPreview] = []
+    for section in sections:
+        if remaining <= 0:
+            truncated = True
+            break
+        if len(section.lines) > remaining:
+            limited.append(
+                DiffPreview(
+                    path=section.path,
+                    added=section.added,
+                    removed=section.removed,
+                    lines=section.lines[:remaining],
+                    syntax_path=section.syntax_path,
+                )
+            )
+            truncated = True
+            break
+        limited.append(section)
+        remaining -= len(section.lines)
+    return tuple(limited), truncated
 
 
 def _view_as_preview(view: TuiDiffView) -> DiffPreview:

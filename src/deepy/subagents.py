@@ -14,14 +14,15 @@ SUPPORTED_SUBAGENT_TOOLS = frozenset(
         "Search",
         "WebFetch",
         "WebSearch",
+        "Read",
         "load_skill",
-        "read_file",
         "task_output",
         "test_shell",
     }
 )
-MUTATION_TOOLS = frozenset({"apply_patch", "edit_text", "shell", "write_file"})
-DEFAULT_CUSTOM_TOOLS = ("Search", "read_file")
+REMOVED_FILE_TOOLS = frozenset({"apply_patch", "edit_text", "read_file", "write_file"})
+MUTATION_TOOLS = frozenset({"Update", "Write", "shell", *REMOVED_FILE_TOOLS})
+DEFAULT_CUSTOM_TOOLS = ("Search", "Read")
 MAX_SUBAGENT_TURNS = 100
 SUBAGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
@@ -67,12 +68,12 @@ def built_in_subagents() -> tuple[SubagentDefinition, ...]:
                 "Use for broad read-only codebase, documentation, dependency, or web/search "
                 "investigation that can run independently before Deepy synthesizes the answer."
             ),
-            tools=("Search", "read_file", "WebSearch", "WebFetch", "load_skill"),
+            tools=("Search", "Read", "WebSearch", "WebFetch", "load_skill"),
             max_turns=30,
             mcp=SubagentMcpConfig(inherit_search=True),
             instructions=(
                 "You are Deepy's explore subagent. Investigate the assigned scope without "
-                "modifying files. Prefer local Search/read_file first, use web or search-class "
+                "modifying files. Prefer local Search/Read first, use web or search-class "
                 "MCP tools when current or external information is needed, and return a concise "
                 "report with key findings, relevant paths or URLs, uncertainties, and next steps."
             ),
@@ -83,7 +84,7 @@ def built_in_subagents() -> tuple[SubagentDefinition, ...]:
                 "Use for focused read-only review of correctness, security, maintainability, "
                 "design risk, regressions, or missing tests."
             ),
-            tools=("Search", "read_file", "WebFetch"),
+            tools=("Search", "Read", "WebFetch"),
             max_turns=24,
             instructions=(
                 "You are Deepy's reviewer subagent. Review only the assigned code, design, or "
@@ -98,7 +99,7 @@ def built_in_subagents() -> tuple[SubagentDefinition, ...]:
                 "Use for bug reproduction, targeted test execution, diagnostics, and command-based "
                 "verification through Deepy's constrained test_shell."
             ),
-            tools=("Search", "read_file", "test_shell"),
+            tools=("Search", "Read", "test_shell"),
             max_turns=30,
             instructions=(
                 "You are Deepy's tester subagent. Reproduce behavior and run targeted verification "
@@ -313,7 +314,7 @@ def _canonical_tool_name(value: str) -> str:
         "webfetch": "WebFetch",
         "web_search": "WebSearch",
         "websearch": "WebSearch",
-        "read": "read_file",
+        "read": "Read",
     }
     stripped = value.strip()
     return aliases.get(stripped.lower(), stripped)

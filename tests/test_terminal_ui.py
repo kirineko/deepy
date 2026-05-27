@@ -432,13 +432,13 @@ def test_resume_slash_command_prints_selected_session_history(tmp_path):
                 {
                     "type": "function_call",
                     "call_id": "call-1",
-                    "name": "read_file",
-                    "arguments": '{"file_path":"README.md"}',
+                    "name": "Read",
+                    "arguments": '{"path":"README.md"}',
                 },
                 {
                     "type": "function_call_output",
                     "call_id": "call-1",
-                    "output": '{"ok":true,"name":"read_file","output":"","metadata":{"path":"README.md"}}',
+                    "output": '{"ok":true,"name":"Read","output":"","metadata":{"path":"README.md"}}',
                 },
                 {
                     "role": "assistant",
@@ -569,8 +569,8 @@ def test_print_stream_event_merges_tool_call_and_output():
         console,
         DeepyStreamEvent(
             kind="tool_call",
-            name="read_file",
-            payload={"call_id": "call-1", "arguments": '{"file_path":"/repo/README.md"}'},
+            name="Read",
+            payload={"call_id": "call-1", "arguments": '{"path":"/repo/README.md"}'},
         ),
         project_root="/repo",
         pending_tool_calls=pending,
@@ -580,7 +580,7 @@ def test_print_stream_event_merges_tool_call_and_output():
         DeepyStreamEvent(
             kind="tool_output",
             payload={"call_id": "call-1"},
-            text='{"ok":true,"name":"read_file","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
+            text='{"ok":true,"name":"Read","output":"","error":null,"metadata":{"path":"/tmp/a"}}',
         ),
         pending_tool_calls=pending,
     )
@@ -646,11 +646,11 @@ def test_print_stream_event_renders_retryable_invalid_arguments_quietly():
         console,
         DeepyStreamEvent(
             kind="tool_call",
-            name="write_file",
+            name="Write",
             payload={
                 "call_id": "call-1",
                 "arguments": (
-                    '{"file_path":"/repo/app/page.tsx","content":'
+                    '{"path":"/repo/app/page.tsx","content":'
                     f"{large_content},\"overwrite\":true,\"snapshot_id\":snapshot_4}}"
                 ),
             },
@@ -666,7 +666,7 @@ def test_print_stream_event_renders_retryable_invalid_arguments_quietly():
             text=json_utils.dumps(
                 {
                     "ok": False,
-                    "name": "write_file",
+                    "name": "Write",
                     "output": "",
                     "error": "Invalid tool arguments JSON",
                     "metadata": {
@@ -755,7 +755,7 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     console = Console(record=True, width=120)
     output = {
         "ok": True,
-        "name": "edit_text",
+        "name": "Update",
         "output": "Edited file",
         "error": None,
         "metadata": {
@@ -768,10 +768,13 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     _print_stream_event(
         console,
         DeepyStreamEvent(kind="tool_output", text=json_utils.dumps(output)),
+        project_root="/repo",
     )
 
     rendered = console.export_text()
-    assert "[Edit]  ok" in rendered
+    assert "[Update]  ok" in rendered
+    assert "[Update] src/lib.rs (+1 -1)" in rendered
+    assert "[Update] /repo/src/lib.rs (+1 -1)" not in rendered
     assert "old" in rendered
     assert "new" in rendered
     assert "same" in rendered
@@ -786,7 +789,7 @@ def test_print_stream_event_renders_write_preview_after_status():
     console = Console(record=True, width=120)
     output = {
         "ok": True,
-        "name": "write_file",
+        "name": "Write",
         "output": "Wrote file",
         "error": None,
         "metadata": {
@@ -814,7 +817,7 @@ def test_print_stream_event_passes_console_width_to_diff_preview(monkeypatch):
     captured: dict[str, int | None] = {}
     output = {
         "ok": True,
-        "name": "edit_text",
+        "name": "Update",
         "output": "Edited file",
         "error": None,
         "metadata": {
@@ -824,8 +827,8 @@ def test_print_stream_event_passes_console_width_to_diff_preview(monkeypatch):
         "awaitUserResponse": False,
     }
 
-    def fake_render_tool_diff_preview(text, *, palette=None, width=None):
-        del text, palette
+    def fake_render_tool_diff_preview(text, *, palette=None, width=None, project_root=None):
+        del text, palette, project_root
         captured["width"] = width
         return None
 
@@ -847,12 +850,12 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
         console,
         DeepyStreamEvent(
             kind="tool_call",
-            name="write_file",
+            name="Write",
             payload={
                 "call_id": "call-1",
                 "arguments": json_utils.dumps(
                     {
-                        "file_path": "/repo/src/lib.rs",
+                        "path": "/repo/src/lib.rs",
                         "content": "fn main() {\n    println!(\"hi\");\n}\n",
                     }
                 ),
@@ -869,7 +872,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
             text=json_utils.dumps(
                 {
                     "ok": True,
-                    "name": "write_file",
+                    "name": "Write",
                     "output": "Wrote file",
                     "error": None,
                     "metadata": {
@@ -1234,7 +1237,7 @@ def test_terminal_stream_renderer_restores_status_for_silent_tool_arguments(tmp_
         DeepyStreamEvent(
             kind="raw_response",
             name="response.function_call_arguments.delta",
-            text='{"file_path"',
+            text='{"path"',
         )
     )
 
@@ -1355,8 +1358,8 @@ def test_terminal_stream_renderer_shows_tool_status_without_call_id(tmp_path):
     renderer(
         DeepyStreamEvent(
             kind="tool_call",
-            name="write_file",
-            payload={"arguments": json_utils.dumps({"file_path": str(tmp_path / "README.md")})},
+            name="Write",
+            payload={"arguments": json_utils.dumps({"path": str(tmp_path / "README.md")})},
         )
     )
 
@@ -2355,10 +2358,10 @@ def test_print_usage_footer_shows_turn_duration():
 
 
 def test_working_status_text_shows_elapsed_time_and_interrupt_hint():
-    rendered = _working_status_text(time.monotonic(), "Running read_file README.md").plain
+    rendered = _working_status_text(time.monotonic(), "Running Read README.md").plain
 
     assert "Working (0s · esc to interrupt)" in rendered
-    assert "Running read_file README.md" in rendered
+    assert "Running Read README.md" in rendered
 
 
 def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path):
@@ -2372,12 +2375,12 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
         active_work="thinking",
     )
 
-    rendered = _working_status_text(time.monotonic(), "running read_file README.md", footer=footer).plain
+    rendered = _working_status_text(time.monotonic(), "running Read README.md", footer=footer).plain
 
     assert rendered[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     assert "time 0s" in rendered
     assert "esc to interrupt" in rendered
-    assert "running read_file README.md" in rendered
+    assert "running Read README.md" in rendered
     assert "model deepseek-v4-pro[max]" not in rendered
     assert f"cwd {tmp_path}" not in rendered
     assert "ctx unknown/1K" not in rendered

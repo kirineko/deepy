@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-import re
 from typing import TYPE_CHECKING, Any
 
 from deepy.utils import json as json_utils
@@ -119,54 +118,30 @@ def build_function_tools(
         )
         return _merge_tool_result_metadata(result, repair_metadata)
 
-    async def invoke_read_file(_context: object, raw_input: str) -> str:
-        args, error, repair_metadata = _tool_args(raw_input, "read_file", READ_FILE_SCHEMA)
+    async def invoke_read(_context: object, raw_input: str) -> str:
+        args, error, repair_metadata = _tool_args(raw_input, "Read", READ_SCHEMA)
         if error is not None:
             return error
-        result = await asyncio.to_thread(
-            runtime.read_file,
-            _string_arg(args, "file_path"),
-            start_line=_int_arg(args, "offset", 1),
-            limit=_optional_int_arg(args, "limit"),
-            pages=_optional_string_arg(args, "pages"),
-        )
+        result = await asyncio.to_thread(runtime.read, args)
         return _merge_tool_result_metadata(result, repair_metadata)
 
-    async def invoke_edit_text(_context: object, raw_input: str) -> str:
-        args, error, repair_metadata = _tool_args(raw_input, "edit_text", EDIT_TEXT_SCHEMA)
+    async def invoke_write(_context: object, raw_input: str) -> str:
+        args, error, repair_metadata = _tool_args(raw_input, "Write", WRITE_SCHEMA)
         if error is not None:
             return error
         result = await asyncio.to_thread(
-            runtime.edit_text,
-            _optional_string_arg(args, "file_path"),
-            _string_arg(args, "old_string"),
-            _string_arg(args, "new_string"),
-            replace_all=_bool_arg(args, "replace_all", False),
-            snippet_id=_optional_string_arg(args, "snippet_id"),
-            expected_occurrences=_optional_int_arg(args, "expected_occurrences"),
-        )
-        return _merge_tool_result_metadata(result, repair_metadata)
-
-    async def invoke_write_file(_context: object, raw_input: str) -> str:
-        args, error, repair_metadata = _tool_args(raw_input, "write_file", WRITE_FILE_SCHEMA)
-        if error is not None:
-            return error
-        result = await asyncio.to_thread(
-            runtime.write_file,
-            _string_arg(args, "file_path"),
+            runtime.write_v3,
+            _string_arg(args, "path"),
             args.get("content"),
             overwrite=_bool_arg(args, "overwrite", False),
-            snapshot_id=_optional_string_arg(args, "snapshot_id"),
-            expected_hash=_optional_string_arg(args, "expected_hash"),
-            snapshot_token=_optional_int_arg(args, "snapshot_token"),
         )
         return _merge_tool_result_metadata(result, repair_metadata)
 
-    async def invoke_apply_patch(_context: object, raw_input: str) -> str:
-        args, error, repair_metadata = _tool_args(raw_input, "apply_patch", APPLY_PATCH_SCHEMA)
+    async def invoke_update(_context: object, raw_input: str) -> str:
+        args, error, repair_metadata = _tool_args(raw_input, "Update", UPDATE_SCHEMA)
         if error is not None:
             return error
-        result = await asyncio.to_thread(runtime.apply_patch, args.get("operations"))
+        result = await asyncio.to_thread(runtime.update, args)
         return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_web_search(_context: object, raw_input: str) -> str:
@@ -288,47 +263,34 @@ def build_function_tools(
             strict_json_schema=True,
         ),
         make_function_tool(
-            name="read_file",
+            name="Read",
             description=(
-                "Read a file or directory and record managed text snapshots for later edits. "
-                "Use this before whole-file replacement or when you need context."
+                "Read one or more project files or directories. Use files=[...] to read "
+                "multiple targets in one call; use range/head/tail/offset/limit for slices."
             ),
-            params_json_schema=READ_FILE_SCHEMA,
-            on_invoke_tool=invoke_read_file,
-            strict_json_schema=True,
+            params_json_schema=READ_SCHEMA,
+            on_invoke_tool=invoke_read,
+            strict_json_schema=False,
         ),
         make_function_tool(
-            name="edit_text",
+            name="Write",
             description=(
-                "Preferred tool for small single-file exact/string edits. Use file_path "
-                "with old_string/new_string and expected_occurrences when possible; use "
-                "snippet_id only to intentionally scope a partial-read range."
+                "Create a new text file or replace a whole existing text file. For existing "
+                "files, set overwrite=true after reading the target in this session."
             ),
-            params_json_schema=EDIT_TEXT_SCHEMA,
-            on_invoke_tool=invoke_edit_text,
-            strict_json_schema=True,
+            params_json_schema=WRITE_SCHEMA,
+            on_invoke_tool=invoke_write,
+            strict_json_schema=False,
         ),
         make_function_tool(
-            name="write_file",
+            name="Update",
             description=(
-                "Create a new text file or explicitly replace a whole file. Existing-file "
-                "replacement requires overwrite intent plus snapshot_id, snapshot_token, or expected_hash."
+                "Apply exact text replacements. Use one old/new pair, path+edits for multiple "
+                "edits in one file, or edits=[{path, old, new}] for multi-file updates."
             ),
-            params_json_schema=WRITE_FILE_SCHEMA,
-            on_invoke_tool=invoke_write_file,
-            strict_json_schema=True,
-        ),
-        make_function_tool(
-            name="apply_patch",
-            description=(
-                "Batch structured file operations. Best for multiple edits in one file, "
-                "multi-file edits, create/delete/move, or larger block replacements. "
-                "Provide an operations array using create_file, replace_file, delete_file, "
-                "move_file, replace_block, insert_before, insert_after, or replace_all."
-            ),
-            params_json_schema=APPLY_PATCH_SCHEMA,
-            on_invoke_tool=invoke_apply_patch,
-            strict_json_schema=True,
+            params_json_schema=UPDATE_SCHEMA,
+            on_invoke_tool=invoke_update,
+            strict_json_schema=False,
         ),
         make_function_tool(
             name="WebSearch",
@@ -473,8 +435,7 @@ def _invalid_tool_arguments_result(
             "repairApplied": False,
             **(repair_metadata or {}),
             "recovery": (
-                "Pass a valid JSON object matching the tool schema. "
-                'String values such as snapshot_id must be quoted, for example "snapshot_4".'
+                "Pass a valid JSON object matching the tool schema."
             ),
         },
     ).to_json()
@@ -485,9 +446,6 @@ def _repair_tool_arguments(raw_input: str) -> tuple[str | None, dict[str, Any]]:
     if not repaired:
         return None, {}
     operations: list[str] = []
-    repaired, changed = _quote_known_unquoted_ids(repaired)
-    if changed:
-        operations.append("quote_tool_ids")
     repaired, changed = _replace_unquoted_python_literals(repaired)
     if changed:
         operations.append("json_literals")
@@ -502,15 +460,6 @@ def _repair_tool_arguments(raw_input: str) -> tuple[str | None, dict[str, Any]]:
         "repairApplied": True,
         "repairOperations": operations,
     }
-
-
-def _quote_known_unquoted_ids(value: str) -> tuple[str, bool]:
-    pattern = re.compile(
-        r'("(?P<key>snapshot_id|snippet_id)"\s*:\s*)'
-        r'(?P<id>(?:snapshot|snippet)_\d+)(?=\s*[,}\]])'
-    )
-    repaired, count = pattern.subn(r'\1"\g<id>"', value)
-    return repaired, count > 0
 
 
 def _replace_unquoted_python_literals(value: str) -> tuple[str, bool]:
@@ -899,202 +848,80 @@ SEARCH_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-READ_FILE_SCHEMA: dict[str, Any] = {
+READ_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "file_path": {
-            "type": "string",
-            "description": "Path to file or directory under the current project",
-        },
-        "offset": {
-            "type": ["number", "null"],
-            "description": "Line number to start reading from; null means start at line 1",
-        },
-        "limit": {
-            "type": ["number", "null"],
-            "description": "Number of lines to read; null means the default limit",
-        },
-        "pages": {
-            "type": ["string", "null"],
-            "description": "Page range for PDF files; null for non-PDF reads",
-        },
+        "path": {"type": "string", "description": "Path to read."},
+        "range": {"type": "string", "description": "Optional 1-indexed inclusive line range like '20-80'."},
+        "head": {"type": "integer", "description": "Optional number of leading lines to read."},
+        "tail": {"type": "integer", "description": "Optional number of trailing lines to read."},
+        "offset": {"type": "integer", "description": "Optional 1-indexed start line."},
+        "limit": {"type": "integer", "description": "Optional number of lines to read."},
+        "pages": {"type": "string", "description": "Optional PDF page range."},
     },
-    "required": ["file_path", "offset", "limit", "pages"],
+    "required": ["path"],
     "additionalProperties": False,
 }
 
-EDIT_TEXT_SCHEMA: dict[str, Any] = {
+READ_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "file_path": {
-            "type": ["string", "null"],
-            "description": "Path to file. Use null when snippet_id scopes the edit.",
-        },
-        "snippet_id": {
-            "type": ["string", "null"],
-            "description": "Snippet id returned by read_file to scope the edit.",
-        },
-        "old_string": {
-            "type": "string",
-            "description": "Exact existing text to replace.",
-        },
-        "new_string": {
-            "type": "string",
-            "description": "Replacement text. Must change file content.",
-        },
-        "replace_all": {
-            "type": "boolean",
-            "description": "Replace all occurrences of old_string.",
-        },
-        "expected_occurrences": {
-            "type": ["number", "null"],
-            "description": "Expected number of matches; null skips this safety check.",
-        },
-    },
-    "required": [
-        "file_path",
-        "snippet_id",
-        "old_string",
-        "new_string",
-        "replace_all",
-        "expected_occurrences",
-    ],
-    "additionalProperties": False,
-}
-
-WRITE_FILE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "file_path": {
-            "type": "string",
-            "description": "Path to the file under the current project.",
-        },
-        "content": {
-            "type": "string",
-            "description": "Complete file content.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Explicit intent to replace an existing file.",
-        },
-        "snapshot_id": {
-            "type": ["string", "null"],
-            "description": "Snapshot id returned by read_file for existing-file replacement.",
-        },
-        "snapshot_token": {
-            "type": ["integer", "null"],
-            "description": "Numeric snapshot token returned by read_file for existing-file replacement.",
-        },
-        "expected_hash": {
-            "type": ["string", "null"],
-            "description": "Content hash returned by read_file for existing-file replacement.",
-        },
-    },
-    "required": [
-        "file_path",
-        "content",
-        "overwrite",
-        "snapshot_id",
-        "snapshot_token",
-        "expected_hash",
-    ],
-    "additionalProperties": False,
-}
-
-APPLY_PATCH_OPERATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "enum": [
-                "create_file",
-                "replace_file",
-                "delete_file",
-                "move_file",
-                "replace_block",
-                "insert_before",
-                "insert_after",
-                "replace_all",
-            ],
-            "description": "Structured file operation type.",
-        },
-        "file_path": {
-            "type": "string",
-            "description": "Path to the source or target file under the current project.",
-        },
-        "destination_path": {
-            "type": ["string", "null"],
-            "description": "Destination path for move_file; null for other operations.",
-        },
-        "content": {
-            "type": ["string", "null"],
-            "description": "File content for create_file/replace_file or inserted content for insert operations.",
-        },
-        "old_text": {
-            "type": ["string", "null"],
-            "description": "Exact text to replace for replace_block or replace_all.",
-        },
-        "new_text": {
-            "type": ["string", "null"],
-            "description": "Replacement text for replace_block or replace_all.",
-        },
-        "anchor": {
-            "type": ["string", "null"],
-            "description": "Exact anchor text for insert_before or insert_after.",
-        },
-        "expected_occurrences": {
-            "type": ["integer", "null"],
-            "description": "Expected match count for exact text or anchor operations.",
-        },
-        "replace_all": {
-            "type": ["boolean", "null"],
-            "description": "Whether to apply a block or insertion operation to every matching occurrence.",
-        },
-        "overwrite": {
-            "type": ["boolean", "null"],
-            "description": "Explicit overwrite intent for replace_file.",
-        },
-        "snapshot_id": {
-            "type": ["string", "null"],
-            "description": "Snapshot id returned by read_file for replace_file.",
-        },
-        "snapshot_token": {
-            "type": ["integer", "null"],
-            "description": "Numeric snapshot token returned by read_file for replace_file.",
-        },
-        "expected_hash": {
-            "type": ["string", "null"],
-            "description": "Content hash returned by read_file for replace_file.",
-        },
-    },
-    "required": [
-        "type",
-        "file_path",
-        "destination_path",
-        "content",
-        "old_text",
-        "new_text",
-        "anchor",
-        "expected_occurrences",
-        "replace_all",
-        "overwrite",
-        "snapshot_id",
-        "snapshot_token",
-        "expected_hash",
-    ],
-    "additionalProperties": False,
-}
-
-APPLY_PATCH_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "operations": {
+        "path": {"type": "string", "description": "Path to read when reading one target."},
+        "files": {
             "type": "array",
-            "description": "Structured file operations to preflight and commit as one logical patch.",
-            "items": APPLY_PATCH_OPERATION_SCHEMA,
+            "description": "Targets to read in one call.",
+            "items": READ_TARGET_SCHEMA,
         },
+        "range": {"type": "string", "description": "Optional 1-indexed inclusive line range like '20-80'."},
+        "head": {"type": "integer", "description": "Optional number of leading lines to read."},
+        "tail": {"type": "integer", "description": "Optional number of trailing lines to read."},
+        "offset": {"type": "integer", "description": "Optional 1-indexed start line."},
+        "limit": {"type": "integer", "description": "Optional number of lines to read."},
+        "pages": {"type": "string", "description": "Optional PDF page range."},
     },
-    "required": ["operations"],
+    "required": [],
+    "additionalProperties": False,
+}
+
+WRITE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to create or replace."},
+        "content": {"type": "string", "description": "Complete file content."},
+        "overwrite": {"type": "boolean", "description": "Set true to replace an existing file."},
+    },
+    "required": ["path", "content"],
+    "additionalProperties": False,
+}
+
+UPDATE_EDIT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Target path; optional when parent path is provided."},
+        "old": {"type": "string", "description": "Exact text to replace."},
+        "new": {"type": "string", "description": "Replacement text."},
+        "replace_all": {"type": "boolean", "description": "Replace every exact old match."},
+        "expected_occurrences": {"type": "integer", "description": "Expected match count."},
+    },
+    "required": ["old", "new"],
+    "additionalProperties": False,
+}
+
+UPDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Target path for one file."},
+        "old": {"type": "string", "description": "Exact text to replace for a single edit."},
+        "new": {"type": "string", "description": "Replacement text for a single edit."},
+        "edits": {
+            "type": "array",
+            "description": "Ordered exact replacements; each edit can include its own path.",
+            "items": UPDATE_EDIT_SCHEMA,
+        },
+        "replace_all": {"type": "boolean", "description": "Default replace_all for edits."},
+        "expected_occurrences": {"type": "integer", "description": "Default expected match count for edits."},
+    },
+    "required": [],
     "additionalProperties": False,
 }
 

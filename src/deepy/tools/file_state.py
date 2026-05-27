@@ -115,21 +115,6 @@ class FileState:
             return self.mark_read(path, encoding=encoding, line_endings=line_endings)
         return None
 
-    def get_snapshot(self, path: Path) -> FileSnapshot | None:
-        return self._snapshots.get(path.resolve())
-
-    def get_snapshot_path(self, snapshot_id: str) -> Path | None:
-        for path, snapshot in self._snapshots.items():
-            if snapshot.id == snapshot_id:
-                return path
-        return None
-
-    def get_snapshot_token_path(self, snapshot_token: int) -> Path | None:
-        for path, snapshot in self._snapshots.items():
-            if snapshot.token == snapshot_token:
-                return path
-        return None
-
     def discard_snapshot(self, path: Path) -> None:
         self._snapshots.pop(path.resolve(), None)
 

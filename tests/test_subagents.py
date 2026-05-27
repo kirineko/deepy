@@ -14,6 +14,7 @@ def test_built_in_subagents_are_available():
     assert definitions["explore"].mcp.inherit_search is True
     assert "test_shell" in definitions["tester"].tools
     assert "apply_patch" not in definitions["tester"].tools
+    assert "Read" in definitions["tester"].tools
     assert definitions["tester"].tool_name == "subagent_tester"
 
 
@@ -26,7 +27,7 @@ description: Read logs and summarize likely causes.
 model: inherit
 tools:
   - Search
-  - read_file
+  - Read
 mcp:
   inherit_search: false
 max_turns: 12
@@ -44,7 +45,7 @@ Read only. Return concise findings.
     assert definition.name == "triage"
     assert definition.model is None
     assert definition.max_turns == 12
-    assert definition.tools == ("Search", "read_file")
+    assert definition.tools == ("Search", "Read")
 
 
 def test_discovery_precedence_project_over_user_over_builtin(tmp_path):
@@ -66,7 +67,7 @@ User tester prompt.
         """---
 name: tester
 description: Project tester.
-tools: [read_file]
+tools: [Read]
 ---
 Project tester prompt.
 """,
@@ -77,7 +78,7 @@ Project tester prompt.
     tester = next(definition for definition in result.definitions if definition.name == "tester")
 
     assert tester.description == "Project tester."
-    assert tester.tools == ("read_file",)
+    assert tester.tools == ("Read",)
     assert tester.source.startswith("project:")
 
 

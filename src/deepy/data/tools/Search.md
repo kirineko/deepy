@@ -11,7 +11,7 @@ commands. It is read-only.
 
 Defaults and guidance:
 - Use `mode: "literal"` unless the user clearly needs a regex.
-- Use `output_mode: "files"` for broad discovery, then `read_file` specific
+- Use `output_mode: "files"` for broad discovery, then `Read` specific
   files or rerun with `output_mode: "content"`.
 - Use `output_mode: "count"` to understand match distribution.
 - Use `glob` or a narrower `path` to keep results focused.

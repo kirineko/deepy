@@ -1357,7 +1357,7 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
     tool_output = json.dumps(
         {
             "ok": True,
-            "name": "write_file",
+            "name": "Write",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -1375,8 +1375,8 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
-                payload={"call_id": "call-1", "arguments": '{"file_path":"src/app.py"}'},
+                name="Write",
+                payload={"call_id": "call-1", "arguments": '{"path":"src/app.py"}'},
             )
         )
         emit_event(
@@ -1475,7 +1475,7 @@ async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path
     retryable_output = json.dumps(
         {
             "ok": False,
-            "name": "write_file",
+            "name": "Write",
             "output": "",
             "error": "Invalid tool arguments JSON",
             "metadata": {
@@ -1490,7 +1490,7 @@ async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path
     success_output = json.dumps(
         {
             "ok": True,
-            "name": "write_file",
+            "name": "Write",
             "output": "Wrote file",
             "error": None,
             "metadata": {"path": "src/app.py"},
@@ -1503,12 +1503,12 @@ async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
+                name="Write",
                 payload={
                     "call_id": "bad-1",
                     "arguments": (
-                        '{"file_path":"src/app.py","content":SECRET,'
-                        '"overwrite":true,"snapshot_id":snapshot_1}'
+                        '{"path":"src/app.py","content":SECRET,'
+                        '"overwrite":true}'
                     ),
                 },
             )
@@ -1519,10 +1519,10 @@ async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
+                name="Write",
                 payload={
                     "call_id": "good-1",
-                    "arguments": '{"file_path":"src/app.py","content":"new\\n"}',
+                    "arguments": '{"path":"src/app.py","content":"new\\n"}',
                 },
             )
         )
@@ -1554,9 +1554,9 @@ async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
     blocking_output = json.dumps(
         {
             "ok": False,
-            "name": "write_file",
+            "name": "Write",
             "output": "",
-            "error": "Existing file replacement requires a snapshot_id.",
+            "error": "File must be read before it can be modified.",
             "metadata": {"error_code": "stale_snapshot", "path": "src/app.py"},
             "awaitUserResponse": False,
         }
@@ -1564,7 +1564,7 @@ async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
     success_output = json.dumps(
         {
             "ok": True,
-            "name": "write_file",
+            "name": "Write",
             "output": "Wrote file",
             "error": None,
             "metadata": {"path": "src/app.py"},
@@ -1577,8 +1577,8 @@ async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
-                payload={"call_id": "bad-1", "arguments": '{"file_path":"src/app.py"}'},
+                name="Write",
+                payload={"call_id": "bad-1", "arguments": '{"path":"src/app.py"}'},
             )
         )
         emit_event(
@@ -1587,8 +1587,8 @@ async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
         emit_event(
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
-                payload={"call_id": "good-1", "arguments": '{"file_path":"src/app.py"}'},
+                name="Write",
+                payload={"call_id": "good-1", "arguments": '{"path":"src/app.py"}'},
             )
         )
         emit_event(
@@ -1617,7 +1617,7 @@ async def test_tui_retryable_tool_block_exposes_bounded_recovery_details(tmp_pat
     retryable_output = json.dumps(
         {
             "ok": False,
-            "name": "write_file",
+            "name": "Write",
             "output": "",
             "error": "Invalid tool arguments JSON",
             "metadata": {
@@ -1634,10 +1634,10 @@ async def test_tui_retryable_tool_block_exposes_bounded_recovery_details(tmp_pat
         kwargs["emit_event"](
             DeepyStreamEvent(
                 kind="tool_call",
-                name="write_file",
+                name="Write",
                 payload={
                     "call_id": "bad-1",
-                    "arguments": '{"file_path":"src/app.py","content":SECRET}',
+                    "arguments": '{"path":"src/app.py","content":SECRET}',
                 },
             )
         )
@@ -2304,7 +2304,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
     write_output = json.dumps(
         {
             "ok": True,
-            "name": "write_file",
+            "name": "Write",
             "output": "Wrote file",
             "error": None,
             "metadata": {
@@ -2330,7 +2330,7 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
             {
                 "type": "function_call",
                 "call_id": "write-1",
-                "name": "write_file",
+                "name": "Write",
                 "arguments": '{"path":"selection_sort.py"}',
             },
             {"type": "function_call_output", "call_id": "write-1", "output": write_output},
@@ -2712,7 +2712,7 @@ async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
     tool_output = json.dumps(
         {
             "ok": True,
-            "name": "read_file",
+            "name": "Read",
             "output": long_output,
             "error": None,
             "metadata": {"path": "src/app.py"},

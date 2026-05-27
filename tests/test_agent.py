@@ -64,10 +64,10 @@ def test_build_deepy_agent_uses_mimo_compatible_tool_schema_for_xiaomi(tmp_path)
         ),
     )
 
-    read_tool = next(tool for tool in agent.tools if tool.name == "read_file")
-    assert read_tool.params_json_schema["required"] == ["file_path"]
-    assert read_tool.params_json_schema["properties"]["offset"]["type"] == "number"
-    assert read_tool.strict_json_schema is True
+    read_tool = next(tool for tool in agent.tools if tool.name == "Read")
+    assert read_tool.params_json_schema["required"] == []
+    assert read_tool.params_json_schema["properties"]["offset"]["type"] == "integer"
+    assert read_tool.strict_json_schema is False
 
 
 def test_build_deepy_agent_uses_mimo_compatible_tool_schema_for_openrouter_mimo(tmp_path):
@@ -92,8 +92,8 @@ def test_build_deepy_agent_uses_mimo_compatible_tool_schema_for_openrouter_mimo(
         ),
     )
 
-    read_tool = next(tool for tool in agent.tools if tool.name == "read_file")
-    assert read_tool.params_json_schema["required"] == ["file_path"]
+    read_tool = next(tool for tool in agent.tools if tool.name == "Read")
+    assert read_tool.params_json_schema["required"] == []
 
 
 def test_build_deepy_agent_preserves_tool_schema_for_non_mimo_models(tmp_path):
@@ -118,13 +118,8 @@ def test_build_deepy_agent_preserves_tool_schema_for_non_mimo_models(tmp_path):
         ),
     )
 
-    read_tool = next(tool for tool in agent.tools if tool.name == "read_file")
-    assert read_tool.params_json_schema["required"] == [
-        "file_path",
-        "offset",
-        "limit",
-        "pages",
-    ]
+    read_tool = next(tool for tool in agent.tools if tool.name == "Read")
+    assert read_tool.params_json_schema["required"] == []
 
 
 def test_build_deepy_agent_exposes_subagents_without_raw_shell_in_tester(tmp_path):

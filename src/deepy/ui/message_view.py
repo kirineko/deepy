@@ -25,21 +25,20 @@ MAX_THINKING_SUMMARY_CHARS = 360
 MAX_DIFF_LINES = 80
 MAX_SYNTAX_SAMPLE_CHARS = 4_000
 MAX_SYNTAX_SAMPLE_LINES = 80
-DIFF_PREVIEW_TOOLS = {"edit_text", "write_file", "apply_patch"}
-FILE_MUTATION_TOOLS = {"edit_text", "write_file", "apply_patch"}
+DIFF_PREVIEW_TOOLS = {"update", "write"}
+FILE_MUTATION_TOOLS = {"Update", "Write"}
 SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
 SDK_CONTENT_BLOCK_TYPES = {"file", "image", "input_file", "input_image", "input_text", "text"}
 SDK_TEXT_BLOCK_TYPES = {"input_text", "text"}
 TOOL_DISPLAY_LABELS = {
     "AskUserQuestion": "AskUserQuestion",
+    "Read": "Read",
     "Search": "Search",
+    "Update": "Update",
     "WebFetch": "WebFetch",
     "WebSearch": "WebSearch",
-    "apply_patch": "Patch",
-    "edit_text": "Edit",
+    "Write": "Write",
     "mcp": "MCP",
-    "write_file": "Write",
-    "read_file": "Read",
     "shell": "Shell",
     "task_list": "Tasks",
     "task_output": "Task Output",
@@ -209,7 +208,7 @@ def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | 
     diff = _tool_diff_text(view)
     if not diff:
         return None
-    if view.name.lower() in {"write_file", "apply_patch"}:
+    if view.name == "Write":
         return diff
     return _limit_lines(diff, max_lines=max_lines)
 
@@ -226,6 +225,7 @@ def render_tool_diff_preview(
     max_lines: int = MAX_DIFF_LINES,
     palette: UiPalette | None = None,
     width: int | None = None,
+    project_root: str | None = None,
 ) -> Group | None:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
@@ -234,32 +234,40 @@ def render_tool_diff_preview(
         return None
     diff = (
         raw_diff
-        if view.name.lower() in {"write_file", "apply_patch"}
+        if view.name == "Write"
         else _limit_lines(raw_diff, max_lines=max_lines)
     )
     if not diff:
         return None
-    if view.name.lower() == "apply_patch":
-        sections = split_diff_preview_sections(diff)
-        if not sections:
-            return None
-        renderables = []
-        for index, section in enumerate(sections):
-            if index:
-                renderables.append(Text(""))
-            syntax = _diff_preview_syntax(section, palette)
-            renderables.append(render_diff_preview_header(section, tool_name=view.name, palette=palette))
+    sections = split_diff_preview_sections(diff)
+    if len(sections) > 1:
+        renderables: list[Any] = []
+        for preview in sections:
+            syntax = _diff_preview_syntax(preview, palette)
+            renderables.append(
+                render_diff_preview_header(
+                    preview,
+                    tool_name=view.name,
+                    palette=palette,
+                    project_root=project_root,
+                )
+            )
             renderables.extend(
                 render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
-                for line in section.lines
+                for line in preview.lines
             )
         return Group(*renderables)
-    preview = parse_diff_preview_view(diff, path=view.path)
+    preview = sections[0] if sections else parse_diff_preview_view(diff, path=view.path)
     if not preview.lines:
         return None
     syntax = _diff_preview_syntax(preview, palette)
     return Group(
-        render_diff_preview_header(preview, tool_name=view.name, palette=palette),
+        render_diff_preview_header(
+            preview,
+            tool_name=view.name,
+            palette=palette,
+            project_root=project_root,
+        ),
         *(
             render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
             for line in preview.lines
@@ -315,11 +323,12 @@ def render_diff_preview_header(
     *,
     tool_name: str,
     palette: UiPalette | None = None,
+    project_root: str | None = None,
 ) -> Text:
     palette = palette or DARK_PALETTE
     label = format_tool_display_label(tool_name)
     if preview.path:
-        label = f"{label} {preview.path}"
+        label = f"{label} {_shorten_project_path(preview.path, project_root=project_root)}"
     label = f"{label} (+{preview.added} -{preview.removed})"
     return _tool_label_line(label, style=palette.info, bullet=True)
 
@@ -824,10 +833,10 @@ def _format_tool_params_snippet(
             return f"{count} {label}"
         return "read current list"
 
-    if tool_name == "write_file" and "content" in args:
+    if tool_name == "Write" and "content" in args:
         return _format_write_params_snippet(args, project_root=project_root)
-    if tool_name == "apply_patch":
-        return _format_patch_params_snippet(args, project_root=project_root)
+    if tool_name == "Update":
+        return _format_update_params_snippet(args, project_root=project_root)
     if tool_name == "Search":
         return _format_search_params_snippet(args, project_root=project_root)
 
@@ -845,7 +854,7 @@ def _format_tool_params_snippet(
         return ""
     value = args[first_key]
     text = value if isinstance(value, str) else json_utils.dumps(value)
-    if tool_name == "read_file":
+    if tool_name == "Read":
         return _shorten_project_path(text, project_root=project_root)
     return text
 
@@ -859,28 +868,28 @@ def _format_write_params_snippet(args: dict[str, Any], *, project_root: str | No
     return f"{path_text} ({_text_size_summary(content)})"
 
 
-def _format_patch_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
-    operations = args.get("operations")
-    if isinstance(operations, list):
-        paths: list[str] = []
-        operation_count = 0
-        for operation in operations:
-            if not isinstance(operation, dict):
+def _format_update_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
+    paths: list[str] = []
+    edit_count = 0
+    root_path = _string_or_none(args.get("path")) or _string_or_none(args.get("file_path"))
+    edits = args.get("edits")
+    if isinstance(edits, list):
+        for item in edits:
+            if not isinstance(item, dict):
                 continue
-            operation_count += 1
-            for key in ("file_path", "destination_path"):
-                path = operation.get(key)
-                if isinstance(path, str) and path and path not in paths:
-                    paths.append(path)
-        if not paths:
-            label = "operation" if operation_count == 1 else "operations"
-            return f"{operation_count} {label}" if operation_count else "operations"
-        labels = [_shorten_project_path(path, project_root=project_root) for path in paths]
-        file_label = "file" if len(paths) == 1 else "files"
-        operation_label = "op" if operation_count == 1 else "ops"
-        return f"{operation_count} {operation_label}, {len(paths)} {file_label}: {', '.join(labels)}"
-
-    return "operations"
+            edit_count += 1
+            path = _string_or_none(item.get("path")) or _string_or_none(item.get("file_path")) or root_path
+            if path and path not in paths:
+                paths.append(path)
+    else:
+        edit_count = 1 if ("old" in args or "new" in args) else 0
+        if root_path:
+            paths.append(root_path)
+    if not paths:
+        return f"{edit_count} edits" if edit_count else "edits"
+    edit_label = "edit" if edit_count == 1 else "edits"
+    file_label = "file" if len(paths) == 1 else "files"
+    return f"{edit_count} {edit_label}, {len(paths)} {file_label}"
 
 
 def _format_malformed_file_tool_params_snippet(
@@ -890,28 +899,10 @@ def _format_malformed_file_tool_params_snippet(
     project_root: str | None,
 ) -> str:
     path = _extract_json_like_string_field(arguments, "file_path")
+    if path is None:
+        path = _extract_json_like_string_field(arguments, "path")
     path_text = _shorten_project_path(path, project_root=project_root) if path else "file"
-    if tool_name == "apply_patch":
-        paths = _extract_json_like_file_paths(arguments)
-        if paths:
-            labels = [_shorten_project_path(item, project_root=project_root) for item in paths[:3]]
-            suffix = "" if len(paths) <= 3 else f", +{len(paths) - 3} more"
-            file_label = "file" if len(paths) == 1 else "files"
-            operation_count = _count_json_like_operations(arguments)
-            op_label = f"{operation_count} malformed ops, " if operation_count else "malformed args, "
-            return f"{op_label}{len(paths)} {file_label}: {', '.join(labels)}{suffix}"
-        return "malformed args"
     return f"{path_text} (malformed args)"
-
-
-def _extract_json_like_file_paths(arguments: str) -> list[str]:
-    paths: list[str] = []
-    for field in ("file_path", "destination_path"):
-        for match in _json_like_string_field_pattern(field).finditer(arguments):
-            value = _unescape_json_like_string(match.group("value"))
-            if value and value not in paths:
-                paths.append(value)
-    return paths
 
 
 def _extract_json_like_string_field(arguments: str, field: str) -> str | None:
@@ -932,10 +923,6 @@ def _unescape_json_like_string(value: str) -> str:
     except json_utils.JSONDecodeError:
         return value
     return parsed if isinstance(parsed, str) else value
-
-
-def _count_json_like_operations(arguments: str) -> int:
-    return len(re.findall(r'"type"\s*:\s*"', arguments))
 
 
 def _format_search_params_snippet(args: dict[str, Any], *, project_root: str | None) -> str:
@@ -1005,8 +992,14 @@ def _text_size_summary(text: str) -> str:
 
 
 def _shorten_project_path(path: str, *, project_root: str | None) -> str:
-    if project_root and path.startswith(project_root):
-        return path[len(project_root) :].lstrip("/\\")
+    if project_root:
+        root = project_root.rstrip("/\\")
+        if path == root:
+            return "."
+        for separator in ("/", "\\"):
+            prefix = f"{root}{separator}"
+            if path.startswith(prefix):
+                return path[len(prefix) :]
     return path
 
 

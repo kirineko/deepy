@@ -1964,7 +1964,7 @@ def _item_type(item: dict[str, Any]) -> str:
 
 
 def _recoverable_tool_key(name: str, argument_summary: str) -> tuple[str, str] | None:
-    if name not in {"write_file", "edit_text", "apply_patch"}:
+    if name not in {"Write", "Update"}:
         return None
     target = _recoverable_tool_target(argument_summary)
     if not target:
