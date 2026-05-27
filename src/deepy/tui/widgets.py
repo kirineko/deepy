@@ -30,6 +30,7 @@ from deepy.ui.file_mentions import (
 from deepy.ui.message_view import (
     ToolOutputView,
     build_tool_params_snippet,
+    format_tool_failure_detail,
     format_tool_display_name,
 )
 from deepy.ui.slash_commands import (
@@ -855,6 +856,10 @@ def _tool_output_body(view: ToolOutputView) -> str:
         return _web_body(view)
     if _is_mcp_view(view):
         return _mcp_body(view)
+    if view.ok is False and view.metadata:
+        detail = format_tool_failure_detail(view.metadata)
+        if detail:
+            return detail
     return _compact_text(view.error or view.output or view.summary)
 
 

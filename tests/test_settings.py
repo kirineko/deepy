@@ -7,12 +7,14 @@ from deepy.config import (
     DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_RESERVED_CONTEXT_TOKENS,
     DEFAULT_XIAOMI_BASE_URL,
+    DEFAULT_UI_VIEW_MODE,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
     load_settings,
     settings_to_toml_dict,
     update_config_model_settings,
     update_config_input_suggestions_enabled,
     update_config_theme,
+    update_config_view_mode,
     provider_info_for,
     ui_theme_from_selection,
     write_config,
@@ -356,6 +358,22 @@ def test_input_suggestions_default_enabled_and_can_be_disabled(tmp_path):
     assert load_settings(disabled, env={}).ui.input_suggestions_enabled is False
 
 
+def test_ui_view_mode_defaults_and_can_be_configured(tmp_path):
+    missing = tmp_path / "missing.toml"
+    missing.write_text("", encoding="utf-8")
+    full = tmp_path / "full.toml"
+    full.write_text('[ui]\nview_mode = "full"\n', encoding="utf-8")
+    concise = tmp_path / "concise.toml"
+    concise.write_text('[ui]\nview_mode = "concise"\n', encoding="utf-8")
+    invalid = tmp_path / "invalid.toml"
+    invalid.write_text('[ui]\nview_mode = "thinking"\n', encoding="utf-8")
+
+    assert load_settings(missing, env={}).ui.view_mode == DEFAULT_UI_VIEW_MODE
+    assert load_settings(full, env={}).ui.view_mode == "full"
+    assert load_settings(concise, env={}).ui.view_mode == "concise"
+    assert load_settings(invalid, env={}).ui.view_mode == DEFAULT_UI_VIEW_MODE
+
+
 def test_settings_to_toml_includes_input_suggestions_without_model_customization(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text("[ui]\ninput_suggestions_enabled = false\n", encoding="utf-8")
@@ -364,6 +382,15 @@ def test_settings_to_toml_includes_input_suggestions_without_model_customization
 
     assert data["ui"]["input_suggestions_enabled"] is False
     assert "input_suggestion_model" not in data["ui"]
+
+
+def test_settings_to_toml_includes_view_mode(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\nview_mode = \"full\"\n", encoding="utf-8")
+
+    data = settings_to_toml_dict(load_settings(config, env={}))
+
+    assert data["ui"]["view_mode"] == "full"
 
 
 def test_defaults_ui_theme_to_dark_when_missing_or_invalid(tmp_path):
@@ -433,6 +460,33 @@ def test_update_config_input_suggestions_preserves_existing_values_and_permissio
     assert "input_suggestions_enabled = false" in text
 
 
+def test_update_config_view_mode_preserves_existing_values_and_permissions(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\ninput_suggestions_enabled = false\n',
+        encoding="utf-8",
+    )
+
+    update_config_view_mode(config, "full")
+
+    text = config.read_text(encoding="utf-8")
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'api_key = "sk-test"' in text
+    assert 'theme = "dark"' in text
+    assert "input_suggestions_enabled = false" in text
+    assert 'view_mode = "full"' in text
+
+
+def test_update_config_view_mode_rejects_invalid_without_changing_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\nview_mode = "concise"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="View mode must be one of"):
+        update_config_view_mode(config, "thinking")
+
+    assert config.read_text(encoding="utf-8") == '[ui]\nview_mode = "concise"\n'
+
+
 def test_update_config_model_settings_preserves_existing_values_and_permissions(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
@@ -475,6 +529,7 @@ def test_write_config_uses_provider_default_base_urls_and_switch_thinking(tmp_pa
     assert f'base_url = "{DEFAULT_XIAOMI_BASE_URL}"' in text
     assert 'thinking = false' in text
     assert 'reasoning_effort = "none"' in text
+    assert 'view_mode = "concise"' in text
 
 
 def test_write_config_saves_xiaomi_enabled_as_switch_only_mode(tmp_path):

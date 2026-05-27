@@ -18,11 +18,19 @@ def test_render_markdown_preserves_heading_text():
 
 
 def test_render_markdown_preserves_code_fences_with_language_tag():
-    result = render_markdown("```js\nconsole.log(1);\n```").plain
+    result = render_markdown("```js\nconsole.log(1);\n```")
 
-    assert "code js" in result
-    assert "console.log(1);" in result
-    assert "```" not in result
+    assert "console.log(1);" in result.plain
+    assert "```" not in result.plain
+    assert len({str(span.style) for span in result.spans}) > 1
+
+
+def test_render_markdown_highlights_rust_code_blocks():
+    result = render_markdown("```rust\nimpl Solution {\n    pub fn solve() {}\n}\n```")
+
+    assert "impl Solution" in result.plain
+    assert "pub fn solve" in result.plain
+    assert len({str(span.style) for span in result.spans}) > 1
 
 
 def test_render_markdown_styles_inline_code_without_removing_it():

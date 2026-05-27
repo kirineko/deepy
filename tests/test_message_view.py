@@ -494,7 +494,7 @@ def test_tool_diff_preview_ignores_failed_or_unrelated_tools():
     assert tool_diff_preview(read_ok) is None
 
 
-def test_render_tool_output_includes_summary_and_diff():
+def test_render_tool_output_omits_success_summary_when_update_diff_is_shown():
     output = (
         '{"ok":true,"name":"Update","output":"Edited file","error":null,'
         '"metadata":{"path":"file","diff":"--- a/file\\n+++ b/file\\n@@\\n+new\\n"},'
@@ -505,13 +505,13 @@ def test_render_tool_output_includes_summary_and_diff():
     console.print(render_tool_output(output))
 
     rendered = console.export_text()
-    assert "[Update] ok - file" in rendered
+    assert "[Update] ok - file" not in rendered
     assert "[Update] file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+new" not in rendered
 
 
-def test_render_tool_output_shows_write_preview_with_diff_style():
+def test_render_tool_output_omits_success_summary_when_write_diff_is_shown():
     output = (
         '{"ok":true,"name":"Write","output":"Wrote file","error":null,'
         '"metadata":{"path":"file","diff":"--- /dev/null\\n+++ b/file\\n@@ -0,0 +1,1 @@\\n+new\\n"},'
@@ -522,10 +522,46 @@ def test_render_tool_output_shows_write_preview_with_diff_style():
     console.print(render_tool_output(output, width=40))
 
     rendered = console.export_text()
-    assert "[Write] ok - file" in rendered
+    assert "[Write] ok - file" not in rendered
     assert "[Write] file (+1 -0)" in rendered
     assert "new" in rendered
     assert "+ new" in rendered
+
+
+def test_render_tool_output_keeps_success_summary_without_diff():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "Update",
+            "output": "No diff available",
+            "error": None,
+            "metadata": {"path": "file"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    rendered = render_tool_output(output)
+    summary = list(rendered.renderables)[0]
+
+    assert summary.plain == "[Update] ok - file"
+
+
+def test_render_tool_output_keeps_failure_summary():
+    output = json.dumps(
+        {
+            "ok": False,
+            "name": "Update",
+            "output": "",
+            "error": "Update preflight failed; no file changes were committed.",
+            "metadata": {"path": "file"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    rendered = render_tool_output(output)
+    summary = list(rendered.renderables)[0]
+
+    assert summary.plain.startswith("[Update] failed")
 
 
 def test_render_tool_output_bolds_tool_label():
@@ -1171,6 +1207,35 @@ def test_format_tool_progress_summary_includes_failure_detail():
         format_tool_progress_summary("shell pytest", output)
         == "shell pytest  failed - Command exited with code 1."
     )
+
+
+def test_format_tool_progress_summary_includes_first_update_preflight_failure():
+    output = json.dumps(
+        {
+            "ok": False,
+            "name": "Update",
+            "output": "",
+            "error": "Update preflight failed; no file changes were committed.",
+            "metadata": {
+                "failures": [
+                    {
+                        "index": 1,
+                        "path": "/repo/src/main.rs",
+                        "error": "Update would not change file content.",
+                        "error_code": "no_op",
+                    }
+                ],
+                "preflightFailed": True,
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    assert (
+        format_tool_progress_summary("[Update] 3 edits, 1 file", output)
+        == "[Update] 3 edits, 1 file  failed - edit #2 no_op: Update would not change file content."
+    )
+    assert "edit #2 no_op" in parse_tool_output(output).summary
 
 
 def test_build_tool_params_snippet_shortens_read_path_under_project_root():

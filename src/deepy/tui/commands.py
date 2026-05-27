@@ -29,6 +29,7 @@ TUI_COMMANDS: tuple[TuiCommand, ...] = (
     TuiCommand("compact", "/compact", "Compact the active session context", "Session"),
     TuiCommand("skills", "/skills", "Manage local and market skills", "Skills"),
     TuiCommand("model", "/model", "Select model and reasoning mode", "Settings"),
+    TuiCommand("view", "/view", "Hide or show reasoning transcript text", "Settings"),
     TuiCommand("input-suggestion", "/input-suggestion", "Toggle input suggestions", "Settings"),
     TuiCommand("theme", "/theme", "Select UI theme", "Settings"),
     TuiCommand("init", "/init", "Create or update project AGENTS.md", "System"),

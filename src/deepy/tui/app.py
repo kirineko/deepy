@@ -32,6 +32,7 @@ from deepy.config import (
     update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
+    update_config_view_mode,
     write_config,
 )
 from deepy.input_suggestions import (
@@ -39,6 +40,7 @@ from deepy.input_suggestions import (
     generate_input_suggestion,
     is_eligible_for_input_suggestion,
 )
+from deepy.llm.context import estimate_tokens_for_text
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
 from deepy.mcp import load_mcp_config
@@ -407,6 +409,7 @@ class DeepyTuiApp(App[None]):
         self._pending_question_answers: OrderedDict[str, str] = OrderedDict()
         self._new_output_available = False
         self._todo_text = ""
+        self._stream_tokens = 0
         self._local_command_sequence = 0
         self.background_tasks = BackgroundTaskManager()
         self.exit_summary_text: str | None = None
@@ -503,6 +506,7 @@ class DeepyTuiApp(App[None]):
             "compact",
             "theme",
             "model",
+            "view",
             "input-suggestion",
             "reset",
             "ps",
@@ -539,6 +543,7 @@ class DeepyTuiApp(App[None]):
         self.state = set_busy(reset_turn_buffers(self.state), True, status)
         self._assistant_block = None
         self._thinking_block = None
+        self._stream_tokens = 0
         self._tool_blocks.clear()
         self._update_status(status)
         self.run_model_turn(prompt, skill_names)
@@ -595,6 +600,9 @@ class DeepyTuiApp(App[None]):
         if name == "model":
             await self._model_command(argument.strip())
             return
+        if name == "view":
+            await self._view_command(argument.strip())
+            return
         if name == "input-suggestion":
             await self._input_suggestion_command(argument.strip())
             return
@@ -642,6 +650,7 @@ class DeepyTuiApp(App[None]):
             f"- Thinking: `{report.reasoning_mode}`",
             f"- Session: `{self.state.session_id or 'new'}`",
             f"- Theme: `{self.settings.ui.theme}`",
+            f"- View: `{self.settings.ui.view_mode}`",
             f"- Input suggestions: `{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}`",
             f"- Loaded skills: `{', '.join(self.controller.loaded_skill_names) or 'none'}`",
             f"- Sessions: `{report.session_count}`",
@@ -945,6 +954,25 @@ class DeepyTuiApp(App[None]):
 
     def _focus_prompt_input(self) -> None:
         self.query_one("#prompt-input", PromptTextArea).focus()
+
+    async def _view_command(self, argument: str) -> None:
+        argument = argument.strip().lower()
+        current = self.settings.ui.view_mode
+        if not argument or argument == "toggle":
+            selected = "full" if current == "concise" else "concise"
+        elif argument in {"concise", "full"}:
+            selected = argument
+        else:
+            await self._append_block(ErrorBlock("Usage: /view [toggle|concise|full]"))
+            return
+        if self.settings.path is None:
+            await self._append_block(ErrorBlock("Cannot persist view mode: config path is unknown."))
+            return
+        update_config_view_mode(self.settings.path, selected)
+        self.settings = load_settings(self.settings.path)
+        self.controller.settings = self.settings
+        await self._append_block(InfoBlock(_format_view_mode_confirmation(self.settings.ui.view_mode)))
+        self._update_status("View updated")
 
     async def _input_suggestion_command(self, argument: str) -> None:
         if argument:
@@ -1380,6 +1408,7 @@ class DeepyTuiApp(App[None]):
         self.state = set_busy(reset_turn_buffers(self.state), True, "Running")
         self._assistant_block = None
         self._thinking_block = None
+        self._stream_tokens = 0
         self._tool_blocks.clear()
         self._update_status("Running")
         self.run_model_turn(continuation, list(self.controller.loaded_skill_names))
@@ -1432,13 +1461,25 @@ class DeepyTuiApp(App[None]):
         except NoMatches:
             return
 
+    def _record_stream_progress(self, text: str) -> None:
+        self._stream_tokens += estimate_tokens_for_text(text)
+
+    def _stream_status_text(self) -> str:
+        return (
+            f"↓ {_format_stream_token_count_short(self._stream_tokens)} tokens"
+            if self._stream_tokens > 0
+            else "Running"
+        )
+
     async def _handle_stream_event(self, event: DeepyStreamEvent) -> None:
         if event.kind == "text_delta" and event.text:
+            self._record_stream_progress(event.text)
             self.state = add_assistant_delta(self.state, event.text)
             if self._assistant_block is not None:
                 anchored = self._transcript_is_anchored_now()
                 self._assistant_block.update_markdown(self.state.assistant_buffer)
                 self._scroll_transcript_to_end(force=anchored)
+            self._update_status(self._stream_status_text())
             return
         if event.kind == "message" and event.text:
             if not self.state.assistant_buffer:
@@ -1448,16 +1489,22 @@ class DeepyTuiApp(App[None]):
                     self._assistant_block.update_markdown(self.state.assistant_buffer)
                     self._scroll_transcript_to_end(force=anchored)
             return
+        if event.kind == "raw_response" and event.text:
+            self._record_stream_progress(event.text)
+            self._update_status(self._stream_status_text())
+            return
         if event.kind == "reasoning_delta" and event.text:
+            self._record_stream_progress(event.text)
             self.state = add_reasoning_delta(self.state, event.text)
-            if self._thinking_block is None:
-                self._thinking_block = ThinkingBlock(event.text)
-                await self._append_block(self._thinking_block)
-            else:
-                anchored = self._transcript_is_anchored_now()
-                self._thinking_block.update_text(self._thinking_block.body + event.text)
-                self._scroll_transcript_to_end(force=anchored)
-            self._update_status("Thinking")
+            if self.settings.ui.view_mode == "full":
+                if self._thinking_block is None:
+                    self._thinking_block = ThinkingBlock(event.text)
+                    await self._append_block(self._thinking_block)
+                else:
+                    anchored = self._transcript_is_anchored_now()
+                    self._thinking_block.update_text(self._thinking_block.body + event.text)
+                    self._scroll_transcript_to_end(force=anchored)
+            self._update_status(self._stream_status_text())
             return
         if event.kind == "tool_call":
             self._thinking_block = None
@@ -1558,7 +1605,7 @@ class DeepyTuiApp(App[None]):
 
         if item_type == "reasoning":
             text = _reasoning_text(item)
-            if text.strip():
+            if text.strip() and self.settings.ui.view_mode == "full":
                 await self._append_block(ThinkingBlock(text))
             return
 
@@ -2022,6 +2069,11 @@ def _model_usage_text() -> str:
     )
 
 
+def _format_view_mode_confirmation(view_mode: str) -> str:
+    reasoning_state = "reasoning shown" if view_mode == "full" else "reasoning hidden"
+    return f"View: {view_mode} · {reasoning_state}"
+
+
 def _reset_config_validation_error(result: ResetConfigResult) -> str:
     if not result.provider:
         return "Provider is required."
@@ -2198,10 +2250,24 @@ def _format_tui_context_window_status(
 
 
 def _format_token_count_short(value: int) -> str:
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if value < 1_000:
+        return str(value)
+    if value < 1_000_000:
+        return f"{round(value / 1_000):g}K"
+    scaled = value / 1_000_000
+    if scaled >= 10:
+        return f"{round(scaled):g}M"
+    rounded = round(scaled, 1)
+    return f"{rounded:g}M"
+
+
+def _format_stream_token_count_short(value: int) -> str:
     if value >= 1_000:
-        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+        precision = 1 if value < 100_000 else 0
+        formatted = f"{value / 1_000:.{precision}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return f"{formatted}K"
     return str(value)
 
 

@@ -326,6 +326,15 @@ def _mutation_error_metadata(
     return metadata
 
 
+def _update_noop_metadata(edit: UpdateEdit, target: Path) -> dict[str, object]:
+    return {
+        "index": edit.index,
+        "path": str(target),
+        "error": "Update would not change file content.",
+        **_mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
+    }
+
+
 def _resolve_read_target(cwd: Path, path: str) -> tuple[Path | None, str | None]:
     candidate = Path(path).expanduser()
     target = _resolve_in_cwd(cwd, path)
@@ -407,6 +416,7 @@ class PlannedUpdateFile:
     policy: MutationPolicyDecision
     edit_indices: tuple[int, ...]
     occurrences: int
+    skipped_edits: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1484,6 +1494,14 @@ class ToolRuntime:
                 unsupported_reason,
                 metadata=_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
             ).to_json()
+        snapshot_status = self.file_state.snapshot_status(target)
+        if target.exists() and snapshot_status in {"missing", "partial"}:
+            text_metadata = _read_text_metadata(target)
+            self.file_state.mark_read(
+                target,
+                encoding=text_metadata.encoding,
+                line_endings=text_metadata.line_endings,
+            )
         ok, error = self.file_state.check_writable(target, require_read=True)
         if not ok:
             metadata = _stale_write_recovery_metadata(target, error)
@@ -1590,6 +1608,7 @@ class ToolRuntime:
 
         by_path: dict[Path, list[UpdateEdit]] = {}
         failures: list[dict[str, object]] = []
+        skipped_edits: list[dict[str, object]] = []
         for edit in edits:
             target, resolve_error, resolve_metadata = _resolve_mutation_target(self.cwd, edit.path)
             if resolve_error is not None or target is None:
@@ -1606,8 +1625,9 @@ class ToolRuntime:
 
         planned: list[PlannedUpdateFile] = []
         for target, file_edits in by_path.items():
-            plan, plan_failures = self._plan_update_file(target, file_edits)
+            plan, plan_failures, plan_skipped = self._plan_update_file(target, file_edits)
             failures.extend(plan_failures)
+            skipped_edits.extend(plan_skipped)
             if plan is not None:
                 planned.append(plan)
 
@@ -1621,7 +1641,29 @@ class ToolRuntime:
                     preflightFailed=True,
                     editCount=len(edits),
                     fileCount=len(by_path),
+                    skippedEdits=skipped_edits,
+                    skippedEditCount=len(skipped_edits),
                 ),
+            ).to_json()
+
+        if not planned:
+            return ToolResult.ok_result(
+                "Update",
+                f"Update no-op; skipped {len(skipped_edits)} edit(s).",
+                metadata={
+                    "path": "",
+                    "changedFiles": [],
+                    "editCount": len(edits),
+                    "appliedEditCount": 0,
+                    "skippedEditCount": len(skipped_edits),
+                    "skippedEdits": skipped_edits,
+                    "changedFileCount": 0,
+                    "operations": [],
+                    "policyDecision": "allow",
+                    "diff": "",
+                    "diff_preview": "",
+                    "noOp": True,
+                },
             ).to_json()
 
         committed: list[dict[str, object]] = []
@@ -1650,6 +1692,9 @@ class ToolRuntime:
                         "path": str(plan.target),
                         "editIndices": list(plan.edit_indices),
                         "actualOccurrences": plan.occurrences,
+                        "skippedEditIndices": [
+                            skipped.get("index") for skipped in plan.skipped_edits
+                        ],
                         "encoding": plan.encoding,
                         "line_endings": plan.line_endings,
                         **atomic_result.metadata(),
@@ -1689,6 +1734,9 @@ class ToolRuntime:
                 "path": _patch_changed_path_summary(unique_changed_files),
                 "changedFiles": unique_changed_files,
                 "editCount": len(edits),
+                "appliedEditCount": sum(len(plan.edit_indices) for plan in planned),
+                "skippedEditCount": len(skipped_edits),
+                "skippedEdits": skipped_edits,
                 "changedFileCount": len(unique_changed_files),
                 "operations": committed,
                 "policyDecision": "allow",
@@ -1709,8 +1757,9 @@ class ToolRuntime:
         self,
         target: Path,
         edits: list[UpdateEdit],
-    ) -> tuple[PlannedUpdateFile | None, list[dict[str, object]]]:
+    ) -> tuple[PlannedUpdateFile | None, list[dict[str, object]], list[dict[str, object]]]:
         failures: list[dict[str, object]] = []
+        skipped_edits: list[dict[str, object]] = []
         if not target.exists():
             return None, [
                 {
@@ -1720,7 +1769,7 @@ class ToolRuntime:
                     **_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
                 }
                 for edit in edits
-            ]
+            ], []
         policy = _mutation_policy_decision(self.cwd, target)
         policy_error = _policy_error_result("Update", policy)
         if policy_error is not None:
@@ -1733,7 +1782,7 @@ class ToolRuntime:
                     **(parsed.get("metadata", {}) if isinstance(parsed.get("metadata"), dict) else {}),
                 }
                 for edit in edits
-            ]
+            ], []
         unsupported_reason = _unsupported_text_mutation_reason(target)
         if unsupported_reason is not None:
             return None, [
@@ -1744,7 +1793,7 @@ class ToolRuntime:
                     **_mutation_error_metadata(MutationErrorCode.UNSUPPORTED_TARGET, path=target),
                 }
                 for edit in edits
-            ]
+            ], []
         snapshot_status = self.file_state.snapshot_status(target)
         if snapshot_status in {"missing", "partial"}:
             text_metadata = _read_text_metadata(target)
@@ -1767,23 +1816,17 @@ class ToolRuntime:
                     ),
                 }
                 for edit in edits
-            ]
+            ], []
         metadata = _read_text_metadata(target)
         original = metadata.content
         staged = original
         total_occurrences = 0
+        applied_indices: list[int] = []
         for edit in edits:
             normalized_old = _normalize_line_endings(edit.old, metadata.line_endings)
             normalized_new = _normalize_line_endings(edit.new, metadata.line_endings)
             if normalized_old == normalized_new:
-                failures.append(
-                    {
-                        "index": edit.index,
-                        "path": str(target),
-                        "error": "Update would not change file content.",
-                        **_mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
-                    }
-                )
+                skipped_edits.append(_update_noop_metadata(edit, target))
                 continue
             count = staged.count(normalized_old)
             if count == 0:
@@ -1835,17 +1878,16 @@ class ToolRuntime:
             replacements = count if edit.replace_all else 1
             staged = staged.replace(normalized_old, normalized_new, replacements)
             total_occurrences += replacements
+            applied_indices.append(edit.index)
         if failures:
-            return None, failures
+            return None, failures, skipped_edits
         if staged == original:
-            return None, [
-                {
-                    "index": edits[0].index,
-                    "path": str(target),
-                    "error": "Update would not change file content.",
-                    **_mutation_error_metadata(MutationErrorCode.NO_OP, path=target),
-                }
+            applied_noops = [
+                _update_noop_metadata(edit, target)
+                for edit in edits
+                if edit.index in set(applied_indices)
             ]
+            return None, [], [*skipped_edits, *applied_noops]
         plan = PlannedUpdateFile(
             target=target,
             old_content=original,
@@ -1853,10 +1895,11 @@ class ToolRuntime:
             encoding=metadata.encoding,
             line_endings=metadata.line_endings,
             policy=policy,
-            edit_indices=tuple(edit.index for edit in edits),
+            edit_indices=tuple(applied_indices),
             occurrences=total_occurrences,
+            skipped_edits=tuple(skipped_edits),
         )
-        return plan, []
+        return plan, [], skipped_edits
 
     def shell(
         self,

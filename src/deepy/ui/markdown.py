@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rich.cells import cell_len
+from rich.style import StyleType
+from rich.syntax import Syntax
 from rich.text import Text
 
 from deepy.ui.styles import DARK_PALETTE, UiPalette
@@ -29,15 +31,54 @@ def render_markdown(text: str, *, palette: UiPalette | None = None, width: int |
 
     for segment in split_by_fences(text):
         if segment.kind == "code":
-            if segment.lang:
-                output.append(f"code {segment.lang}\n", style=palette.markdown_code_lang)
-            for index, line in enumerate(segment.body.splitlines() or [""]):
-                if index:
-                    output.append("\n")
-                output.append(f"  {line}", style=palette.markdown_code_block)
+            if output.plain and not output.plain.endswith("\n"):
+                output.append("\n")
+            output.append(_render_code_block(segment, palette=palette, width=width))
         else:
             output.append(render_inline_block(segment.body, palette=palette, width=width))
     return output
+
+
+def _render_code_block(
+    segment: MarkdownSegment,
+    *,
+    palette: UiPalette,
+    width: int,
+) -> Text:
+    highlighted = Syntax(
+        "",
+        segment.lang or "text",
+        theme=_syntax_theme_for_palette(palette),
+        background_color=_syntax_background_for_palette(palette),
+    ).highlight(segment.body)
+    lines = highlighted.split("\n", allow_blank=False)
+    if not lines:
+        lines = [Text("")]
+
+    rendered = Text()
+    for index, line in enumerate(lines):
+        if index:
+            rendered.append("\n")
+        rendered.append_text(_code_block_line(line, style=highlighted.style, width=width))
+    return rendered
+
+
+def _code_block_line(line: Text, *, style: StyleType, width: int) -> Text:
+    prefix = "  "
+    rendered = Text(prefix, style=style)
+    rendered.append_text(line)
+    padding = " " * max(0, max(cell_len(prefix), width) - cell_len(rendered.plain))
+    if padding:
+        rendered.append(padding, style=style)
+    return rendered
+
+
+def _syntax_theme_for_palette(palette: UiPalette) -> str:
+    return "default" if palette.name == "light" else "monokai"
+
+
+def _syntax_background_for_palette(palette: UiPalette) -> str:
+    return "#e5e7eb" if palette.name == "light" else "#1f2430"
 
 
 def split_by_fences(text: str) -> list[MarkdownSegment]:
@@ -55,7 +96,7 @@ def split_by_fences(text: str) -> list[MarkdownSegment]:
             buffer = []
 
     for line in lines:
-        fence_match = re.match(r"^\s*```(\w*)\s*$", line)
+        fence_match = re.match(r"^\s*```([A-Za-z0-9_+.-]*)\s*$", line)
         if fence_match:
             if not in_fence:
                 flush_text()

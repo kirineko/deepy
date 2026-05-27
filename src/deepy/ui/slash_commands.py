@@ -34,6 +34,7 @@ BUILTIN_SLASH_COMMANDS = (
     SlashCommandItem("status", "status", "/status", "Show status, usage, and DeepSeek balance"),
     SlashCommandItem("stop", "stop", "/stop", "Choose background tasks to stop"),
     SlashCommandItem("theme", "theme", "/theme", "Show or change UI theme"),
+    SlashCommandItem("view", "view", "/view", "Hide or show reasoning transcript text"),
 )
 SUBAGENT_SLASH_COMMANDS = tuple(
     SlashCommandItem(
@@ -52,11 +53,12 @@ COMMON_WORKFLOW_COMMAND_ORDER = {
     "resume": 2,
     "sessions": 3,
     "model": 4,
-    "skills": 5,
-    "status": 6,
-    "compact": 7,
-    "mcp": 8,
-    "exit": 9,
+    "view": 5,
+    "skills": 6,
+    "status": 7,
+    "compact": 8,
+    "mcp": 9,
+    "exit": 10,
 }
 LOW_FREQUENCY_COMMAND_ORDER = {
     "init": 0,

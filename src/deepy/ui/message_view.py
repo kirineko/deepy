@@ -129,6 +129,8 @@ def parse_tool_output(output: str) -> ToolOutputView:
         detail = _string_or_none(metadata_dict.get("taskId")) or _first_nonempty_line(text_output)
     elif status == "retryable":
         detail = _string_or_none(metadata_dict.get("recovery")) or error or ""
+    elif ok_value is False:
+        detail = format_tool_failure_detail(metadata_dict) or error or ""
     else:
         detail = (error or path or _first_nonempty_line(text_output) or "").strip()
     summary = f"{format_tool_display_label(name)} {status}" + (
@@ -584,14 +586,16 @@ def render_tool_output(
 ) -> Group:
     palette = palette or DARK_PALETTE
     view = parse_tool_output(output)
-    parts: list[Any] = [_render_tool_summary(view, palette)]
+    diff = render_tool_diff_preview(output, palette=palette, width=width)
+    parts: list[Any] = []
+    if not should_omit_success_summary(view, diff):
+        parts.append(_render_tool_summary(view, palette))
     todo_board = render_todo_board(output, palette=palette, width=width)
     if todo_board:
         parts.append(todo_board)
     shell_output = render_shell_output_block(output, palette=palette)
     if shell_output:
         parts.append(shell_output)
-    diff = render_tool_diff_preview(output, palette=palette, width=width)
     if diff:
         parts.append(diff)
     return Group(*parts)
@@ -687,6 +691,10 @@ def _tool_diff_text(view: ToolOutputView) -> str | None:
     return view.diff_preview or view.diff
 
 
+def should_omit_success_summary(view: ToolOutputView, diff: Any | None) -> bool:
+    return view.ok is True and view.name.lower() in DIFF_PREVIEW_TOOLS and diff is not None
+
+
 def _render_tool_summary(view: ToolOutputView, palette: UiPalette) -> Text:
     style = status_style(view.ok, palette)
     label = format_tool_display_label(view.name)
@@ -775,6 +783,10 @@ def _line_number_text(value: int | None) -> str:
 def _tool_progress_detail(view: ToolOutputView) -> str:
     if view.status == "retryable" and view.metadata:
         return _truncate(_string_or_none(view.metadata.get("recovery")) or view.error or "")
+    if view.ok is False and view.metadata:
+        detail = format_tool_failure_detail(view.metadata)
+        if detail:
+            return _truncate(detail)
     if view.error:
         return _truncate(view.error)
     if view.metadata and view.metadata.get("kind") == "todo_list":
@@ -789,6 +801,23 @@ def _tool_progress_detail(view: ToolOutputView) -> str:
     if view.await_user_response:
         return _truncate(_first_nonempty_line(view.output) or "")
     return ""
+
+
+def format_tool_failure_detail(metadata: dict[str, Any]) -> str:
+    failures = metadata.get("failures")
+    if not isinstance(failures, list) or not failures:
+        return ""
+    first = failures[0]
+    if not isinstance(first, dict):
+        return ""
+    error = _string_or_none(first.get("error")) or ""
+    code = _string_or_none(first.get("error_code")) or "error"
+    index = first.get("index")
+    if isinstance(index, int):
+        prefix = f"edit #{index + 1} {code}"
+    else:
+        prefix = code
+    return f"{prefix}: {error}" if error else prefix
 
 
 def _message_content_text(content: Any) -> str:

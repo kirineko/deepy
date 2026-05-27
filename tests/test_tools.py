@@ -482,9 +482,9 @@ def test_read_limits_large_files_by_default(tmp_path):
     assert payload["metadata"]["trackedForWrite"] is False
     assert f"{DEFAULT_LINE_LIMIT + 1}: line" not in payload["output"]
 
-    denied = decode(write_v3(runtime, "large.txt", "changed"))
-    assert denied["ok"] is False
-    assert "read before" in denied["error"]
+    replaced = decode(write_v3(runtime, "large.txt", "changed"))
+    assert replaced["ok"] is True
+    assert target.read_text(encoding="utf-8") == "changed"
 
 
 def test_read_truncates_long_lines(tmp_path):
@@ -579,7 +579,7 @@ def test_edit_text_preserves_stale_protection_after_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "changed\n"
 
 
-def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
+def test_write_allows_new_file_and_auto_reads_existing_file(tmp_path):
     existing = tmp_path / "existing.txt"
     existing.write_text("old", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -589,9 +589,9 @@ def test_write_allows_new_file_but_existing_file_requires_read(tmp_path):
     assert "+hello" in created["metadata"]["diff"]
     assert created["metadata"]["diff_preview"] == created["metadata"]["diff"]
 
-    denied = decode(write_v3(runtime, "existing.txt", "changed"))
-    assert denied["ok"] is False
-    assert "read before" in denied["error"]
+    replaced = decode(write_v3(runtime, "existing.txt", "changed"))
+    assert replaced["ok"] is True
+    assert existing.read_text(encoding="utf-8") == "changed"
 
 
 def test_write_file_creates_new_files_and_edit_text_edits_existing_files(tmp_path):
@@ -658,7 +658,7 @@ def test_update_enforces_expected_count(tmp_path):
     assert target.read_text(encoding="utf-8") == "new\nnew\n"
 
 
-def test_write_file_requires_overwrite_intent_and_snapshot_for_existing_file(tmp_path):
+def test_write_file_requires_overwrite_intent_for_existing_file(tmp_path):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -668,11 +668,10 @@ def test_write_file_requires_overwrite_intent_and_snapshot_for_existing_file(tmp
     assert created["name"] == "Write"
     assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello\n"
 
-    denied = decode(write_v3(runtime, "existing.txt", "changed\n"))
+    denied = decode(write_v3(runtime, "existing.txt", "changed\n", overwrite=False))
     assert denied["ok"] is False
-    assert denied["metadata"]["error_code"] == "stale_snapshot"
+    assert denied["metadata"]["error_code"] == "invalid_arguments"
 
-    decode(read_v3(runtime, "existing.txt"))
     replaced = decode(
         write_v3(runtime, 
             "existing.txt",
@@ -718,11 +717,6 @@ def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path
     target.write_text("old\r\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
 
-    denied = decode(runtime.write_v3("existing.txt", "changed\n", overwrite=True))
-    assert denied["ok"] is False
-    assert denied["metadata"]["error_code"] == "stale_snapshot"
-
-    decode(runtime.read({"path": "existing.txt"}))
     replaced = decode(runtime.write_v3("existing.txt", "changed\n", overwrite=True))
 
     assert replaced["ok"] is True
@@ -730,6 +724,22 @@ def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path
     assert replaced["metadata"]["line_endings"] == "CRLF"
     assert replaced["metadata"]["trackedForWrite"] is True
     assert target.read_bytes() == b"changed\r\n"
+
+
+def test_write_v3_rejects_stale_existing_file_after_read(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    decode(runtime.read({"path": "existing.txt"}))
+    target.write_text("external\n", encoding="utf-8")
+
+    denied = decode(runtime.write_v3("existing.txt", "changed\n", overwrite=True))
+
+    assert denied["ok"] is False
+    assert denied["metadata"]["error_code"] == "stale_snapshot"
+    assert "read" in denied["metadata"]["recovery"].lower()
+    assert target.read_text(encoding="utf-8") == "external\n"
 
 
 def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path):
@@ -765,6 +775,57 @@ def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path):
     assert str(second) in payload["metadata"]["changedFiles"]
     assert first.read_text(encoding="utf-8") == "final\nbeta\n"
     assert second.read_text(encoding="utf-8") == "two\ntwo\n"
+
+
+def test_update_v3_skips_noop_edit_in_mixed_batch(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.update(
+            {
+                "edits": [
+                    {"path": "a.txt", "old": "alpha", "new": "ALPHA"},
+                    {"path": "a.txt", "old": "beta", "new": "beta"},
+                ]
+            }
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["editCount"] == 2
+    assert payload["metadata"]["appliedEditCount"] == 1
+    assert payload["metadata"]["skippedEditCount"] == 1
+    assert payload["metadata"]["skippedEdits"][0]["index"] == 1
+    assert payload["metadata"]["skippedEdits"][0]["error_code"] == "no_op"
+    assert payload["metadata"]["operations"][0]["editIndices"] == [0]
+    assert payload["metadata"]["operations"][0]["skippedEditIndices"] == [1]
+    assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
+
+
+def test_update_v3_all_noop_returns_success_without_writing(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("alpha\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.update(
+            {
+                "edits": [
+                    {"path": "a.txt", "old": "alpha", "new": "alpha"},
+                ]
+            }
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["metadata"]["noOp"] is True
+    assert payload["metadata"]["changedFileCount"] == 0
+    assert payload["metadata"]["appliedEditCount"] == 0
+    assert payload["metadata"]["skippedEditCount"] == 1
+    assert payload["metadata"]["skippedEdits"][0]["error_code"] == "no_op"
+    assert target.read_text(encoding="utf-8") == "alpha\n"
 
 
 def test_update_v3_rejects_expected_count_mismatch_without_writing(tmp_path):
@@ -819,7 +880,32 @@ def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path):
     assert target.read_text(encoding="utf-8") == "old\nold\n"
 
 
-def test_edit_text_rejects_noop_with_structured_error(tmp_path):
+def test_update_v3_non_noop_failure_still_rolls_back_with_skipped_noop_metadata(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    payload = decode(
+        runtime.update(
+            {
+                "edits": [
+                    {"path": "existing.txt", "old": "alpha", "new": "ALPHA"},
+                    {"path": "existing.txt", "old": "beta", "new": "beta"},
+                    {"path": "existing.txt", "old": "missing", "new": "new"},
+                ]
+            }
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["metadata"]["preflightFailed"] is True
+    assert payload["metadata"]["failures"][0]["error_code"] == "match_not_found"
+    assert payload["metadata"]["skippedEditCount"] == 1
+    assert payload["metadata"]["skippedEdits"][0]["error_code"] == "no_op"
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_edit_text_noop_returns_success_with_structured_metadata(tmp_path):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -827,8 +913,9 @@ def test_edit_text_rejects_noop_with_structured_error(tmp_path):
     decode(read_v3(runtime, "existing.txt"))
     payload = decode(update_v3(runtime, "existing.txt", "old", "old"))
 
-    assert payload["ok"] is False
-    assert payload["metadata"]["failures"][0]["error_code"] == "no_op"
+    assert payload["ok"] is True
+    assert payload["metadata"]["noOp"] is True
+    assert payload["metadata"]["skippedEdits"][0]["error_code"] == "no_op"
 
 
 def test_mutation_rejects_workspace_escape_and_symlink_escape(tmp_path):

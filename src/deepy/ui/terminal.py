@@ -41,6 +41,7 @@ from deepy.config import (
     update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
+    update_config_view_mode,
     write_config,
 )
 from deepy.input_suggestions import (
@@ -50,6 +51,7 @@ from deepy.input_suggestions import (
     is_eligible_for_input_suggestion,
 )
 from deepy.llm.cache_context import format_cache_hit_rate, format_cache_usage
+from deepy.llm.context import estimate_tokens_for_text
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
@@ -96,6 +98,7 @@ from deepy.ui.local_command import (
     shell_tool_result_json,
 )
 from deepy.ui.message_view import (
+    format_tool_display_name,
     format_tool_display_label,
     format_tool_call_summary,
     format_tool_progress_summary,
@@ -103,6 +106,7 @@ from deepy.ui.message_view import (
     render_shell_output_block,
     render_todo_board,
     render_tool_diff_preview,
+    should_omit_success_summary,
     tool_status_style,
 )
 from deepy.ui.markdown import render_markdown
@@ -168,6 +172,7 @@ InputFunc = Callable[[str], str]
 VersionUpdateChecker = Callable[[str], VersionUpdate | None]
 MAX_CLARIFICATION_ROUNDS_PER_TURN = 5
 RUNTIME_STATUS_REFRESH_SECONDS = 1.0
+RUNTIME_STREAM_STATUS_UPDATE_SECONDS = 0.2
 
 
 class _AsyncRuntimeWorker:
@@ -585,14 +590,14 @@ def run_interactive(
                 )
                 if next_session == "__exit__":
                     return 0
-                if slash.name in {"theme", "reset", "model"}:
+                if slash.name in {"theme", "reset", "model", "view"}:
                     settings = load_theme_settings(settings)
                     input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
                     palette = resolve_ui_palette(settings.ui.theme)
                 if slash.name == "input-suggestion":
                     settings = load_settings(settings.path) if settings.path is not None else settings
                     input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
-                if slash.name in {"skills", "theme", "reset", "model", "input-suggestion"}:
+                if slash.name in {"skills", "theme", "reset", "model", "input-suggestion", "view"}:
                     prompt_session = _create_interactive_prompt_session(
                         root,
                         palette,
@@ -862,6 +867,7 @@ def _run_once_with_status(
     kwargs["should_interrupt"] = should_interrupt
 
     active_palette = palette if isinstance(palette, UiPalette) else DARK_PALETTE
+    view_mode = settings.ui.view_mode if isinstance(settings, Settings) else "concise"
     with _status_display(
         console,
         _working_status_text(started_at, palette=active_palette, footer=footer),
@@ -875,6 +881,7 @@ def _run_once_with_status(
             palette=active_palette,
             footer=footer,
             output_lock=getattr(status, "output_lock", None),
+            view_mode=view_mode,
         )
         stop_status_refresh = threading.Event()
         status_thread: threading.Thread | None = None
@@ -1212,6 +1219,7 @@ class TerminalStreamRenderer:
         palette: UiPalette | None = None,
         footer: StatusFooter | None = None,
         output_lock: threading.RLock | None = None,
+        view_mode: str = "concise",
     ) -> None:
         self.console = console
         self.project_root = project_root
@@ -1226,11 +1234,16 @@ class TerminalStreamRenderer:
         self.reasoning_started = False
         self.reasoning_buffer = ""
         self.reasoning_updated_at = 0.0
+        self.view_mode = view_mode if view_mode in {"concise", "full"} else "concise"
+        self.stream_tokens = 0
+        self.stream_status_updated_at = 0.0
+        self.activity_state = ""
         self.output_lock = output_lock
 
     def __call__(self, event: DeepyStreamEvent) -> None:
         if self.output_lock is None:
-            if _stream_event_writes_terminal(event):
+            self._record_stream_progress(event)
+            if self._stream_event_writes_terminal(event):
                 self._clear_status_for_output()
             self._update_status_for_silent_generation(event)
             _print_stream_event(
@@ -1243,7 +1256,8 @@ class TerminalStreamRenderer:
             )
             return
         with self.output_lock:
-            if _stream_event_writes_terminal(event):
+            self._record_stream_progress(event)
+            if self._stream_event_writes_terminal(event):
                 self._clear_status_for_output()
             self._update_status_for_silent_generation(event)
             _print_stream_event(
@@ -1258,6 +1272,11 @@ class TerminalStreamRenderer:
     def add_reasoning(self, text: str) -> None:
         if not text:
             return
+        self.activity_state = "Thinking"
+        if self.view_mode == "concise":
+            if self.status is not None:
+                self.update_status(self._runtime_status_detail())
+            return
         if not self.reasoning_started:
             self.console.print(
                 Text.assemble(
@@ -1269,17 +1288,27 @@ class TerminalStreamRenderer:
         self.reasoning_buffer = "printed"
         self.reasoning_updated_at = time.monotonic()
         self.console.print(Text(text, style=self.palette.muted), end="")
-        if self.status is not None and self.status_detail != "thinking":
-            self.update_status("thinking")
+        if self.status is not None:
+            self.update_status(self._runtime_status_detail())
 
-    def set_tool_status(self, summary: str) -> None:
-        if self.status is not None and summary:
-            self.update_status(f"tool {summary}")
+    def set_tool_status(self, tool_name: str) -> None:
+        self.activity_state = _runtime_tool_activity_name(tool_name)
+        if self.status is not None and self.activity_state:
+            self.update_status(self._runtime_status_detail())
 
     def update_status(self, detail: str | None = None) -> None:
         if detail is not None:
             self.status_detail = detail
         if self.status is not None and not self._status_output_is_blocked():
+            if (
+                self._status_detail_has_stream_tokens()
+                and getattr(self.status, "inline_output_flow", False)
+                and getattr(self.status, "active", False)
+            ):
+                now = time.monotonic()
+                if now - self.stream_status_updated_at < RUNTIME_STREAM_STATUS_UPDATE_SECONDS:
+                    return
+                self.stream_status_updated_at = now
             self.status.update(
                 _working_status_text(
                     self.status_started_at,
@@ -1313,11 +1342,37 @@ class TerminalStreamRenderer:
         detail = _silent_generation_status_detail(event)
         if self.status is None or detail is None:
             return
+        if detail == "":
+            if event.kind in {"text_delta", "message"}:
+                self.activity_state = "Responding"
+            detail = self._runtime_status_detail()
         if self.reasoning_buffer:
             self._flush_unlocked()
         if self.status_detail == detail and getattr(self.status, "active", False):
             return
         self.update_status(detail)
+
+    def _record_stream_progress(self, event: DeepyStreamEvent) -> None:
+        if event.kind not in {"reasoning_delta", "text_delta", "raw_response"} or not event.text:
+            return
+        self.stream_tokens += estimate_tokens_for_text(event.text)
+
+    def _stream_status_detail(self) -> str | None:
+        if self.stream_tokens <= 0:
+            return None
+        return f"↓ {_format_stream_token_count_short(self.stream_tokens)} tokens"
+
+    def _runtime_status_detail(self) -> str:
+        parts: list[str] = []
+        stream_detail = self._stream_status_detail()
+        if stream_detail:
+            parts.append(stream_detail)
+        if self.activity_state:
+            parts.append(self.activity_state)
+        return _STATUS_SEPARATOR.join(parts)
+
+    def _status_detail_has_stream_tokens(self) -> bool:
+        return self.status_detail == "↓ " or self.status_detail.startswith("↓ ")
 
     def flush(self) -> None:
         if self.output_lock is not None:
@@ -1331,6 +1386,11 @@ class TerminalStreamRenderer:
             self.console.print()
         self.reasoning_started = False
         self.reasoning_buffer = ""
+
+    def _stream_event_writes_terminal(self, event: DeepyStreamEvent) -> bool:
+        if event.kind == "reasoning_delta" and self.view_mode == "concise":
+            return False
+        return _stream_event_writes_terminal(event)
 
 def _handle_slash_command(
     command: SlashCommand,
@@ -1365,6 +1425,7 @@ def _handle_slash_command(
         console.print("/ps        Show background tasks")
         console.print("/stop      Choose background tasks to stop")
         console.print("/model      Select model and thinking strength")
+        console.print("/view \\[toggle|concise|full] Hide or show reasoning transcript text")
         console.print("/input-suggestion Toggle input suggestions")
         console.print("/status     Show status, usage, and DeepSeek balance")
         console.print("/theme      Show or change UI theme")
@@ -1385,7 +1446,7 @@ def _handle_slash_command(
         if command.argument:
             selected = resolve_session_selection(entries, command.argument)
             session_id = selected.id if selected is not None else command.argument
-            _resume_session(console, project_root, session_id, palette=palette)
+            _resume_session(console, project_root, session_id, palette=palette, settings=settings)
             return session_id
         if not entries:
             console.print("No sessions found.")
@@ -1406,7 +1467,7 @@ def _handle_slash_command(
             style = palette.error if invalid_selection else palette.muted
             console.print(f"[{style}]{message}[/]")
             return current_session_id
-        _resume_session(console, project_root, selected.id, palette=palette)
+        _resume_session(console, project_root, selected.id, palette=palette, settings=settings)
         return selected.id
     if command.name == "sessions":
         entries = list_session_entries(project_root)
@@ -1478,6 +1539,8 @@ def _handle_slash_command(
             palette,
             input_func=input_func,
         )
+    if command.name == "view":
+        return _handle_view_command(command, console, current_session_id, settings, palette)
     if command.name == "input-suggestion":
         return _handle_input_suggestion_command(command, console, current_session_id, settings, palette)
     if command.name == "theme":
@@ -2001,6 +2064,35 @@ def _handle_input_suggestion_command(
     return current_session_id
 
 
+def _handle_view_command(
+    command: SlashCommand,
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+) -> str | None:
+    argument = command.argument.strip().lower()
+    current = settings.ui.view_mode
+    if not argument or argument == "toggle":
+        selected = "full" if current == "concise" else "concise"
+    elif argument in {"concise", "full"}:
+        selected = argument
+    else:
+        console.print(f"[{palette.error}]Usage:[/] /view \\[toggle|concise|full]")
+        return current_session_id
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot persist view mode: config path is unknown.[/]")
+        return current_session_id
+    update_config_view_mode(settings.path, selected)
+    console.print(_format_view_mode_confirmation(selected))
+    return current_session_id
+
+
+def _format_view_mode_confirmation(view_mode: str) -> str:
+    reasoning_state = "reasoning shown" if view_mode == "full" else "reasoning hidden"
+    return f"View: {view_mode} · {reasoning_state}"
+
+
 def _handle_interactive_model_selection(
     console: Console,
     current_session_id: str | None,
@@ -2416,10 +2508,11 @@ def _resume_session(
     session_id: str,
     *,
     palette: UiPalette | None = None,
+    settings: Settings | None = None,
 ) -> None:
     palette = palette or DARK_PALETTE
     console.print(Text.assemble(("Resuming session ", palette.muted), (session_id, palette.info)))
-    _print_session_history(console, project_root, session_id, palette=palette)
+    _print_session_history(console, project_root, session_id, palette=palette, settings=settings)
 
 
 def _build_resume_session_previews(
@@ -2447,6 +2540,7 @@ def _print_session_history(
     session_id: str,
     *,
     palette: UiPalette | None = None,
+    settings: Settings | None = None,
 ) -> None:
     palette = palette or DARK_PALETTE
     items = _load_session_items(project_root, session_id)
@@ -2455,7 +2549,12 @@ def _print_session_history(
         return
 
     console.print(Text("History", style=f"bold {palette.muted}"))
-    renderer = TerminalStreamRenderer(console, project_root=str(project_root), palette=palette)
+    renderer = TerminalStreamRenderer(
+        console,
+        project_root=str(project_root),
+        palette=palette,
+        view_mode=settings.ui.view_mode if settings is not None else "concise",
+    )
     for item in items:
         _print_history_item(console, item, renderer, palette=palette)
     renderer.flush()
@@ -2976,6 +3075,16 @@ def _format_token_count_short(value: int) -> str:
     return f"{rounded:g}M"
 
 
+def _format_stream_token_count_short(value: int) -> str:
+    if value >= 1_000:
+        precision = 1 if value < 100_000 else 0
+        formatted = f"{value / 1_000:.{precision}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return f"{formatted}K"
+    return str(value)
+
+
 def _format_turn_usage_line(usage: TokenUsage) -> str:
     prefix = f"requests {usage.requests:,} · " if usage.requests > 0 else ""
     return f"{prefix}{format_usage_line(usage)}"
@@ -3269,6 +3378,7 @@ def _working_status_text(
             detail=detail or "status working",
             spinner=_runtime_spinner_frame(started_at),
             palette=palette,
+            detail_before_interrupt=True,
         )
     text = Text.assemble(
         ("Working ", f"bold {palette.muted}"),
@@ -3314,6 +3424,7 @@ def _runtime_status_text(
     detail: str,
     spinner: str = "",
     palette: UiPalette,
+    detail_before_interrupt: bool = False,
 ) -> Text:
     text = Text()
     if spinner:
@@ -3321,11 +3432,17 @@ def _runtime_status_text(
         text.append(" ", style=palette.toolbar_separator)
     text.append("time ", style=palette.toolbar_metadata)
     text.append(elapsed, style=palette.toolbar_identity)
-    _append_runtime_status_separator(text, palette)
-    text.append("esc to interrupt", style=palette.warning)
-    if detail:
+    if detail and (detail_before_interrupt or detail.startswith("↓ ")):
         _append_runtime_status_separator(text, palette)
         _append_runtime_detail(text, detail, palette)
+        _append_runtime_status_separator(text, palette)
+        text.append("esc to interrupt", style=palette.warning)
+    else:
+        _append_runtime_status_separator(text, palette)
+        text.append("esc to interrupt", style=palette.warning)
+        if detail:
+            _append_runtime_status_separator(text, palette)
+            _append_runtime_detail(text, detail, palette)
     return text
 
 
@@ -3345,6 +3462,12 @@ def _runtime_spinner_frame(started_at: float) -> str:
     frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     index = int(max(0.0, time.monotonic() - started_at)) % len(frames)
     return frames[index]
+
+
+def _runtime_tool_activity_name(tool_name: str) -> str:
+    if tool_name.startswith("mcp_"):
+        return "MCP"
+    return format_tool_display_name(tool_name)
 
 
 def _format_duration_ms(duration_ms: int) -> str:
@@ -3475,7 +3598,7 @@ def _print_stream_event(
             if task:
                 console.print(_subagent_input_panel(task, palette=palette, width=console.width))
         if reasoning_sink is not None:
-            reasoning_sink.set_tool_status(summary)
+            reasoning_sink.set_tool_status(tool_name)
         return
     if event.kind == "tool_output":
         if reasoning_sink is not None:
@@ -3485,7 +3608,14 @@ def _print_stream_event(
         call = pending_tool_calls.pop(call_id, None) if pending_tool_calls is not None else None
         call_summary = call.summary if call is not None else ""
         summary = format_tool_progress_summary(call_summary, event.text)
-        console.print(_status_line(summary, tool_status_style(view, palette)))
+        diff = render_tool_diff_preview(
+            event.text,
+            palette=palette,
+            width=console.width,
+            project_root=project_root,
+        )
+        if not should_omit_success_summary(view, diff):
+            console.print(_status_line(summary, tool_status_style(view, palette)))
         if _should_print_tool_output_debug(view):
             console.print(Text("Tool output JSON:", style=palette.muted))
             console.print(Text(_format_tool_output_debug(event.text), style=palette.muted))
@@ -3495,12 +3625,6 @@ def _print_stream_event(
         todo_board = render_todo_board(event.text, palette=palette, width=console.width)
         if todo_board:
             console.print(todo_board)
-        diff = render_tool_diff_preview(
-            event.text,
-            palette=palette,
-            width=console.width,
-            project_root=project_root,
-        )
         if diff:
             console.print(diff)
         return

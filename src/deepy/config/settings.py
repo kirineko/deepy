@@ -23,6 +23,7 @@ DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 30.0
 DEFAULT_MCP_CACHE_TOOLS_LIST = True
 DEFAULT_INPUT_SUGGESTIONS_ENABLED = True
+DEFAULT_UI_VIEW_MODE = "concise"
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1"
@@ -47,6 +48,7 @@ THINKING_MODES = set(DEEPSEEK_REASONING_MODES) | set(SWITCH_ONLY_THINKING_MODES)
 PROVIDERS = {"deepseek", "openrouter", "xiaomi"}
 UI_THEMES = {"dark", "light"}
 UI_THEME_OPTIONS = (("1", "dark"), ("2", "light"))
+UI_VIEW_MODES = {"concise", "full"}
 
 
 @dataclass(frozen=True)
@@ -562,6 +564,7 @@ class UiConfig:
     theme: str = DEFAULT_UI_THEME
     theme_configured: bool = False
     input_suggestions_enabled: bool = DEFAULT_INPUT_SUGGESTIONS_ENABLED
+    view_mode: str = DEFAULT_UI_VIEW_MODE
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
@@ -570,19 +573,24 @@ class UiConfig:
             raw.get("input_suggestions_enabled"),
             DEFAULT_INPUT_SUGGESTIONS_ENABLED,
         )
+        view_mode = _as_str(raw.get("view_mode"), DEFAULT_UI_VIEW_MODE)
+        if view_mode not in UI_VIEW_MODES:
+            view_mode = DEFAULT_UI_VIEW_MODE
         if isinstance(theme, str) and theme.strip() == "auto":
             return cls(
                 theme=DEFAULT_UI_THEME,
                 theme_configured=True,
                 input_suggestions_enabled=input_suggestions_enabled,
+                view_mode=view_mode,
             )
         if isinstance(theme, str) and theme.strip() in UI_THEMES:
             return cls(
                 theme=theme.strip(),
                 theme_configured=True,
                 input_suggestions_enabled=input_suggestions_enabled,
+                view_mode=view_mode,
             )
-        return cls(input_suggestions_enabled=input_suggestions_enabled)
+        return cls(input_suggestions_enabled=input_suggestions_enabled, view_mode=view_mode)
 
 
 @dataclass(frozen=True)
@@ -647,6 +655,10 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
 
 def is_valid_ui_theme(value: str) -> bool:
     return value in UI_THEMES
+
+
+def is_valid_ui_view_mode(value: str) -> bool:
+    return value in UI_VIEW_MODES
 
 
 def is_supported_deepseek_model(value: str) -> bool:
@@ -758,6 +770,7 @@ def write_config(
         "ui": {
             "theme": theme,
             "input_suggestions_enabled": DEFAULT_INPUT_SUGGESTIONS_ENABLED,
+            "view_mode": DEFAULT_UI_VIEW_MODE,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -842,6 +855,20 @@ def update_config_input_suggestions_enabled(config_path: Path, enabled: bool) ->
     ui = raw.get("ui")
     ui_map = dict(ui) if isinstance(ui, Mapping) else {}
     ui_map["input_suggestions_enabled"] = bool(enabled)
+    raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_view_mode(config_path: Path, view_mode: str) -> None:
+    if not is_valid_ui_view_mode(view_mode):
+        raise ValueError("View mode must be one of: concise, full.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["view_mode"] = view_mode
     raw["ui"] = ui_map
     _write_private_toml(path, raw)
 

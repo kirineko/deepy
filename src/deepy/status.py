@@ -50,6 +50,7 @@ class StatusReport:
     compact_threshold_tokens: int
     reserved_context_tokens: int
     input_suggestions_enabled: bool
+    view_mode: str
     session_count: int
     skill_count: int
     mcp: dict[str, Any]
@@ -93,6 +94,7 @@ def build_status_report(
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
         reserved_context_tokens=settings.context.reserved_context_tokens,
         input_suggestions_enabled=settings.ui.input_suggestions_enabled,
+        view_mode=settings.ui.view_mode,
         session_count=len(entries),
         skill_count=len(discover_skills(root)),
         mcp=mcp_policy_to_dict(settings),
@@ -122,6 +124,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
             f"Reserved context: {report.reserved_context_tokens} tokens",
             f"Input suggestions: {'enabled' if report.input_suggestions_enabled else 'disabled'}",
+            f"View mode: {report.view_mode}",
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
             f"Session usage: {_format_status_usage(report.active_session_usage)}",
@@ -150,6 +153,7 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "compact_threshold_tokens": report.compact_threshold_tokens,
         "reserved_context_tokens": report.reserved_context_tokens,
         "input_suggestions_enabled": report.input_suggestions_enabled,
+        "view_mode": report.view_mode,
         "session_count": report.session_count,
         "skill_count": report.skill_count,
         "mcp": report.mcp,
@@ -235,6 +239,7 @@ def format_compact_status_report(report: StatusReport) -> str:
     rows = [
         ("model", f"{report.provider} {report.model}[{report.reasoning_mode}]"),
         ("api", "configured" if report.api_key_configured else "missing"),
+        ("view", report.view_mode),
         ("balance", format_balance_status(report.balance)),
         ("session usage", _format_status_usage(report.active_session_usage)),
         ("session cache", _format_cache_status(report)),
@@ -325,11 +330,15 @@ def _format_context_window_status(report: StatusReport) -> str:
 
 
 def _format_token_count_short(value: int) -> str:
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
-    if value >= 1_000:
-        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
-    return str(value)
+    if value < 1_000:
+        return str(value)
+    if value < 1_000_000:
+        return f"{round(value / 1_000):g}K"
+    scaled = value / 1_000_000
+    if scaled >= 10:
+        return f"{round(scaled):g}M"
+    rounded = round(scaled, 1)
+    return f"{rounded:g}M"
 
 
 def _simple_box(title: str, rows: list[tuple[str, str]]) -> str:

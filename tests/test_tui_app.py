@@ -14,7 +14,7 @@ from textual.widgets.option_list import Option
 
 import deepy.tui.app as tui_app
 import deepy.tui.runner as tui_runner
-from deepy.config import ModelConfig, Settings
+from deepy.config import ModelConfig, Settings, UiConfig
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
@@ -1393,7 +1393,11 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
             usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
 
     async with app.run_test(size=(100, 36)) as pilot:
         await pilot.pause(0.01)
@@ -1416,6 +1420,69 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
         assert usage.line.startswith("Usage  input 1")
         ordered = [type(block).__name__ for block in app.query(".transcript-block")]
         assert ordered.index("AssistantBlock") > ordered.index("ToolBlock")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_concise_view_hides_reasoning_and_counts_stream_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="abc"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="de"))
+        await pilot.pause(0.01)
+
+        assert list(app.query(ThinkingBlock)) == []
+        status = app.query_one("#status-right", Label)
+        assert "↓ 5 tokens" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_full_view_renders_reasoning_and_counts_stream_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="abc"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="de"))
+        await pilot.pause(0.01)
+
+        thinking = app.query_one(ThinkingBlock)
+        assert thinking.body == "abc"
+        status = app.query_one("#status-right", Label)
+        assert "↓ 5 tokens" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_counts_silent_tool_arguments_with_short_units(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(
+            DeepyStreamEvent(
+                kind="raw_response",
+                name="response.function_call_arguments.delta",
+                text="x" * 1100,
+            )
+        )
+        await pilot.pause(0.01)
+
+        status = app.query_one("#status-right", Label)
+        assert "↓ 1.1K tokens" in str(status.content)
         app.exit()
 
 
@@ -1723,7 +1790,11 @@ async def test_tui_interleaves_thinking_and_tool_calls_in_stream_order(tmp_path)
         emit_event(DeepyStreamEvent(kind="reasoning_delta", text="second"))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
 
     async with app.run_test(size=(100, 36)) as pilot:
         await pilot.pause(0.01)
@@ -1758,7 +1829,11 @@ async def test_tui_autoscrolls_when_live_block_grows(tmp_path) -> None:
         await release.wait()
         return RunSummary(output="", session_id="s1", complete=True)
 
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
 
     async with app.run_test(size=(80, 12)) as pilot:
         await pilot.pause(0.01)
@@ -1791,7 +1866,11 @@ async def test_tui_preserves_scroll_position_and_new_output_indicator(tmp_path) 
         emit_event(DeepyStreamEvent(kind="reasoning_delta", text="late line\n"))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
 
     async with app.run_test(size=(80, 12)) as pilot:
         await pilot.pause(0.01)
@@ -1830,7 +1909,11 @@ async def test_tui_submitting_prompt_from_history_scrolls_to_bottom(tmp_path) ->
                 await asyncio.sleep(0)
         return RunSummary(output=f"ok {calls}", session_id="s1", complete=True)
 
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
 
     async with app.run_test(size=(80, 12)) as pilot:
         await pilot.pause(0.01)
@@ -1944,6 +2027,54 @@ async def test_tui_unknown_slash_command_is_not_sent_to_model(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_view_persists_toggled_mode_and_shows_confirmation(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\nview_mode = "concise"\n', encoding="utf-8")
+    app = DeepyTuiApp(
+        settings=load_settings(config_path),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/view",
+            lambda: any("View: full · reasoning shown" in block.body for block in app.query(InfoBlock)),
+        )
+
+        assert load_settings(config_path).ui.view_mode == "full"
+        assert app.settings.ui.view_mode == "full"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_view_invalid_argument_reports_usage_without_persisting(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\nview_mode = "full"\n', encoding="utf-8")
+    app = DeepyTuiApp(
+        settings=load_settings(config_path),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/view verbose",
+            lambda: any("Usage: /view [toggle|concise|full]" in block.body for block in app.query(ErrorBlock)),
+        )
+
+        assert load_settings(config_path).ui.view_mode == "full"
+        assert app.settings.ui.view_mode == "full"
+        app.exit()
+
+
+@pytest.mark.asyncio
 async def test_tui_command_provider_discovers_and_searches_commands(tmp_path) -> None:
     calls: list[tuple[str, str]] = []
 
@@ -1959,6 +2090,7 @@ async def test_tui_command_provider_discovers_and_searches_commands(tmp_path) ->
 
         discovered = [hit async for hit in provider.discover()]
         assert [hit.text for hit in discovered[:3]] == ["/help", "/new", "/resume"]
+        assert any(hit.text == "/view" and hit.help == "Settings: Hide or show reasoning transcript text" for hit in discovered)
         assert any(hit.text == "/help" and hit.help == "Help: Show commands, keybindings, and TUI state" for hit in discovered)
 
         help_hit = next(hit for hit in discovered if hit.text == "/help")

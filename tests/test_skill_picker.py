@@ -172,5 +172,5 @@ def test_format_skill_detail_text_renders_markdown_body():
     assert "# Title" not in text
     assert "Title" in text
     assert "• item" in text
-    assert "code py" in text
+    assert "print(1)" in text
     assert "  print(1)" in text

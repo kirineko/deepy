@@ -38,6 +38,7 @@ from deepy.ui.terminal import _print_stream_event
 from deepy.ui.terminal import _print_user_input
 from deepy.ui.terminal import _print_usage_footer
 from deepy.ui.terminal import _format_duration_ms
+from deepy.ui.terminal import _format_stream_token_count_short
 from deepy.ui.terminal import _format_token_count_short
 from deepy.ui.terminal import _tool_output_text
 from deepy.ui.terminal import _run_once_with_status
@@ -454,6 +455,7 @@ def test_resume_slash_command_prints_selected_session_history(tmp_path):
         tmp_path,
         "old",
         input_func=lambda prompt: "1",
+        settings=Settings(ui=UiConfig(view_mode="full")),
     )
 
     rendered = console.export_text()
@@ -772,7 +774,7 @@ def test_print_stream_event_renders_diff_without_headers_or_markers():
     )
 
     rendered = console.export_text()
-    assert "[Update]  ok" in rendered
+    assert "[Update]  ok" not in rendered
     assert "[Update] src/lib.rs (+1 -1)" in rendered
     assert "[Update] /repo/src/lib.rs (+1 -1)" not in rendered
     assert "old" in rendered
@@ -805,7 +807,7 @@ def test_print_stream_event_renders_write_preview_after_status():
     )
 
     rendered = console.export_text()
-    assert "[Write]  ok" in rendered
+    assert "[Write]  ok" not in rendered
     assert "[Write] /repo/src/lib.rs (+1 -0)" in rendered
     assert "new file body" in rendered
     assert "+new file body" not in rendered
@@ -887,7 +889,7 @@ def test_print_stream_event_write_call_summary_hides_content_argument():
     )
 
     rendered = console.export_text()
-    assert "[Write] src/lib.rs (3 lines, 34 chars)  ok" in rendered
+    assert "[Write] src/lib.rs (3 lines, 34 chars)  ok" not in rendered
     assert "println" not in rendered
     assert "fn main() {}" in rendered
 
@@ -1044,7 +1046,7 @@ def test_clear_submitted_prompt_echo_clears_each_rendered_row(monkeypatch):
 
 def test_terminal_stream_renderer_flushes_reasoning_summary():
     console = Console(record=True)
-    renderer = terminal.TerminalStreamRenderer(console)
+    renderer = terminal.TerminalStreamRenderer(console, view_mode="full")
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="让我先看看项目结构。"))
     renderer.flush()
@@ -1054,9 +1056,36 @@ def test_terminal_stream_renderer_flushes_reasoning_summary():
     assert "让我先看看项目结构。" in rendered
 
 
+def test_terminal_stream_renderer_hides_reasoning_in_concise_view():
+    class FakeStatus:
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True)
+    status = FakeStatus()
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        view_mode="concise",
+    )
+
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="隐藏的思考。"))
+    renderer.flush()
+
+    rendered = console.export_text()
+    assert "Thinking" not in rendered
+    assert "隐藏的思考" not in rendered
+    assert status.updates
+    assert "↓" in status.updates[-1]
+
+
 def test_terminal_stream_renderer_interleaves_reasoning_and_tool_calls():
     console = Console(record=True, width=160)
-    renderer = terminal.TerminalStreamRenderer(console, project_root="/repo")
+    renderer = terminal.TerminalStreamRenderer(console, project_root="/repo", view_mode="full")
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="先抓取题目。"))
     renderer(
@@ -1121,7 +1150,7 @@ def test_terminal_stream_renderer_interleaves_reasoning_and_tool_calls():
 
 def test_terminal_stream_renderer_flushes_reasoning_for_each_model_turn():
     console = Console(record=True)
-    renderer = terminal.TerminalStreamRenderer(console)
+    renderer = terminal.TerminalStreamRenderer(console, view_mode="full")
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="第一轮思考。"))
     renderer.flush()
@@ -1135,7 +1164,7 @@ def test_terminal_stream_renderer_flushes_reasoning_for_each_model_turn():
 
 def test_terminal_stream_renderer_flushes_full_reasoning_without_truncation():
     console = Console(record=True, width=120)
-    renderer = terminal.TerminalStreamRenderer(console)
+    renderer = terminal.TerminalStreamRenderer(console, view_mode="full")
     content = "\n".join(f"步骤 {index}" for index in range(80))
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text=content))
@@ -1157,6 +1186,7 @@ def test_terminal_stream_renderer_keeps_reasoning_visible_under_status_refresh()
             console,
             status=status,
             status_started_at=started_at,
+            view_mode="full",
         )
         for char in content:
             renderer(DeepyStreamEvent(kind="reasoning_delta", text=char))
@@ -1194,6 +1224,7 @@ def test_terminal_stream_renderer_restores_status_for_silent_text_generation(tmp
         status=status,
         status_started_at=time.monotonic(),
         footer=footer,
+        view_mode="full",
     )
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="准备输出最终答案。"))
@@ -1202,13 +1233,15 @@ def test_terminal_stream_renderer_restores_status_for_silent_text_generation(tmp
     rendered = console.export_text()
     assert "准备输出最终答案。" in rendered
     assert status.updates
-    assert "status working" in status.updates[-1]
+    assert "↓" in status.updates[-1]
     assert "准备输出最终答案" not in status.updates[-1]
 
 
-def test_terminal_stream_renderer_restores_status_for_silent_tool_arguments(tmp_path):
+def test_terminal_stream_renderer_accumulates_stream_tokens_across_reasoning_and_output(
+    tmp_path,
+    monkeypatch,
+):
     class FakeStatus:
-        inline_output_flow = True
         active = False
 
         def __init__(self) -> None:
@@ -1218,6 +1251,7 @@ def test_terminal_stream_renderer_restores_status_for_silent_tool_arguments(tmp_
             self.active = True
             self.updates.append(value.plain if hasattr(value, "plain") else str(value))
 
+    monkeypatch.setattr(terminal, "estimate_tokens_for_text", len)
     console = Console(record=True, width=120)
     status = FakeStatus()
     footer = _build_status_footer(
@@ -1230,21 +1264,95 @@ def test_terminal_stream_renderer_restores_status_for_silent_tool_arguments(tmp_
         status=status,
         status_started_at=time.monotonic(),
         footer=footer,
+        view_mode="concise",
     )
 
-    renderer(DeepyStreamEvent(kind="reasoning_delta", text="准备调用写入工具。"))
+    renderer(DeepyStreamEvent(kind="reasoning_delta", text="abc"))
+    renderer(DeepyStreamEvent(kind="text_delta", text="de"))
+
+    assert status.updates
+    assert "↓ 5 tokens" in status.updates[-1]
+    assert "Responding" in status.updates[-1]
+    assert "time " in status.updates[-1]
+    assert status.updates[-1].index("↓ 5 tokens") < status.updates[-1].index("esc to interrupt")
+
+
+def test_terminal_stream_renderer_counts_silent_tool_arguments_with_short_units(tmp_path, monkeypatch):
+    class FakeStatus:
+        inline_output_flow = True
+        active = False
+
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.active = True
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    monkeypatch.setattr(terminal, "estimate_tokens_for_text", len)
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+        view_mode="concise",
+    )
+
     renderer(
         DeepyStreamEvent(
             kind="raw_response",
             name="response.function_call_arguments.delta",
-            text='{"path"',
+            text="x" * 1100,
         )
     )
 
     rendered = console.export_text()
-    assert "准备调用写入工具。" in rendered
+    assert rendered == ""
     assert status.updates
-    assert "status working" in status.updates[-1]
+    assert "↓ 1.1K tokens" in status.updates[-1]
+
+
+def test_terminal_stream_renderer_throttles_inline_stream_token_repaints(tmp_path, monkeypatch):
+    class FakeStatus:
+        inline_output_flow = True
+        active = True
+
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.active = True
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    monkeypatch.setattr(terminal, "estimate_tokens_for_text", len)
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+        view_mode="concise",
+    )
+
+    renderer(DeepyStreamEvent(kind="raw_response", text="abc"))
+    renderer(DeepyStreamEvent(kind="raw_response", text="de"))
+
+    assert len(status.updates) == 1
+    assert "↓ 3 tokens" in status.updates[0]
+    assert renderer.status_detail == "↓ 5 tokens"
 
 
 def test_terminal_stream_renderer_refresh_restores_status_after_reasoning_pause(
@@ -1276,6 +1384,7 @@ def test_terminal_stream_renderer_refresh_restores_status_after_reasoning_pause(
         status=status,
         status_started_at=now,
         footer=footer,
+        view_mode="full",
     )
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="这里之后模型会静默一段时间。"))
@@ -1289,7 +1398,7 @@ def test_terminal_stream_renderer_refresh_restores_status_after_reasoning_pause(
     rendered = console.export_text()
     assert "这里之后模型会静默一段时间。" in rendered
     assert status.updates
-    assert "thinking" in status.updates[-1]
+    assert "↓" in status.updates[-1]
     assert "这里之后模型会静默一段时间" not in status.updates[-1]
 
 
@@ -1317,6 +1426,7 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
         status=status,
         status_started_at=started_at,
         footer=footer,
+        view_mode="full",
     )
 
     renderer(DeepyStreamEvent(kind="reasoning_delta", text="第一段很长的思考内容。"))
@@ -1326,10 +1436,10 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
     rendered = console.export_text()
     assert "第一段很长的思考内容。" in rendered
     assert "第二段仍然是正文，不应该进入 footer。" in rendered
-    assert len(status.updates) == 1
-    assert "thinking" in status.updates[0]
-    assert "第一段很长的思考内容" not in status.updates[0]
-    assert "第二段仍然是正文" not in status.updates[0]
+    assert status.updates
+    assert "↓" in status.updates[-1]
+    assert "第一段很长的思考内容" not in status.updates[-1]
+    assert "第二段仍然是正文" not in status.updates[-1]
 
 
 def test_terminal_stream_renderer_shows_tool_status_without_call_id(tmp_path):
@@ -1363,7 +1473,45 @@ def test_terminal_stream_renderer_shows_tool_status_without_call_id(tmp_path):
         )
     )
 
-    assert any("tool [Write]" in update and "README.md" in update for update in status.updates)
+    assert any("Write" in update and "README.md" not in update for update in status.updates)
+    assert all("tool [Write]" not in update for update in status.updates)
+
+
+def test_terminal_stream_renderer_shows_mcp_tool_status_without_arguments(tmp_path):
+    class FakeStatus:
+        def __init__(self) -> None:
+            self.updates: list[str] = []
+
+        def update(self, value) -> None:
+            self.updates.append(value.plain if hasattr(value, "plain") else str(value))
+
+    console = Console(record=True, width=120)
+    status = FakeStatus()
+    footer = _build_status_footer(
+        None,
+        project_root=tmp_path,
+        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+    )
+    renderer = terminal.TerminalStreamRenderer(
+        console,
+        status=status,
+        status_started_at=time.monotonic(),
+        footer=footer,
+        project_root=str(tmp_path),
+    )
+
+    renderer(
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="mcp_tavily__tavily_extract",
+            payload={"arguments": json_utils.dumps({"url": "https://example.com/very/long/path"})},
+        )
+    )
+
+    assert status.updates
+    assert "MCP" in status.updates[-1]
+    assert "example.com" not in status.updates[-1]
+    assert status.updates[-1].index("MCP") < status.updates[-1].index("esc to interrupt")
 
 
 def test_terminal_stream_renderer_serializes_tool_output_with_output_lock():
@@ -1682,7 +1830,80 @@ def test_help_slash_command_includes_model(tmp_path):
     assert "/ps" in rendered
     assert "/stop" in rendered
     assert "/input-suggestion" in rendered
+    assert "/view [toggle|concise|full]" in rendered
     assert "/compact [focus]" in rendered
+
+
+def test_view_slash_command_toggles_config_and_reports_reasoning_state(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\nview_mode = \"concise\"\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("view", "toggle"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(view_mode="concise")),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.view_mode == "full"
+    assert "View: full · reasoning shown" in console.export_text()
+
+
+def test_view_slash_command_sets_concise_and_reports_hidden_reasoning(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\nview_mode = \"full\"\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("view", "concise"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(view_mode="full")),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.view_mode == "concise"
+    assert "View: concise · reasoning hidden" in console.export_text()
+
+
+def test_view_slash_command_toggles_config_without_argument(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\nview_mode = \"concise\"\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("view"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(view_mode="concise")),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.view_mode == "full"
+    assert "View: full · reasoning shown" in console.export_text()
+
+
+def test_view_slash_command_rejects_invalid_arguments_without_changing_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\nview_mode = \"concise\"\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("view", "thinking"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(view_mode="concise")),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.view_mode == "concise"
+    assert "Usage: /view [toggle|concise|full]" in console.export_text()
 
 
 def test_input_suggestion_slash_command_toggles_config(tmp_path):
@@ -2421,11 +2642,11 @@ def test_runtime_status_text_uses_segmented_foreground_styles(tmp_path):
 
     rendered = _working_status_text(
         time.monotonic(),
-        "tool [Shell] uv run pytest",
+        "Shell",
         footer=footer,
     )
 
-    assert "time 0s · esc to interrupt · tool [Shell] uv run pytest" in rendered.plain
+    assert "time 0s · Shell · esc to interrupt" in rendered.plain
     styles = {str(span.style) for span in rendered.spans}
     assert len(styles) >= 4
     assert not any(" on " in style or "bg:" in style for style in styles)
@@ -2433,7 +2654,7 @@ def test_runtime_status_text_uses_segmented_foreground_styles(tmp_path):
 
 def test_styled_runtime_status_line_preserves_fitted_visible_text():
     fitted = terminal._fit_status_line(
-        "⠋ time 0s · esc to interrupt · tool [Shell] uv run pytest",
+        "⠋ time 0s · Shell · esc to interrupt",
         width=72,
     )
 
@@ -2577,26 +2798,25 @@ def test_status_display_keeps_inline_runtime_status_for_nonprinting_events(tmp_p
 
 
 def test_runtime_status_line_fits_wide_web_search_text_to_display_cells():
-    text = "⠋ time 0s · esc to interrupt · tool [WebSearch] DeepSeek 最新模型 发布信息"
-
-    fitted = terminal._fit_status_line(text, width=42)
-
-    assert cell_len(fitted) == 42
-    assert "time 0s" in fitted
-    assert "esc to interrupt" in fitted
-    assert fitted.rstrip().endswith("…")
-
-
-def test_runtime_status_line_prioritizes_prefix_over_long_tool_payload():
-    text = "⠋ time 0s · esc to interrupt · tool [WebSearch] " + ("DeepSeek 最新模型 " * 8)
+    text = "⠋ time 0s · ↓ 850 tokens · WebSearch · esc to interrupt"
 
     fitted = terminal._fit_status_line(text, width=56)
 
     assert cell_len(fitted) == 56
     assert "time 0s" in fitted
     assert "esc to interrupt" in fitted
-    assert "tool [WebSearch]" in fitted
-    assert fitted.rstrip().endswith("…")
+    assert "WebSearch" in fitted
+
+
+def test_runtime_status_line_prioritizes_prefix_over_long_tool_payload():
+    text = "⠋ time 0s · ↓ 850 tokens · WebSearch · esc to interrupt"
+
+    fitted = terminal._fit_status_line(text, width=56)
+
+    assert cell_len(fitted) == 56
+    assert "time 0s" in fitted
+    assert "esc to interrupt" in fitted
+    assert "WebSearch" in fitted
 
 
 def test_runtime_status_line_tail_truncates_long_local_command():
@@ -2614,19 +2834,16 @@ def test_runtime_status_line_tail_truncates_long_local_command():
     assert fitted.rstrip().endswith("…")
 
 
-def test_runtime_status_line_tail_truncates_long_shell_tool_command():
-    command = "uv run pytest tests/test_terminal_ui.py::test_runtime_status --very-long-option"
-    text = f"⠋ time 0s · esc to interrupt · tool [Shell] {command}"
+def test_runtime_status_line_keeps_concise_tool_state_before_interrupt():
+    text = "⠋ time 0s · ↓ 850 tokens · Shell · esc to interrupt"
 
     fitted = terminal._fit_status_line(text, width=66)
 
     assert cell_len(fitted) == 66
     assert "time 0s" in fitted
     assert "esc to interrupt" in fitted
-    assert "tool [Shell]" in fitted
-    assert "uv run pytest" in fitted
-    assert "--very-long-option" not in fitted
-    assert fitted.rstrip().endswith("…")
+    assert "Shell" in fitted
+    assert fitted.index("Shell") < fitted.index("esc to interrupt")
 
 
 def test_runtime_status_line_sanitizes_control_sequences_before_fitting():
@@ -2736,10 +2953,17 @@ def test_format_duration_ms_formats_minutes_and_hours():
 
 def test_format_token_count_short_uses_compact_units():
     assert _format_token_count_short(999) == "999"
+    assert _format_token_count_short(1_100) == "1K"
     assert _format_token_count_short(50_000) == "50K"
     assert _format_token_count_short(838_861) == "839K"
     assert _format_token_count_short(1_048_576) == "1M"
     assert _format_token_count_short(1_500_000) == "1.5M"
+
+
+def test_format_stream_token_count_short_uses_k_only_units():
+    assert _format_stream_token_count_short(999) == "999"
+    assert _format_stream_token_count_short(1_100) == "1.1K"
+    assert _format_stream_token_count_short(1_048_576) == "1049K"
 
 
 def test_print_usage_footer_only_shows_turn_usage(tmp_path):
@@ -3651,7 +3875,7 @@ def test_print_assistant_output_renders_markdown():
     assert "Deepy" in rendered
     assert "**Deepy**" not in rendered
     assert "• 终端 Agent" in rendered
-    assert "code bash" in rendered
+    assert "uv run deepy --help" in rendered
     assert "```" not in rendered
 
 

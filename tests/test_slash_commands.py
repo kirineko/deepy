@@ -38,6 +38,7 @@ def test_build_slash_commands_orders_builtins_subagents_then_skills():
         "status",
         "stop",
         "theme",
+        "view",
     ]
     assert [item.name for item in items if item.kind == "subagent"] == [
         "explore",
@@ -77,19 +78,20 @@ def test_filter_slash_commands_ranks_bare_slash_by_user_intent():
 
     ranked = filter_slash_commands(items, "/")
     names = [item.name for item in ranked]
-    assert names[:10] == [
+    assert names[:11] == [
         "help",
         "new",
         "resume",
         "sessions",
         "model",
+        "view",
         "skills",
         "status",
         "compact",
         "mcp",
         "exit",
     ]
-    assert names[10:13] == ["explore", "reviewer", "tester"]
+    assert names[11:14] == ["explore", "reviewer", "tester"]
     assert names.index("skill-writer") < names.index("reset")
     assert names.index("code-review") < names.index("reset")
 
