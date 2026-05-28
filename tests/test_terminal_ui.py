@@ -3005,10 +3005,12 @@ def test_terminal_approval_diff_full_stays_inside_picker_panel(tmp_path, monkeyp
     panel_text_factory = picker_kwargs["panel_text_factory"]
     compact = panel_text_factory(False)
     expanded = panel_text_factory(True)
+    compact_plain = terminal._ANSI_ESCAPE_RE.sub("", compact)
+    expanded_plain = terminal._ANSI_ESCAPE_RE.sub("", expanded)
     assert compact.count("Approve write? long.py") == 1
     assert expanded.count("Approve write? long.py") == 1
-    assert "line 39" not in compact
-    assert "line 39" in expanded
+    assert "line 39" not in compact_plain
+    assert "line 39" in expanded_plain
 
 
 def test_run_once_with_status_routes_approval_picker_to_main_thread(tmp_path, monkeypatch):
