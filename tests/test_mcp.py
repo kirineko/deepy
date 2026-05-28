@@ -4,6 +4,9 @@ import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import pytest
+
+from deepy.audit import AuditConfig, AuditMode, McpSafeTool
 from deepy.config import McpConfig, Settings
 from deepy.mcp import (
     DeepyMcpRuntime,
@@ -205,6 +208,39 @@ def test_mcp_runtime_stdio_servers_suppress_child_stderr(tmp_path, monkeypatch):
     asyncio.run(use_streams())
 
     assert captured["errlog"].closed is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_uses_audit_require_approval_policy(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"github": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    settings = Settings(
+        path=config,
+        audit=AuditConfig(
+            mode=AuditMode.AUTO,
+            mcp_safe_tools=(McpSafeTool("github", "search_issues"),),
+        ),
+    )
+    runtime = DeepyMcpRuntime(settings, project_root=tmp_path)
+    server = runtime._build_sdk_servers()[0]
+
+    safe = server._get_needs_approval_for_tool(  # noqa: SLF001 - verifies SDK policy wiring.
+        SimpleNamespace(name="search_issues"),
+        agent=object(),
+    )
+    unsafe = server._get_needs_approval_for_tool(  # noqa: SLF001 - verifies SDK policy wiring.
+        SimpleNamespace(name="create_issue"),
+        agent=object(),
+    )
+
+    assert await safe(None, {}, "call") is False
+    assert await unsafe(None, {}, "call") is True
+
+    runtime.audit_policy.mode_getter = lambda: AuditMode.YOLO
+    assert await unsafe(None, {}, "call") is False
 
 
 def test_sdk_mcp_tool_name_matches_agents_sdk_prefix():

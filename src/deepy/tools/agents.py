@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+from deepy.audit import AuditPolicy
 from deepy.utils import json as json_utils
 
 from .builtin import ToolRuntime
@@ -19,6 +20,7 @@ def build_function_tools(
     mimo_schema_compatibility: bool = False,
     preferred_mcp_web_search_tools: list[str] | None = None,
     include_tools: set[str] | frozenset[str] | None = None,
+    audit_policy: AuditPolicy | None = None,
 ) -> list[Tool]:
     from agents.tool import FunctionTool
 
@@ -27,6 +29,19 @@ def build_function_tools(
         if mimo_schema_compatibility:
             tool.params_json_schema = make_mimo_compatible_tool_schema(tool.params_json_schema)
         return tool
+
+    async def needs_text_write_approval(_context: object, _params: dict[str, Any], _call_id: str) -> bool:
+        return bool(audit_policy and audit_policy.needs_approval("text_write"))
+
+    async def needs_command_approval(_context: object, _params: dict[str, Any], _call_id: str) -> bool:
+        return bool(audit_policy and audit_policy.needs_approval("command"))
+
+    async def needs_background_task_control_approval(
+        _context: object,
+        _params: dict[str, Any],
+        _call_id: str,
+    ) -> bool:
+        return bool(audit_policy and audit_policy.needs_approval("background_task_control"))
 
     async def invoke_shell(_context: object, raw_input: str) -> str:
         args, error, repair_metadata = _tool_args(raw_input, "shell", SHELL_SCHEMA)
@@ -199,6 +214,7 @@ def build_function_tools(
             params_json_schema=SHELL_SCHEMA,
             on_invoke_tool=invoke_shell,
             strict_json_schema=False,
+            needs_approval=needs_command_approval,
         ),
         make_function_tool(
             name="test_shell",
@@ -237,6 +253,7 @@ def build_function_tools(
             params_json_schema=TASK_STOP_SCHEMA,
             on_invoke_tool=invoke_task_stop,
             strict_json_schema=False,
+            needs_approval=needs_background_task_control_approval,
         ),
         make_function_tool(
             name="AskUserQuestion",
@@ -281,6 +298,7 @@ def build_function_tools(
             params_json_schema=WRITE_SCHEMA,
             on_invoke_tool=invoke_write,
             strict_json_schema=False,
+            needs_approval=needs_text_write_approval,
         ),
         make_function_tool(
             name="Update",
@@ -291,6 +309,7 @@ def build_function_tools(
             params_json_schema=UPDATE_SCHEMA,
             on_invoke_tool=invoke_update,
             strict_json_schema=False,
+            needs_approval=needs_text_write_approval,
         ),
         make_function_tool(
             name="WebSearch",

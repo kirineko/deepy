@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from deepy.ui.audit_approval_panel import _approval_diff_palette
 from deepy.ui.styles import DARK_PALETTE
 from deepy.ui.styles import LIGHT_PALETTE
 from deepy.ui.styles import resolve_ui_palette
@@ -49,3 +50,16 @@ def test_toolbar_roles_use_coordinated_single_foreground():
         assert palette.toolbar_identity == f"bold {palette.toolbar_foreground}"
         assert palette.toolbar_active == f"bold {palette.toolbar_foreground}"
         assert palette.toolbar_separator != palette.toolbar_foreground
+
+
+def test_approval_diff_palette_uses_soft_change_backgrounds():
+    for palette in (DARK_PALETTE, LIGHT_PALETTE):
+        approval_palette = _approval_diff_palette(palette)
+
+        assert " on " in approval_palette.diff_added
+        assert " on " in approval_palette.diff_added_gutter
+        assert " on " in approval_palette.diff_added_marker
+        assert " on " in approval_palette.diff_removed
+        assert " on " in approval_palette.diff_removed_gutter
+        assert " on " in approval_palette.diff_removed_marker
+        assert approval_palette.diff_added != approval_palette.diff_removed

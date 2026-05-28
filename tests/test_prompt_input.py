@@ -671,6 +671,19 @@ def test_prompt_key_bindings_do_not_register_shift_or_ctrl_enter_sequences():
     assert not any(key_values(binding) == ("escape", "c-m") for binding in bindings.bindings)
 
 
+def test_prompt_key_bindings_shift_tab_cycles_audit_mode():
+    calls: list[str] = []
+    bindings = build_prompt_key_bindings(on_audit_mode_cycle=lambda: calls.append("cycle"))
+
+    def key_values(binding):
+        return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+    shift_tab = next(binding for binding in bindings.bindings if key_values(binding) == ("s-tab",))
+    shift_tab.handler(object())
+
+    assert calls == ["cycle"]
+
+
 def test_prompt_key_bindings_ctrl_d_returns_exit_confirmation_when_empty():
     bindings = build_prompt_key_bindings()
     results: list[str] = []

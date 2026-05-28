@@ -51,6 +51,8 @@ class StatusReport:
     reserved_context_tokens: int
     input_suggestions_enabled: bool
     view_mode: str
+    audit_mode: str
+    audit_invalid_mode: str | None
     session_count: int
     skill_count: int
     mcp: dict[str, Any]
@@ -95,6 +97,8 @@ def build_status_report(
         reserved_context_tokens=settings.context.reserved_context_tokens,
         input_suggestions_enabled=settings.ui.input_suggestions_enabled,
         view_mode=settings.ui.view_mode,
+        audit_mode=settings.audit.mode.value,
+        audit_invalid_mode=settings.audit.invalid_mode,
         session_count=len(entries),
         skill_count=len(discover_skills(root)),
         mcp=mcp_policy_to_dict(settings),
@@ -125,6 +129,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Reserved context: {report.reserved_context_tokens} tokens",
             f"Input suggestions: {'enabled' if report.input_suggestions_enabled else 'disabled'}",
             f"View mode: {report.view_mode}",
+            f"Audit mode: {report.audit_mode}",
             f"Sessions: {report.session_count}",
             f"Skills: {report.skill_count}",
             f"Session usage: {_format_status_usage(report.active_session_usage)}",
@@ -154,6 +159,8 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "reserved_context_tokens": report.reserved_context_tokens,
         "input_suggestions_enabled": report.input_suggestions_enabled,
         "view_mode": report.view_mode,
+        "audit_mode": report.audit_mode,
+        "audit_invalid_mode": report.audit_invalid_mode,
         "session_count": report.session_count,
         "skill_count": report.skill_count,
         "mcp": report.mcp,
@@ -240,6 +247,7 @@ def format_compact_status_report(report: StatusReport) -> str:
         ("model", f"{report.provider} {report.model}[{report.reasoning_mode}]"),
         ("api", "configured" if report.api_key_configured else "missing"),
         ("view", report.view_mode),
+        ("audit", report.audit_mode),
         ("balance", format_balance_status(report.balance)),
         ("session usage", _format_status_usage(report.active_session_usage)),
         ("session cache", _format_cache_status(report)),

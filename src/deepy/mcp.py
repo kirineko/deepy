@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from deepy.audit import AuditPolicy
 from deepy.config import Settings, default_mcp_config_path, mask_secret
 from deepy.utils import json as json_utils
 
@@ -80,9 +81,11 @@ class DeepyMcpRuntime:
         *,
         project_root: Path | None = None,
         env: Mapping[str, str] | None = None,
+        audit_policy: AuditPolicy | None = None,
     ) -> None:
         self.settings = settings
         self.project_root = project_root
+        self.audit_policy = audit_policy or AuditPolicy.from_mode(settings.audit.mode, settings.audit)
         self.load_result = load_mcp_config(settings, project_root=project_root, env=env)
         self.definitions = self.load_result.definitions
         self._servers_by_name: dict[str, Any] = {}
@@ -192,6 +195,7 @@ class DeepyMcpRuntime:
                     client_session_timeout_seconds=(
                         self.settings.mcp.client_session_timeout_seconds
                     ),
+                    require_approval=self._mcp_require_approval(definition),
                 )
             else:
                 params: MCPServerStreamableHttpParams = {"url": definition.url or ""}
@@ -204,12 +208,20 @@ class DeepyMcpRuntime:
                     client_session_timeout_seconds=(
                         self.settings.mcp.client_session_timeout_seconds
                     ),
+                    require_approval=self._mcp_require_approval(definition),
                 )
             self._servers_by_name[definition.name] = server
             self._definitions_by_server[server] = definition
             self._statuses[definition.name] = _status_from_definition(definition, "configured")
             servers.append(server)
         return servers
+
+    def _mcp_require_approval(self, definition: McpServerDefinition):
+        async def needs_approval(_context: object, _agent: object, tool: object) -> bool:
+            tool_name = str(getattr(tool, "name", "") or "")
+            return self.audit_policy.needs_mcp_approval(server=definition.name, tool=tool_name)
+
+        return needs_approval
 
     def _record_manager_failures(self) -> None:
         if self._manager is None:

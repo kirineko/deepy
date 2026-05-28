@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import os
+import queue
 import re
 import select
 import shutil
@@ -12,7 +14,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from rich.cells import cell_len
 from rich.console import Console
@@ -23,6 +25,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 
 from deepy import __version__
+from deepy.audit import ApprovalDecision, AuditModeState, AuditPolicy, PendingApproval
 from deepy.background_tasks import BackgroundTaskManager, BackgroundTaskSnapshot
 from deepy.config import (
     PROVIDER_CATALOG,
@@ -89,6 +92,9 @@ from deepy.ui.ask_user_question import build_options
 from deepy.ui.ask_user_question import format_ask_user_question_answers
 from deepy.ui.ask_user_question import format_ask_user_question_decline
 from deepy.ui.ask_user_question import normalize_questions
+from deepy.ui.audit_approval_picker import AUDIT_APPROVAL_APPROVE
+from deepy.ui.audit_approval_picker import pick_audit_approval
+from deepy.ui.audit_approval_panel import build_approval_panel
 from deepy.ui.exit_summary import build_exit_summary_text
 from deepy.ui.local_command import (
     LocalCommandInput,
@@ -211,6 +217,38 @@ class _AsyncRuntimeWorker:
         self._closed = True
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=2)
+
+
+@dataclass
+class _MainThreadCall:
+    callback: Callable[[], Any]
+    result: Future[Any]
+
+
+class _MainThreadCallbackBridge:
+    def __init__(self) -> None:
+        self._requests: queue.Queue[_MainThreadCall] = queue.Queue()
+        self._owner = threading.current_thread()
+
+    def call(self, callback: Callable[[], Any]) -> Any:
+        if threading.current_thread() is self._owner:
+            return callback()
+        result: Future[Any] = Future()
+        self._requests.put(_MainThreadCall(callback=callback, result=result))
+        return result.result()
+
+    def wait_for_future(self, future: Future[Any]) -> Any:
+        while True:
+            if future.done():
+                return future.result()
+            try:
+                request = self._requests.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            try:
+                request.result.set_result(request.callback())
+            except BaseException as exc:
+                request.result.set_exception(exc)
 
 
 @dataclass(frozen=True)
@@ -337,6 +375,8 @@ def run_interactive(
     output = console or Console()
     session_id: str | None = None
     settings = _ensure_interactive_theme(settings)
+    audit_state = AuditModeState(settings.audit.mode)
+    audit_policy = AuditPolicy(lambda: audit_state.mode, settings.audit)
     palette = resolve_ui_palette(settings.ui.theme)
     startup_state = _StartupState(
         update_pending=version_update_checker is not None,
@@ -353,9 +393,10 @@ def run_interactive(
         palette,
         loaded_skill_names,
         input_suggestions=input_suggestions,
+        audit_state=audit_state,
     )
     async_runner = _AsyncRuntimeWorker()
-    mcp_runtime = DeepyMcpRuntime(settings, project_root=root)
+    mcp_runtime = _create_mcp_runtime(settings, project_root=root, audit_policy=audit_policy)
     background_tasks = BackgroundTaskManager()
     mcp_startup = _McpStartupHandle(
         async_runner.submit(_connect_mcp_for_startup(mcp_runtime, startup_state)),
@@ -399,6 +440,7 @@ def run_interactive(
                         mcp_runtime=mcp_runtime,
                         background_tasks=background_tasks,
                         startup_state=startup_state,
+                        audit_state=audit_state,
                     ),
                     input_suggestions=input_suggestions,
                 )
@@ -460,6 +502,7 @@ def run_interactive(
                         background_tasks=background_tasks,
                         startup_state=startup_state,
                         mcp_startup=mcp_startup,
+                        audit_mode=audit_state,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -502,6 +545,7 @@ def run_interactive(
                             background_tasks=background_tasks,
                             startup_state=startup_state,
                             mcp_startup=mcp_startup,
+                            audit_mode=audit_state,
                         )
                         session_id = summary.session_id
                         _record_session_cost_start(root, session_id, cost_start)
@@ -532,6 +576,7 @@ def run_interactive(
                                 background_tasks=background_tasks,
                                 startup_state=startup_state,
                                 mcp_startup=mcp_startup,
+                                audit_mode=audit_state,
                             )
                             session_id = summary.session_id
                             _record_session_cost_start(root, session_id, cost_start)
@@ -562,6 +607,7 @@ def run_interactive(
                         background_tasks=background_tasks,
                         startup_state=startup_state,
                         mcp_startup=mcp_startup,
+                        audit_mode=audit_state,
                     )
                     session_id = summary.session_id
                     _record_session_cost_start(root, session_id, cost_start)
@@ -603,6 +649,7 @@ def run_interactive(
                         palette,
                         loaded_skill_names,
                         input_suggestions=input_suggestions,
+                        audit_state=audit_state,
                     )
                 session_id = next_session
                 continue
@@ -623,6 +670,7 @@ def run_interactive(
                 background_tasks=background_tasks,
                 startup_state=startup_state,
                 mcp_startup=mcp_startup,
+                audit_mode=audit_state,
             )
             session_id = summary.session_id
             _record_session_cost_start(root, session_id, cost_start)
@@ -653,6 +701,7 @@ def run_interactive(
                     background_tasks=background_tasks,
                     startup_state=startup_state,
                     mcp_startup=mcp_startup,
+                    audit_mode=audit_state,
                 )
                 session_id = summary.session_id
                 _record_session_cost_start(root, session_id, cost_start)
@@ -678,7 +727,12 @@ def _create_interactive_prompt_session(
     palette: UiPalette,
     loaded_skill_names: list[str],
     input_suggestions: InputSuggestionController | None = None,
+    audit_state: AuditModeState | None = None,
 ):
+    def cycle_audit_mode() -> None:
+        if audit_state is not None:
+            audit_state.cycle()
+
     return create_prompt_session(
         slash_commands=build_slash_commands(
             discover_skills(root),
@@ -687,7 +741,22 @@ def _create_interactive_prompt_session(
         palette=palette,
         project_root=root,
         input_suggestions=input_suggestions,
+        on_audit_mode_cycle=cycle_audit_mode if audit_state is not None else None,
     )
+
+
+def _create_mcp_runtime(
+    settings: Settings,
+    *,
+    project_root: Path,
+    audit_policy: AuditPolicy,
+) -> DeepyMcpRuntime:
+    try:
+        return DeepyMcpRuntime(settings, project_root=project_root, audit_policy=audit_policy)
+    except TypeError as exc:
+        if "audit_policy" not in str(exc):
+            raise
+        return DeepyMcpRuntime(settings, project_root=project_root)
 
 
 def _prepare_input_suggestion(
@@ -842,6 +911,7 @@ def _run_once_with_status(
     palette = kwargs.pop("palette", DARK_PALETTE)
     original_emit_event = kwargs.pop("emit_event", None)
     original_should_interrupt = kwargs.pop("should_interrupt", None)
+    audit_mode = kwargs.get("audit_mode")
     project_root = kwargs.get("project_root")
     project_root_text = str(project_root) if project_root is not None else None
     settings = kwargs.get("settings")
@@ -852,10 +922,13 @@ def _run_once_with_status(
         mcp_runtime=kwargs.get("mcp_runtime"),
         background_tasks=kwargs.get("background_tasks"),
         startup_state=startup_state if isinstance(startup_state, _StartupState) else None,
+        audit_mode=audit_mode,
     )
     renderer: TerminalStreamRenderer | None = None
     started_at = time.monotonic()
     interrupt_requested = threading.Event()
+    suspend_interrupt_watcher = threading.Event()
+    main_thread_bridge = _MainThreadCallbackBridge()
 
     def should_interrupt() -> bool:
         if interrupt_requested.is_set():
@@ -865,6 +938,7 @@ def _run_once_with_status(
         return False
 
     kwargs["should_interrupt"] = should_interrupt
+    has_custom_approval_resolver = kwargs.get("approval_resolver") is not None
 
     active_palette = palette if isinstance(palette, UiPalette) else DARK_PALETTE
     view_mode = settings.ui.view_mode if isinstance(settings, Settings) else "concise"
@@ -892,9 +966,23 @@ def _run_once_with_status(
                 daemon=True,
             )
             status_thread.start()
+        if not has_custom_approval_resolver:
+            kwargs["approval_resolver"] = _terminal_approval_resolver(
+                console,
+                palette,
+                project_root=project_root,
+                status=status,
+                stop_status_refresh=stop_status_refresh,
+                status_thread_getter=lambda: status_thread,
+                suspend_interrupt_watcher=suspend_interrupt_watcher,
+                main_thread_bridge=main_thread_bridge,
+            )
 
         try:
-            with _esc_interrupt_watcher(interrupt_requested):
+            with _esc_interrupt_watcher(
+                interrupt_requested,
+                suspend_event=suspend_interrupt_watcher,
+            ):
                 def emit_event(event: DeepyStreamEvent) -> None:
                     renderer(event)
                     if callable(original_emit_event):
@@ -903,7 +991,10 @@ def _run_once_with_status(
                 if isinstance(mcp_startup, _McpStartupHandle):
                     mcp_startup.wait()
                 coroutine = run_once(prompt, **kwargs, emit_event=emit_event)
-                if hasattr(async_runner, "run") and callable(async_runner.run):
+                if hasattr(async_runner, "submit") and callable(async_runner.submit):
+                    future = async_runner.submit(coroutine)
+                    summary = main_thread_bridge.wait_for_future(future)
+                elif hasattr(async_runner, "run") and callable(async_runner.run):
                     summary = async_runner.run(coroutine)
                 else:
                     summary = asyncio.run(coroutine)
@@ -914,6 +1005,261 @@ def _run_once_with_status(
 
     renderer.flush()
     return summary
+
+
+def _terminal_approval_resolver(
+    console: Console,
+    palette: UiPalette | None,
+    *,
+    project_root: str | Path | None = None,
+    status: object | None = None,
+    stop_status_refresh: threading.Event | None = None,
+    status_thread_getter: Callable[[], threading.Thread | None] | None = None,
+    suspend_interrupt_watcher: threading.Event | None = None,
+    main_thread_bridge: _MainThreadCallbackBridge | None = None,
+) -> Callable[[list[PendingApproval]], list[ApprovalDecision]]:
+    active_palette = palette or DARK_PALETTE
+
+    def resolve(pending: list[PendingApproval]) -> list[ApprovalDecision]:
+        decisions: list[ApprovalDecision] = []
+        for item in pending:
+            def decide(item: PendingApproval = item) -> bool:
+                return _collect_terminal_approval_decision(
+                    item,
+                    console=console,
+                    palette=active_palette,
+                    project_root=project_root,
+                    status=status,
+                    stop_status_refresh=stop_status_refresh,
+                    status_thread_getter=status_thread_getter,
+                    suspend_interrupt_watcher=suspend_interrupt_watcher,
+                )
+
+            approved = main_thread_bridge.call(decide) if main_thread_bridge is not None else decide()
+            decisions.append(
+                ApprovalDecision(
+                    outcome="approve" if approved else "reject",
+                    rejection_message=None
+                    if approved
+                    else "Tool execution was rejected by the user audit approval decision.",
+                )
+            )
+        return decisions
+
+    return resolve
+
+
+def _collect_terminal_approval_decision(
+    item: PendingApproval,
+    *,
+    console: Console,
+    palette: UiPalette,
+    project_root: str | Path | None = None,
+    status: object | None,
+    stop_status_refresh: threading.Event | None,
+    status_thread_getter: Callable[[], threading.Thread | None] | None,
+    suspend_interrupt_watcher: threading.Event | None,
+) -> bool:
+    if suspend_interrupt_watcher is not None:
+        suspend_interrupt_watcher.set()
+    try:
+        _prepare_terminal_approval_prompt(
+            status=status,
+            stop_status_refresh=stop_status_refresh,
+            status_thread_getter=status_thread_getter,
+        )
+        _, can_expand = _approval_panel_state(
+            item,
+            palette=palette,
+            project_root=project_root,
+            expanded=False,
+            width=console.width,
+        )
+        choice = pick_audit_approval(
+            can_toggle_preview=can_expand,
+            expanded=False,
+            panel_text_factory=lambda expanded: _approval_panel_ansi(
+                item,
+                palette=palette,
+                project_root=project_root,
+                expanded=expanded,
+                width=console.width,
+            ),
+        )
+        return choice == AUDIT_APPROVAL_APPROVE
+    finally:
+        if suspend_interrupt_watcher is not None:
+            suspend_interrupt_watcher.clear()
+
+
+def _prepare_terminal_approval_prompt(
+    *,
+    status: object | None,
+    stop_status_refresh: threading.Event | None,
+    status_thread_getter: Callable[[], threading.Thread | None] | None,
+) -> None:
+    if stop_status_refresh is not None:
+        stop_status_refresh.set()
+    if status_thread_getter is not None:
+        thread = status_thread_getter()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.2)
+    clear_for_output = getattr(status, "clear_for_output", None)
+    if callable(clear_for_output):
+        clear_for_output()
+        return
+    clear = getattr(status, "clear", None)
+    if callable(clear):
+        clear()
+
+
+def _approval_panel(
+    item: PendingApproval,
+    *,
+    palette: UiPalette,
+    project_root: str | Path | None = None,
+    expanded: bool = False,
+    width: int | None = None,
+) -> Panel:
+    panel, _ = _approval_panel_state(
+        item,
+        palette=palette,
+        project_root=project_root,
+        expanded=expanded,
+        width=width,
+    )
+    return panel
+
+
+def _approval_panel_ansi(
+    item: PendingApproval,
+    *,
+    palette: UiPalette,
+    project_root: str | Path | None = None,
+    expanded: bool = False,
+    width: int | None = None,
+    color_system: Literal["auto", "standard", "256", "truecolor", "windows"] | None = "truecolor",
+) -> str:
+    buffer = io.StringIO()
+    render_console = Console(
+        file=buffer,
+        force_terminal=True,
+        color_system=color_system,
+        width=width,
+    )
+    render_console.print(
+        _approval_panel(
+            item,
+            palette=palette,
+            project_root=project_root,
+            expanded=expanded,
+            width=width,
+        )
+    )
+    return buffer.getvalue().rstrip("\n")
+
+
+def _approval_panel_state(
+    item: PendingApproval,
+    *,
+    palette: UiPalette,
+    project_root: str | Path | None = None,
+    expanded: bool = False,
+    width: int | None = None,
+) -> tuple[Panel, bool]:
+    return build_approval_panel(
+        item,
+        palette=palette,
+        project_root=project_root,
+        expanded=expanded,
+        width=width,
+    )
+
+
+def _append_approval_field(
+    text: Text,
+    label: str,
+    value: object,
+    *,
+    palette: UiPalette,
+) -> None:
+    if text.plain:
+        text.append("\n")
+    text.append(f"{label}: ", style=f"bold {palette.muted}")
+    text.append(str(value))
+
+
+def _approval_arguments_text(item: PendingApproval, *, palette: UiPalette) -> Text:
+    arguments = item.arguments.strip()
+    if not arguments:
+        return Text()
+    try:
+        parsed = json_utils.loads(arguments)
+    except json_utils.JSONDecodeError:
+        return _approval_block_text("arguments", arguments, palette=palette)
+    if not isinstance(parsed, dict):
+        return _approval_block_text("arguments", json_utils.dumps_pretty(parsed), palette=palette)
+
+    text = Text()
+    displayed: set[str] = set()
+    for key in ("command", "path", "url", "format"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value:
+            _append_approval_field(text, f"arguments.{key}", value, palette=palette)
+            displayed.add(key)
+    urls = parsed.get("urls")
+    if isinstance(urls, list) and urls:
+        _append_approval_field(text, "arguments.urls", ", ".join(str(url) for url in urls), palette=palette)
+        displayed.add("urls")
+    content = parsed.get("content")
+    if isinstance(content, str):
+        if text.plain:
+            text.append("\n")
+        text.append(_approval_block_text("arguments.content preview", content, palette=palette))
+        displayed.add("content")
+
+    remaining = {key: value for key, value in parsed.items() if key not in displayed}
+    if remaining:
+        if text.plain:
+            text.append("\n")
+        text.append(
+            _approval_block_text(
+                "arguments.other",
+                json_utils.dumps_pretty(remaining),
+                palette=palette,
+            )
+        )
+    return text
+
+
+def _approval_block_text(
+    label: str,
+    value: str,
+    *,
+    palette: UiPalette,
+    max_lines: int = 18,
+    max_line_chars: int = 140,
+) -> Text:
+    text = Text()
+    text.append(f"{label}:\n", style=f"bold {palette.muted}")
+    lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    visible = lines[:max_lines]
+    for line in visible:
+        text.append("  ", style=palette.muted)
+        text.append(_truncate_approval_line(line, max_chars=max_line_chars))
+        text.append("\n")
+    omitted = len(lines) - len(visible)
+    if omitted > 0:
+        text.append(f"  ... truncated {omitted} lines\n", style=palette.muted)
+    if text.plain.endswith("\n"):
+        text.rstrip()
+    return text
+
+
+def _truncate_approval_line(value: str, *, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1] + "…"
 
 
 def _handle_local_command(
@@ -1128,7 +1474,11 @@ def _cleanup_background_tasks(
 
 
 @contextlib.contextmanager
-def _esc_interrupt_watcher(interrupt_requested: threading.Event):
+def _esc_interrupt_watcher(
+    interrupt_requested: threading.Event,
+    *,
+    suspend_event: threading.Event | None = None,
+):
     if termios is not None and tty is not None and Path("/dev/tty").exists():
         target = _watch_posix_esc_keypress
     elif msvcrt is not None:
@@ -1140,7 +1490,7 @@ def _esc_interrupt_watcher(interrupt_requested: threading.Event):
     stop_event = threading.Event()
     thread = threading.Thread(
         target=target,
-        args=(interrupt_requested, stop_event),
+        args=(interrupt_requested, stop_event, suspend_event),
         daemon=True,
     )
     thread.start()
@@ -1154,6 +1504,7 @@ def _esc_interrupt_watcher(interrupt_requested: threading.Event):
 def _watch_posix_esc_keypress(
     interrupt_requested: threading.Event,
     stop_event: threading.Event,
+    suspend_event: threading.Event | None = None,
 ) -> None:
     fd: int | None = None
     old_attrs: list[Any] | None = None
@@ -1164,6 +1515,9 @@ def _watch_posix_esc_keypress(
         old_attrs = termios.tcgetattr(fd)
         tty.setcbreak(fd)
         while not stop_event.is_set() and not interrupt_requested.is_set():
+            if suspend_event is not None and suspend_event.is_set():
+                time.sleep(0.05)
+                continue
             readable, _, _ = select.select([fd], [], [], 0.05)
             if not readable:
                 continue
@@ -1188,6 +1542,7 @@ def _watch_posix_esc_keypress(
 def _watch_windows_esc_keypress(
     interrupt_requested: threading.Event,
     stop_event: threading.Event,
+    suspend_event: threading.Event | None = None,
 ) -> None:
     if msvcrt is None:
         return
@@ -1196,6 +1551,9 @@ def _watch_windows_esc_keypress(
     if not callable(kbhit) or not callable(getwch):
         return
     while not stop_event.is_set() and not interrupt_requested.is_set():
+        if suspend_event is not None and suspend_event.is_set():
+            time.sleep(0.05)
+            continue
         try:
             if not kbhit():
                 time.sleep(0.05)
@@ -2904,6 +3262,7 @@ def _format_context_footer(
     mcp_runtime: DeepyMcpRuntime | None = None,
     background_tasks: BackgroundTaskManager | None = None,
     startup_state: _StartupState | None = None,
+    audit_mode: AuditModeState | None = None,
 ) -> str:
     return _build_status_footer(
         session_id,
@@ -2912,6 +3271,7 @@ def _format_context_footer(
         mcp_runtime=mcp_runtime,
         background_tasks=background_tasks,
         startup_state=startup_state,
+        audit_mode=audit_mode,
     ).plain
 
 
@@ -2923,6 +3283,7 @@ def _build_prompt_toolbar_provider(
     mcp_runtime: DeepyMcpRuntime,
     background_tasks: BackgroundTaskManager,
     startup_state: _StartupState,
+    audit_state: AuditModeState | None = None,
 ) -> Callable[[], object]:
     captured_session_id = session_id
     captured_settings = settings
@@ -2936,6 +3297,7 @@ def _build_prompt_toolbar_provider(
                 mcp_runtime=mcp_runtime,
                 background_tasks=background_tasks,
                 startup_state=startup_state,
+                audit_mode=audit_state,
             )
         )
 
@@ -2951,6 +3313,7 @@ def _build_status_footer(
     background_tasks: BackgroundTaskManager | None = None,
     startup_state: _StartupState | None = None,
     active_work: str | None = None,
+    audit_mode: AuditModeState | str | None = None,
 ) -> StatusFooter:
     if settings is None:
         return StatusFooter(())
@@ -2961,6 +3324,7 @@ def _build_status_footer(
             f"model {settings.model.name}[{settings.model.reasoning_mode}]",
             "identity",
         ),
+        StatusFooterSegment(f"audit {_audit_mode_label(audit_mode, settings)}", "metadata"),
     ]
     if project_root is not None:
         segments.append(StatusFooterSegment(f"cwd {format_home_relative_path(project_root)}", "metadata"))
@@ -3000,6 +3364,14 @@ def _build_status_footer(
         ]
     )
     return StatusFooter(tuple(segments)).with_active(active_work)
+
+
+def _audit_mode_label(audit_mode: AuditModeState | str | None, settings: Settings) -> str:
+    if isinstance(audit_mode, AuditModeState):
+        return audit_mode.mode.value
+    if isinstance(audit_mode, str) and audit_mode:
+        return audit_mode
+    return settings.audit.mode.value
 
 
 def _format_session_cache_hit_rate(session_entry: SessionEntry | None) -> str:
@@ -3607,7 +3979,11 @@ def _print_stream_event(
         call_id = _string_payload(event.payload.get("call_id"))
         call = pending_tool_calls.pop(call_id, None) if pending_tool_calls is not None else None
         call_summary = call.summary if call is not None else ""
-        summary = format_tool_progress_summary(call_summary, event.text)
+        summary = (
+            _audit_rejection_tool_summary(call.name if call is not None else view.name)
+            if _is_audit_rejection_tool_output(event.text)
+            else format_tool_progress_summary(call_summary, event.text)
+        )
         diff = render_tool_diff_preview(
             event.text,
             palette=palette,
@@ -3643,6 +4019,15 @@ def _stream_event_writes_terminal(event: DeepyStreamEvent) -> bool:
     if event.kind == "tool_call":
         return bool((event.name or "").startswith("subagent_"))
     return event.kind in {"tool_output", "status"}
+
+
+def _is_audit_rejection_tool_output(output: str) -> bool:
+    normalized = output.strip().lower()
+    return "audit approval" in normalized and "reject" in normalized
+
+
+def _audit_rejection_tool_summary(tool_name: str) -> str:
+    return f"{format_tool_display_label(tool_name or 'tool')} rejected"
 
 
 def _silent_generation_status_detail(event: DeepyStreamEvent) -> str | None:

@@ -239,6 +239,28 @@ def render_tool_diff_preview(
         if view.name == "Write"
         else _limit_lines(raw_diff, max_lines=max_lines)
     )
+    return render_unified_diff_preview(
+        diff,
+        tool_name=view.name,
+        path=view.path,
+        palette=palette,
+        width=width,
+        project_root=project_root,
+    )
+
+
+def render_unified_diff_preview(
+    diff: str,
+    *,
+    tool_name: str,
+    path: str | None = None,
+    max_lines: int | None = None,
+    palette: UiPalette | None = None,
+    width: int | None = None,
+    project_root: str | None = None,
+) -> Group | None:
+    palette = palette or DARK_PALETTE
+    diff = _limit_lines(diff, max_lines=max_lines) if max_lines is not None else diff
     if not diff:
         return None
     sections = split_diff_preview_sections(diff)
@@ -249,7 +271,7 @@ def render_tool_diff_preview(
             renderables.append(
                 render_diff_preview_header(
                     preview,
-                    tool_name=view.name,
+                    tool_name=tool_name,
                     palette=palette,
                     project_root=project_root,
                 )
@@ -259,14 +281,14 @@ def render_tool_diff_preview(
                 for line in preview.lines
             )
         return Group(*renderables)
-    preview = sections[0] if sections else parse_diff_preview_view(diff, path=view.path)
+    preview = sections[0] if sections else parse_diff_preview_view(diff, path=path)
     if not preview.lines:
         return None
     syntax = _diff_preview_syntax(preview, palette)
     return Group(
         render_diff_preview_header(
             preview,
-            tool_name=view.name,
+            tool_name=tool_name,
             palette=palette,
             project_root=project_root,
         ),

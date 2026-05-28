@@ -32,8 +32,8 @@ You can also route a request explicitly with slash commands such as:
 - Built-in subagents do not receive source mutation tools.
 - `tester` receives `test_shell`, not raw unrestricted `shell`.
 - Background or resumable subagents are not part of this version.
-- Full OpenAI Agents SDK approval interruption/resume is deferred; `test_shell`
-  uses Deepy's policy result plus `AskUserQuestion` flow.
+- OpenAI Agents SDK approval interruptions raised inside subagents surface to
+  the outer Deepy session for the user to approve or reject.
 
 ## Custom Subagents
 

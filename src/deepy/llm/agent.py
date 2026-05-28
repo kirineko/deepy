@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from deepy.audit import AuditPolicy
 from deepy.config import Settings
 from deepy.mcp import sdk_mcp_tool_name
 from deepy.prompts import build_system_prompt
@@ -28,6 +29,7 @@ def build_deepy_agent(
     mcp_servers: list[MCPServer] | None = None,
     preferred_mcp_web_search_tools: list[str] | None = None,
     emit_event: Any | None = None,
+    audit_policy: AuditPolicy | None = None,
 ):
     from agents import Agent
 
@@ -39,6 +41,7 @@ def build_deepy_agent(
             settings.model.name,
         ),
         preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
+        audit_policy=audit_policy,
     )
     subagent_tools = build_subagent_tools(
         settings,
@@ -52,6 +55,7 @@ def build_deepy_agent(
             settings.model.name,
         ),
         emit_event=emit_event,
+        audit_policy=audit_policy,
     )
     return Agent(
         name="Deepy",
@@ -89,6 +93,7 @@ def build_subagent_tools(
     preferred_mcp_web_search_tools: list[str],
     mimo_schema_compatibility: bool = False,
     emit_event: Any | None = None,
+    audit_policy: AuditPolicy | None = None,
 ) -> list[Any]:
     from agents import Agent
 
@@ -105,6 +110,7 @@ def build_subagent_tools(
                 mimo_schema_compatibility=mimo_schema_compatibility,
                 preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
                 include_tools=set(definition.tools),
+                audit_policy=audit_policy,
             ),
             mcp_servers=_search_mcp_servers_for_subagent(
                 definition,

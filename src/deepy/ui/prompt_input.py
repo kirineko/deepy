@@ -51,6 +51,7 @@ def create_prompt_session(
     slash_commands: list[SlashCommandItem] | None = None,
     history_path: Path | None = None,
     on_interrupt: Callable[[], None] | None = None,
+    on_audit_mode_cycle: Callable[[], None] | None = None,
     input_suggestions: InputSuggestionController | None = None,
     palette: UiPalette | None = None,
     project_root: Path | None = None,
@@ -75,6 +76,7 @@ def create_prompt_session(
         multiline=True,
         key_bindings=build_prompt_key_bindings(
             on_interrupt=on_interrupt,
+            on_audit_mode_cycle=on_audit_mode_cycle,
             input_suggestions=input_suggestions,
         ),
         auto_suggest=InputSuggestionAutoSuggest(input_suggestions)
@@ -149,6 +151,7 @@ def _slash_token_before_cursor(document: Document) -> str | None:
 def build_prompt_key_bindings(
     *,
     on_interrupt: Callable[[], None] | None = None,
+    on_audit_mode_cycle: Callable[[], None] | None = None,
     input_suggestions: InputSuggestionController | None = None,
 ) -> KeyBindings:
     bindings = KeyBindings()
@@ -198,6 +201,12 @@ def build_prompt_key_bindings(
         if apply_current_completion(event):
             return
         event.current_buffer.start_completion(select_first=False)
+
+    @bindings.add("s-tab")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        del event
+        if on_audit_mode_cycle is not None:
+            on_audit_mode_cycle()
 
     @bindings.add("right")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback

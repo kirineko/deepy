@@ -60,6 +60,12 @@ export TAVILY_API_KEY="tvly-your-key"
 `~/.deepy/mcp.json`。
 
 ```toml
+[audit]
+mode = "yolo"
+mcp_safe_tools = [
+  { server = "tavily", tool = "tavily_search" },
+]
+
 [mcp]
 enabled = true
 connect_timeout_seconds = 10
@@ -75,6 +81,20 @@ preferred_server = ""
 preferred_tools = []
 fallback_to_builtin = true
 ```
+
+### `[audit]` MCP 审批字段
+
+Audit mode 控制 MCP tool call 在执行前是否需要审批：
+
+| 模式 | MCP 行为 |
+| --- | --- |
+| `normal` | 所有 MCP tool call 都需要审批。 |
+| `auto` | MCP tool call 默认需要审批，除非精确的 `server` / `tool` 组合列在 `audit.mcp_safe_tools` 中。 |
+| `yolo` | MCP tool call 不弹审批提示，直接执行。 |
+
+`mcp_safe_tools` 使用 MCP server key 和原始 MCP tool name，不使用 SDK
+加前缀后的模型可见名称。这个列表应保持很窄；MCP tool 可能代表 issue 创建、
+数据库写入或本地服务修改等外部副作用。
 
 ### `[mcp]` 字段
 

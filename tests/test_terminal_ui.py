@@ -814,6 +814,43 @@ def test_print_stream_event_renders_write_preview_after_status():
     assert "Edited" not in rendered
 
 
+def test_print_stream_event_renders_audit_rejection_as_tool_status():
+    console = Console(record=True, width=120)
+    pending: dict[str, terminal.ToolCallDisplay] = {}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="shell",
+            payload={
+                "call_id": "call-1",
+                "arguments": json_utils.dumps(
+                    {
+                        "command": "rm -rf leetcode",
+                        "description": "remove leetcode directory",
+                    }
+                ),
+            },
+        ),
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "call-1"},
+            text="Tool execution was rejected by the user audit approval decision.",
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "[Shell] rejected" in rendered
+    assert " raw" not in rendered
+    assert "rm -rf leetcode" not in rendered
+
+
 def test_print_stream_event_passes_console_width_to_diff_preview(monkeypatch):
     console = Console(record=True, width=72)
     captured: dict[str, int | None] = {}
@@ -2651,6 +2688,379 @@ def test_runtime_status_text_uses_segmented_foreground_styles(tmp_path):
     styles = {str(span.style) for span in rendered.spans}
     assert len(styles) >= 4
     assert not any(" on " in style or "bg:" in style for style in styles)
+
+
+def test_terminal_approval_resolver_clears_status_and_shows_choices(monkeypatch):
+    console = Console(record=True)
+    stop_status_refresh = threading.Event()
+    suspend_interrupt_watcher = threading.Event()
+    picker_calls = 0
+    picker_kwargs = {}
+
+    class FakeStatus:
+        cleared = False
+
+        def clear_for_output(self):
+            self.cleared = True
+
+    class FakeThread:
+        joined_timeout: float | None = None
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.joined_timeout = timeout
+
+    def fake_pick_audit_approval(**kwargs):
+        nonlocal picker_calls
+        picker_calls += 1
+        picker_kwargs.update(kwargs)
+        assert suspend_interrupt_watcher.is_set()
+        return terminal.AUDIT_APPROVAL_APPROVE
+
+    status = FakeStatus()
+    status_thread = FakeThread()
+    monkeypatch.setattr(terminal, "pick_audit_approval", fake_pick_audit_approval)
+
+    resolver = terminal._terminal_approval_resolver(
+        console,
+        terminal.DARK_PALETTE,
+        status=status,
+        stop_status_refresh=stop_status_refresh,
+        status_thread_getter=lambda: status_thread,
+        suspend_interrupt_watcher=suspend_interrupt_watcher,
+    )
+    decisions = resolver(
+        [
+            terminal.PendingApproval(
+                index=0,
+                name="mcp_tavily",
+                tool_name="mcp_tavily__tavily_extract",
+                arguments='{"url":"https://example.com"}',
+                action_kind="mcp_tool",
+                server_name="mcp_tavily",
+            )
+        ]
+    )
+
+    assert stop_status_refresh.is_set()
+    assert not suspend_interrupt_watcher.is_set()
+    assert status.cleared is True
+    assert status_thread.joined_timeout == 0.2
+    assert picker_calls == 1
+    assert decisions == [terminal.ApprovalDecision(outcome="approve")]
+    assert picker_kwargs["can_toggle_preview"] is False
+    assert console.export_text() == ""
+    rendered = terminal._ANSI_ESCAPE_RE.sub("", picker_kwargs["panel_text_factory"](False))
+    assert "Approve MCP tool?" in rendered
+    assert "tool: mcp_tavily/mcp_tavily__tavily_extract" in rendered
+    assert "url: https://example.com" in rendered
+    assert "options:" not in rendered
+
+
+def test_terminal_approval_panel_renders_shell_summary_without_raw_fields():
+    console = Console(record=True, width=120)
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="shell",
+                tool_name="shell",
+                arguments=json_utils.dumps(
+                    {
+                        "command": "ls /tmp/project",
+                        "description": "List project directory.",
+                    }
+                ),
+                action_kind="command",
+            ),
+            palette=terminal.DARK_PALETTE,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Approve shell command?" in rendered
+    assert "command: ls /tmp/project" in rendered
+    assert "description: List project directory." in rendered
+    assert "action:" not in rendered
+    assert "agent:" not in rendered
+    assert "arguments." not in rendered
+
+
+def test_terminal_approval_panel_renders_mcp_summary_without_raw_json():
+    console = Console(record=True, width=120)
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="mcp_tavily",
+                tool_name="mcp_tavily__tavily_extract",
+                arguments=json_utils.dumps(
+                    {
+                        "urls": ["https://example.com/a", "https://example.com/b"],
+                        "format": "markdown",
+                    }
+                ),
+                action_kind="mcp_tool",
+                server_name="mcp_tavily",
+            ),
+            palette=terminal.DARK_PALETTE,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Approve MCP tool?" in rendered
+    assert "tool: mcp_tavily/mcp_tavily__tavily_extract" in rendered
+    assert "urls: https://example.com/a, https://example.com/b" in rendered
+    assert "format: markdown" in rendered
+    assert '{"urls"' not in rendered
+    assert "arguments." not in rendered
+
+
+def test_terminal_approval_panel_renders_write_arguments_as_relative_diff(tmp_path):
+    console = Console(record=True, width=120)
+    target = tmp_path / "two_sum.py"
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="Write",
+                tool_name="Write",
+                arguments=json_utils.dumps(
+                    {
+                        "path": str(target),
+                        "content": "from typing import List\n\nclass Solution:\n    pass",
+                    }
+                ),
+                action_kind="text_write",
+            ),
+            palette=terminal.DARK_PALETTE,
+            project_root=tmp_path,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Approve write? two_sum.py" in rendered
+    assert "path: two_sum.py" in rendered
+    assert "[Write] two_sum.py" in rendered
+    assert "from typing import List" in rendered
+    assert "class Solution:" in rendered
+    assert "\\nclass Solution" not in rendered
+    assert "arguments." not in rendered
+
+
+def test_terminal_approval_panel_renders_update_arguments_as_relative_diff(tmp_path):
+    console = Console(record=True, width=120)
+    target = tmp_path / "src" / "app.py"
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="Update",
+                tool_name="Update",
+                arguments=json_utils.dumps(
+                    {
+                        "path": str(target),
+                        "old": "value = 1\n",
+                        "new": "value = 2\n",
+                    }
+                ),
+                action_kind="text_write",
+            ),
+            palette=terminal.DARK_PALETTE,
+            project_root=tmp_path,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Approve update? src/app.py" in rendered
+    assert "path: src/app.py" in rendered
+    assert "[Update] src/app.py" in rendered
+    assert "- value = 1" in rendered
+    assert "+ value = 2" in rendered
+
+
+def test_terminal_approval_panel_falls_back_when_update_diff_context_missing(tmp_path):
+    console = Console(record=True, width=120)
+    target = tmp_path / "src" / "app.py"
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="Update",
+                tool_name="Update",
+                arguments=json_utils.dumps({"path": str(target), "replace_all": True}),
+                action_kind="text_write",
+            ),
+            palette=terminal.DARK_PALETTE,
+            project_root=tmp_path,
+        )
+    )
+
+    rendered = console.export_text()
+    assert "Approve update? src/app.py" in rendered
+    assert "path: src/app.py" in rendered
+    assert "summary:" in rendered
+    assert "[Update]" not in rendered
+
+
+def test_terminal_approval_panel_keeps_outside_project_path_explicit(tmp_path):
+    console = Console(record=True, width=120)
+    outside = tmp_path.parent / "outside.py"
+
+    console.print(
+        terminal._approval_panel(
+            terminal.PendingApproval(
+                index=0,
+                name="Write",
+                tool_name="Write",
+                arguments=json_utils.dumps({"path": str(outside), "content": "print('x')\n"}),
+                action_kind="text_write",
+            ),
+            palette=terminal.DARK_PALETTE,
+            project_root=tmp_path,
+        )
+    )
+
+    rendered = console.export_text()
+    assert f"path: {outside}" in rendered
+    assert "path: outside.py" not in rendered
+
+
+def test_terminal_approval_panel_truncates_and_expands_diff_without_review_line(tmp_path):
+    console = Console(record=True, width=120)
+    content = "\n".join(f"line {index}" for index in range(40)) + "\n"
+    item = terminal.PendingApproval(
+        index=0,
+        name="Write",
+        tool_name="Write",
+        arguments=json_utils.dumps({"path": str(tmp_path / "long.py"), "content": content}),
+        action_kind="text_write",
+    )
+
+    panel, can_expand = terminal._approval_panel_state(
+        item,
+        palette=terminal.DARK_PALETTE,
+        project_root=tmp_path,
+        expanded=False,
+    )
+    console.print(panel)
+    compact = console.export_text()
+    console = Console(record=True, width=120)
+    console.print(
+        terminal._approval_panel(
+            item,
+            palette=terminal.DARK_PALETTE,
+            project_root=tmp_path,
+            expanded=True,
+        )
+    )
+    expanded = console.export_text()
+
+    assert can_expand is True
+    assert "review:" not in compact
+    assert "line 39" not in compact
+    assert "review:" not in expanded
+    assert "line 39" in expanded
+
+
+def test_terminal_approval_diff_full_stays_inside_picker_panel(tmp_path, monkeypatch):
+    console = Console(record=True, width=120)
+    content = "\n".join(f"line {index}" for index in range(40)) + "\n"
+    item = terminal.PendingApproval(
+        index=0,
+        name="Write",
+        tool_name="Write",
+        arguments=json_utils.dumps({"path": str(tmp_path / "long.py"), "content": content}),
+        action_kind="text_write",
+    )
+    picker_kwargs = {}
+
+    def fake_pick_audit_approval(**kwargs):
+        picker_kwargs.update(kwargs)
+        return terminal.AUDIT_APPROVAL_APPROVE
+
+    monkeypatch.setattr(terminal, "pick_audit_approval", fake_pick_audit_approval)
+
+    approved = terminal._collect_terminal_approval_decision(
+        item,
+        console=console,
+        palette=terminal.DARK_PALETTE,
+        project_root=tmp_path,
+        status=None,
+        stop_status_refresh=None,
+        status_thread_getter=None,
+        suspend_interrupt_watcher=None,
+    )
+
+    assert approved is True
+    assert console.export_text() == ""
+    assert picker_kwargs["can_toggle_preview"] is True
+    panel_text_factory = picker_kwargs["panel_text_factory"]
+    compact = panel_text_factory(False)
+    expanded = panel_text_factory(True)
+    assert compact.count("Approve write? long.py") == 1
+    assert expanded.count("Approve write? long.py") == 1
+    assert "line 39" not in compact
+    assert "line 39" in expanded
+
+
+def test_run_once_with_status_routes_approval_picker_to_main_thread(tmp_path, monkeypatch):
+    main_thread = threading.current_thread()
+    picker_threads: list[threading.Thread] = []
+
+    class FakeAsyncRunner:
+        def submit(self, coroutine):
+            future: terminal.Future[RunSummary] = terminal.Future()
+
+            def run() -> None:
+                try:
+                    future.set_result(asyncio.run(coroutine))
+                except BaseException as exc:
+                    future.set_exception(exc)
+
+            threading.Thread(target=run, daemon=True).start()
+            return future
+
+    def fake_pick_audit_approval(**_kwargs):
+        picker_threads.append(threading.current_thread())
+        return terminal.AUDIT_APPROVAL_APPROVE
+
+    async def fake_run_once(prompt, **kwargs):
+        decisions = kwargs["approval_resolver"](
+            [
+                terminal.PendingApproval(
+                    index=0,
+                    name="Write",
+                    tool_name="Write",
+                    arguments='{"path":"/tmp/out.txt","content":"ok"}',
+                    action_kind="text_write",
+                )
+            ]
+        )
+        assert threading.current_thread() is not main_thread
+        assert decisions[0].outcome == "approve"
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "pick_audit_approval", fake_pick_audit_approval)
+
+    summary = _run_once_with_status(
+        Console(record=True),
+        fake_run_once,
+        "hello",
+        project_root=tmp_path,
+        settings=Settings(),
+        async_runner=FakeAsyncRunner(),
+    )
+
+    assert summary.output == "answer: hello"
+    assert picker_threads == [main_thread]
 
 
 def test_styled_runtime_status_line_preserves_fitted_visible_text():

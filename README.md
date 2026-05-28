@@ -295,9 +295,17 @@ compact_trigger_ratio = 0.8
 reserved_context_tokens = 50000
 compact_preserve_recent_messages = 2
 
+[audit]
+mode = "yolo" # normal, auto, or yolo
+
 [ui]
 theme = "dark" # dark or light
 ```
+
+Audit modes control side-effect approval. `normal` asks before managed text
+writes, shell commands, background task stops, and MCP tool calls. `auto`
+auto-approves managed text writes but still asks for commands and untrusted MCP
+tools. `yolo` preserves the high-autonomy default.
 
 Manual configuration commands:
 

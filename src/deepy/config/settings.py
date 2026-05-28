@@ -9,6 +9,8 @@ from typing import Any, Mapping, Self
 
 import tomli_w
 
+from deepy.audit import AuditConfig, AuditMode, DEFAULT_AUDIT_MODE, is_valid_audit_mode
+
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_048_576
@@ -595,6 +597,7 @@ class UiConfig:
 
 @dataclass(frozen=True)
 class Settings:
+    audit: AuditConfig = field(default_factory=AuditConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -613,6 +616,7 @@ class Settings:
         env: Mapping[str, str] | None = None,
     ) -> Self:
         return cls(
+            audit=AuditConfig.from_mapping(_as_mapping(raw.get("audit"))),
             model=ModelConfig.from_mapping(_as_mapping(raw.get("model")), env=env),
             context=ContextConfig.from_mapping(_as_mapping(raw.get("context"))),
             logging=LoggingConfig.from_mapping(_as_mapping(raw.get("logging"))),
@@ -646,6 +650,14 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
     data.pop("path", None)
     if "ui" in data:
         data["ui"].pop("theme_configured", None)
+    if "audit" in data:
+        data["audit"].pop("invalid_mode", None)
+        if "mode" in data["audit"] and isinstance(settings.audit.mode, AuditMode):
+            data["audit"]["mode"] = settings.audit.mode.value
+        if "mcp_safe_tools" in data["audit"]:
+            data["audit"]["mcp_safe_tools"] = [
+                {"server": item.server, "tool": item.tool} for item in settings.audit.mcp_safe_tools
+            ]
     api_key = settings.model.api_key
     if api_key:
         data["model"]["api_key"] = api_key if reveal_secret else mask_secret(api_key)
@@ -659,6 +671,10 @@ def is_valid_ui_theme(value: str) -> bool:
 
 def is_valid_ui_view_mode(value: str) -> bool:
     return value in UI_VIEW_MODES
+
+
+def is_valid_config_audit_mode(value: str) -> bool:
+    return is_valid_audit_mode(value)
 
 
 def is_supported_deepseek_model(value: str) -> bool:
@@ -733,6 +749,10 @@ def write_config(
             "api_key": api_key,
             "thinking": thinking_enabled_for_mode(mode, provider),
             "reasoning_effort": reasoning_effort_for_mode(mode, provider),
+        },
+        "audit": {
+            "mode": DEFAULT_AUDIT_MODE.value,
+            "mcp_safe_tools": [],
         },
         "context": {
             "window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -870,6 +890,20 @@ def update_config_view_mode(config_path: Path, view_mode: str) -> None:
     ui_map = dict(ui) if isinstance(ui, Mapping) else {}
     ui_map["view_mode"] = view_mode
     raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_audit_mode(config_path: Path, audit_mode: str) -> None:
+    if not is_valid_config_audit_mode(audit_mode):
+        raise ValueError("Audit mode must be one of: normal, auto, yolo.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    audit = raw.get("audit")
+    audit_map = dict(audit) if isinstance(audit, Mapping) else {}
+    audit_map["mode"] = audit_mode
+    raw["audit"] = audit_map
     _write_private_toml(path, raw)
 
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+from deepy.audit import ApprovalDecision, AuditMode, AuditModeState, AuditPolicy, PendingApproval, parse_audit_mode
 from deepy.config import Settings, load_settings
 from deepy.sessions import DeepySession
 from deepy.skills import find_skill
@@ -65,6 +67,12 @@ async def run_prompt_once(
     background_tasks: BackgroundTaskManager | None = None,
     should_interrupt: Callable[[], bool] | None = None,
     cancel_mode: Literal["immediate", "after_turn"] = "immediate",
+    audit_mode: AuditMode | str | AuditModeState | None = None,
+    approval_resolver: Callable[
+        [list[PendingApproval]],
+        list[ApprovalDecision] | Awaitable[list[ApprovalDecision]],
+    ]
+    | None = None,
 ) -> RunSummary:
     from agents import RunConfig, Runner
     from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -73,6 +81,10 @@ async def run_prompt_once(
     root = (project_root or Path.cwd()).resolve()
     resolved_settings = settings or load_settings()
     resolved_provider = provider or build_provider_bundle(resolved_settings)
+    audit_state = audit_mode if isinstance(audit_mode, AuditModeState) else AuditModeState(
+        parse_audit_mode(audit_mode, default=resolved_settings.audit.mode)
+    )
+    audit_policy = AuditPolicy(lambda: audit_state.mode, resolved_settings.audit)
     session = DeepySession.open(root, session_id) if session_id else DeepySession.create(root)
     initial_todos, _ = normalize_todo_items(session.todo_state())
     runtime = ToolRuntime(
@@ -84,7 +96,11 @@ async def run_prompt_once(
     )
     created_mcp_runtime: DeepyMcpRuntime | None = None
     if mcp_runtime is None:
-        created_mcp_runtime = DeepyMcpRuntime(resolved_settings, project_root=root)
+        created_mcp_runtime = DeepyMcpRuntime(
+            resolved_settings,
+            project_root=root,
+            audit_policy=audit_policy,
+        )
         mcp_runtime = created_mcp_runtime
         await mcp_runtime.connect()
     loaded_skills = _resolve_loaded_skills(root, prompt, skill_names)
@@ -97,6 +113,7 @@ async def run_prompt_once(
         mcp_servers=mcp_runtime.active_servers,
         preferred_mcp_web_search_tools=mcp_runtime.preferred_web_search_tools,
         emit_event=emit_event,
+        audit_policy=audit_policy,
     )
     prefix_snapshot = build_cache_prefix_snapshot(
         resolved_settings,
@@ -158,49 +175,74 @@ async def run_prompt_once(
     prefix_token: Any | None = None
     try:
         prefix_token = set_current_cache_prefix_snapshot(prefix_snapshot)
-        result = Runner.run_streamed(
-            agent,
-            input=prompt,
-            max_turns=max_turns,
-            run_config=run_config,
-            session=session,  # ty: ignore[invalid-argument-type] - DeepySession matches the SDK Session protocol at runtime.
-        )
-        if should_interrupt is not None:
-            interrupt_task = asyncio.create_task(
-                _watch_stream_interrupt(
-                    result,
-                    should_interrupt=should_interrupt,
-                    cancel_mode=cancel_mode,
-                )
+        run_input: Any = prompt
+        while True:
+            result = Runner.run_streamed(
+                agent,
+                input=run_input,
+                max_turns=max_turns,
+                run_config=run_config,
+                session=session,  # ty: ignore[invalid-argument-type] - DeepySession matches the SDK Session protocol at runtime.
             )
-        async for event in result.stream_events():
-            if should_interrupt is not None and should_interrupt():
-                _cancel_stream_result(result, mode=cancel_mode)
-                interrupted = True
-                break
-            normalized = normalize_stream_event(event)
-            if normalized is None:
-                continue
-            if normalized.kind == "usage":
-                usage = merge_usage(usage, normalize_usage(normalized.payload.get("usage")))
-            if emit_event is not None:
-                emit_event(normalized)
-            if normalized.kind == "tool_output":
-                questions = _pending_questions_from_tool_output(normalized.text)
-                if questions:
-                    pending_questions = questions
-                    waiting_for_user = True
-                    _cancel_stream_result(result, mode="after_turn")
+            if should_interrupt is not None:
+                interrupt_task = asyncio.create_task(
+                    _watch_stream_interrupt(
+                        result,
+                        should_interrupt=should_interrupt,
+                        cancel_mode=cancel_mode,
+                    )
+                )
+            async for event in result.stream_events():
+                if should_interrupt is not None and should_interrupt():
+                    _cancel_stream_result(result, mode=cancel_mode)
+                    interrupted = True
                     break
-            if normalized.kind != "text_delta" or not normalized.text:
-                continue
-            chunks.append(normalized.text)
-            if emit is not None:
-                emit(normalized.text)
-            if should_interrupt is not None and should_interrupt():
-                _cancel_stream_result(result, mode=cancel_mode)
-                interrupted = True
+                normalized = normalize_stream_event(event)
+                if normalized is None:
+                    continue
+                if normalized.kind == "usage":
+                    usage = merge_usage(usage, normalize_usage(normalized.payload.get("usage")))
+                if emit_event is not None:
+                    emit_event(normalized)
+                if normalized.kind == "tool_output":
+                    questions = _pending_questions_from_tool_output(normalized.text)
+                    if questions:
+                        pending_questions = questions
+                        waiting_for_user = True
+                        _cancel_stream_result(result, mode="after_turn")
+                        break
+                if normalized.kind != "text_delta" or not normalized.text:
+                    continue
+                chunks.append(normalized.text)
+                if emit is not None:
+                    emit(normalized.text)
+                if should_interrupt is not None and should_interrupt():
+                    _cancel_stream_result(result, mode=cancel_mode)
+                    interrupted = True
+                    break
+            interrupted = interrupted or await _finish_interrupt_task(interrupt_task)
+            interrupt_task = None
+            if interrupted or waiting_for_user:
                 break
+            interruptions = list(getattr(result, "interruptions", []) or [])
+            if not interruptions:
+                break
+            state = result.to_state()
+            decisions = await _approval_decisions(
+                interruptions,
+                approval_resolver=approval_resolver,
+            )
+            for interruption, decision in zip(interruptions, decisions, strict=False):
+                if decision.outcome == "approve":
+                    state.approve(interruption, always_approve=decision.always)
+                else:
+                    state.reject(
+                        interruption,
+                        always_reject=decision.always,
+                        rejection_message=decision.rejection_message
+                        or "Tool execution was rejected by the user audit approval decision.",
+                    )
+            run_input = state
         if prefix_token is not None:
             reset_current_cache_prefix_snapshot(prefix_token)
             prefix_token = None
@@ -373,6 +415,123 @@ async def run_prompt_once(
 async def _cleanup_created_mcp(mcp_runtime: DeepyMcpRuntime | None) -> None:
     if mcp_runtime is not None:
         await mcp_runtime.cleanup()
+
+
+async def _approval_decisions(
+    interruptions: list[Any],
+    *,
+    approval_resolver: Callable[
+        [list[PendingApproval]],
+        list[ApprovalDecision] | Awaitable[list[ApprovalDecision]],
+    ]
+    | None,
+) -> list[ApprovalDecision]:
+    pending = [_pending_approval_from_interruption(index, item) for index, item in enumerate(interruptions)]
+    if approval_resolver is None:
+        return [
+            ApprovalDecision(
+                outcome="reject",
+                rejection_message="Tool execution requires audit approval, but no approval UI is available.",
+            )
+            for _ in pending
+        ]
+    resolved = approval_resolver(pending)
+    if inspect.isawaitable(resolved):
+        resolved = await resolved
+    decisions = list(cast(list[ApprovalDecision], resolved))
+    if len(decisions) < len(pending):
+        decisions = [
+            *decisions,
+            *[
+                ApprovalDecision(
+                    outcome="reject",
+                    rejection_message="Tool execution was rejected because no audit decision was provided.",
+                )
+                for _ in range(len(pending) - len(decisions))
+            ],
+        ]
+    return decisions[: len(pending)]
+
+
+def _pending_approval_from_interruption(index: int, item: Any) -> PendingApproval:
+    raw_item = getattr(item, "raw_item", None)
+    tool_name = _approval_tool_name(item, raw_item)
+    arguments = _approval_arguments(item, raw_item)
+    agent = getattr(item, "agent", None)
+    agent_name = str(getattr(agent, "name", "") or "")
+    server_name = _approval_server_name(raw_item, tool_name)
+    return PendingApproval(
+        index=index,
+        name=str(getattr(item, "name", "") or tool_name or "tool"),
+        tool_name=tool_name,
+        arguments=arguments,
+        agent_name=agent_name,
+        action_kind="mcp_tool" if server_name else _approval_action_kind(tool_name),
+        server_name=server_name,
+    )
+
+
+def _approval_tool_name(item: Any, raw_item: Any) -> str:
+    for value in (
+        getattr(item, "tool_name", None),
+        getattr(item, "name", None),
+        getattr(raw_item, "name", None),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(raw_item, dict):
+        value = raw_item.get("name")
+        if isinstance(value, str):
+            return value
+        function = raw_item.get("function")
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            return function["name"]
+    return ""
+
+
+def _approval_arguments(item: Any, raw_item: Any) -> str:
+    for value in (getattr(item, "arguments", None), getattr(raw_item, "arguments", None)):
+        if isinstance(value, str):
+            return value
+    if isinstance(raw_item, dict):
+        value = raw_item.get("arguments")
+        if isinstance(value, str):
+            return value
+        function = raw_item.get("function")
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            return function["arguments"]
+        arguments = raw_item.get("arguments_json") or raw_item.get("input")
+        if arguments is not None:
+            return json_utils.dumps(arguments)
+    arguments = getattr(raw_item, "arguments_json", None)
+    if arguments is not None:
+        return json_utils.dumps(arguments)
+    return ""
+
+
+def _approval_server_name(raw_item: Any, tool_name: str) -> str:
+    for attr in ("server_label", "server_name"):
+        value = getattr(raw_item, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(raw_item, dict):
+        for key in ("server_label", "server_name"):
+            value = raw_item.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if "__" in tool_name:
+        return tool_name.split("__", 1)[0]
+    return ""
+
+
+def _approval_action_kind(tool_name: str) -> str:
+    if tool_name in {"Write", "Update"}:
+        return "text_write"
+    if tool_name == "shell":
+        return "command"
+    if tool_name == "task_stop":
+        return "background_task_control"
+    return "tool"
 
 
 def _resolve_loaded_skills(

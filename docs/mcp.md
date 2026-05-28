@@ -64,6 +64,12 @@ All MCP policy fields are optional. Deepy has in-memory defaults, so most users
 only need `~/.deepy/mcp.json`.
 
 ```toml
+[audit]
+mode = "yolo"
+mcp_safe_tools = [
+  { server = "tavily", tool = "tavily_search" },
+]
+
 [mcp]
 enabled = true
 connect_timeout_seconds = 10
@@ -79,6 +85,21 @@ preferred_server = ""
 preferred_tools = []
 fallback_to_builtin = true
 ```
+
+### `[audit]` MCP Approval Fields
+
+Audit mode controls whether MCP tool calls need approval before execution:
+
+| Mode | MCP behavior |
+| --- | --- |
+| `normal` | Every MCP tool call requires approval. |
+| `auto` | MCP tool calls require approval unless the exact `server` / `tool` pair is listed in `audit.mcp_safe_tools`. |
+| `yolo` | MCP tool calls run without an approval prompt. |
+
+`mcp_safe_tools` uses the original MCP server key and original MCP tool name,
+not the SDK-prefixed model-visible name. Keep this list narrow; MCP tools can
+represent external side effects such as issue creation, database writes, or
+local service mutation.
 
 ### `[mcp]` Fields
 

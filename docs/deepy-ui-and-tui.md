@@ -50,7 +50,15 @@ Main capabilities:
 - Slash-command completion and `@file` completion.
 - Prompt history.
 - Automatic compacting and `compact next` status.
-- Bottom status with model, cwd, AGENTS, MCP count, and context usage.
+- Bottom status with model, audit mode, cwd, AGENTS, MCP count, and context usage.
+- `Shift+Tab` cycles audit mode through `normal`, `auto`, and `yolo`.
+- Audit approval prompts for side-effecting built-in tools and MCP tools. These
+  prompts use task-focused summaries instead of raw SDK fields, show relative
+  paths when a file target is under the project root, and render `Write` /
+  `Update` approvals with highlighted diff previews. Large file diffs include
+  a separate review control above the final `Approve` / `Reject` decision area.
+  Approval prompts are navigated with Up/Down, activated with Enter, and
+  rejected with Esc.
 - First-run setup when API key/model/theme configuration is missing.
 
 ## Deepy TUI

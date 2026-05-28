@@ -30,8 +30,8 @@ Deepy 会把内置 subagent 暴露为模型可调用工具：
 - 内置 subagent 默认没有源码修改工具。
 - `tester` 收到的是 `test_shell`，不是 unrestricted `shell`。
 - 当前版本不支持后台或可恢复 subagent。
-- 完整 OpenAI Agents SDK approval interruption/resume 暂缓；`test_shell`
-  使用 Deepy 的策略结果加 `AskUserQuestion` 流程。
+- subagent 内触发的 OpenAI Agents SDK approval interruption 会冒泡到外层
+  Deepy session，由用户在外层界面 approve 或 reject。
 
 ## 自定义 Subagents
 

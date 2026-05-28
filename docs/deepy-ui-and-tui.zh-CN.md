@@ -42,7 +42,12 @@ Deepy UI 是稳定界面，基于 Rich 和 prompt-toolkit。
 - slash 命令补全和 `@file` 文件补全。
 - prompt history。
 - 自动 compact 和 `compact next` 提示。
-- 底部状态显示 model、cwd、AGENTS、MCP 数量、context 使用量。
+- 底部状态显示 model、audit mode、cwd、AGENTS、MCP 数量、context 使用量。
+- `Shift+Tab` 可在 `normal`、`auto`、`yolo` 三种 audit mode 间切换。
+- 对有副作用的内置工具和 MCP tools 显示 audit 审批提示。审批面板使用面向任务的摘要，
+  不直接展示 SDK 原始字段；文件目标在项目目录内时显示相对路径；`Write` / `Update`
+  审批会显示高亮 diff 预览。大 diff 会在最终 `Approve` / `Reject` 决策区域上方提供独立
+  的 review 控件。审批交互只使用上下键移动、Enter 确认当前选项、Esc 拒绝。
 - 首次缺配置时引导用户配置 API key、model、base URL 和 theme。
 
 ## Deepy TUI
