@@ -1155,7 +1155,8 @@ def _approval_panel_ansi(
             project_root=project_root,
             expanded=expanded,
             width=width,
-        )
+        ),
+        crop=False,
     )
     return buffer.getvalue().rstrip("\n")
 
