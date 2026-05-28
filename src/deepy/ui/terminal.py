@@ -1146,6 +1146,7 @@ def _approval_panel_ansi(
         force_terminal=True,
         color_system=color_system,
         width=width,
+        height=10_000,
     )
     render_console.print(
         _approval_panel(
