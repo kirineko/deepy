@@ -639,6 +639,48 @@ def test_print_stream_event_renders_subagent_lifecycle():
     assert "[Subagent] explore Please review" not in rendered
 
 
+def test_print_stream_event_keeps_successful_subagent_report_with_rejection_text_ok():
+    console = Console(record=True, width=120)
+    pending = {}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_call",
+            name="subagent_explore",
+            payload={
+                "call_id": "sub-1",
+                "arguments": json_utils.dumps({"input": "Check approval rendering"}),
+            },
+        ),
+        pending_tool_calls=pending,
+    )
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(
+            kind="tool_output",
+            payload={"call_id": "sub-1"},
+            text=json_utils.dumps(
+                {
+                    "ok": True,
+                    "name": "subagent_explore",
+                    "output": (
+                        "The previous audit approval was rejected during investigation, "
+                        "but the subagent completed successfully."
+                    ),
+                    "metadata": {"kind": "subagent_result", "subagent": "explore"},
+                    "awaitUserResponse": False,
+                }
+            ),
+        ),
+        pending_tool_calls=pending,
+    )
+
+    rendered = console.export_text()
+    assert "[Subagent] explore rejected" not in rendered
+    assert "[Subagent] explore  ok" in rendered
+
+
 def test_print_stream_event_renders_retryable_invalid_arguments_quietly():
     console = Console(record=True)
     pending = {}

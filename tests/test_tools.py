@@ -219,6 +219,86 @@ def test_function_tool_rejects_unsafe_malformed_write_content_arguments(tmp_path
     assert target.read_text(encoding="utf-8") == "old\n"
 
 
+def test_function_tool_repairs_unquoted_read_range_arguments(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
+
+    payload = decode(
+        asyncio.run(
+            tool.on_invoke_tool(
+                None,
+                '{"path":"a.txt","range": 2-3}',
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["name"] == "Read"
+    assert payload["metadata"]["argumentRepair"] is True
+    assert payload["metadata"]["repairApplied"] is True
+    assert "read_range_string" in payload["metadata"]["repairOperations"]
+    assert payload["metadata"]["startLine"] == 2
+    assert payload["metadata"]["lineCount"] == 2
+    assert "2: two" in payload["output"]
+    assert "3: three" in payload["output"]
+    assert "4: four" not in payload["output"]
+
+
+def test_function_tool_repairs_unquoted_batch_read_ranges(tmp_path):
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("a1\na2\na3\n", encoding="utf-8")
+    second.write_text("b1\nb2\nb3\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
+
+    payload = decode(
+        asyncio.run(
+            tool.on_invoke_tool(
+                None,
+                '{"files":[{"path":"a.txt","range": 2-2},{"path":"b.txt","range": 1-2}]}',
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["name"] == "Read"
+    assert payload["metadata"]["argumentRepair"] is True
+    assert payload["metadata"]["repairApplied"] is True
+    assert "read_range_string" in payload["metadata"]["repairOperations"]
+    assert payload["metadata"]["kind"] == "batch"
+    assert payload["metadata"]["successCount"] == 2
+    assert "2: a2" in payload["output"]
+    assert "1: b1" in payload["output"]
+    assert "2: b2" in payload["output"]
+    assert "3: b3" not in payload["output"]
+
+
+def test_function_tool_rejects_unsafe_malformed_read_range_arguments(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
+
+    payload = decode(
+        asyncio.run(
+            tool.on_invoke_tool(
+                None,
+                '{"path":"a.txt","range": 2-last}',
+            )
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["name"] == "Read"
+    assert payload["metadata"]["error_code"] == "invalid_arguments"
+    assert payload["metadata"]["retryable"] is True
+    assert payload["metadata"]["repairApplied"] is False
+    assert payload["metadata"]["recovery"] == "Pass a valid JSON object matching the tool schema."
+
+
 def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")

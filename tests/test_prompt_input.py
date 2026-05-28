@@ -130,6 +130,67 @@ def test_file_mention_ranking_prefers_basename_matches():
     ]
 
 
+def test_file_mention_completer_short_fragment_matches_nested_paths(tmp_path):
+    (tmp_path / "src" / "deepy").mkdir(parents=True)
+    (tmp_path / "src" / "deepy" / "audit.py").write_text("")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "architecture.md").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    texts = _completion_texts(completer, "inspect @a")
+
+    assert "src/deepy/audit.py" in texts
+    assert "docs/architecture.md" in texts
+
+
+def test_file_mention_completer_bare_at_stays_top_level(tmp_path):
+    (tmp_path / "src" / "deepy").mkdir(parents=True)
+    (tmp_path / "src" / "deepy" / "audit.py").write_text("")
+    (tmp_path / "README.md").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    texts = _completion_texts(completer, "inspect @")
+
+    assert "src/" in texts
+    assert "README.md" in texts
+    assert "src/deepy/" not in texts
+    assert "src/deepy/audit.py" not in texts
+
+
+def test_file_mention_completer_short_fragment_keeps_ignored_paths_filtered(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "alpha.py").write_text("")
+    (tmp_path / "node_modules" / "alpha").mkdir(parents=True)
+    (tmp_path / "node_modules" / "alpha" / "index.js").write_text("")
+    (tmp_path / ".git" / "alpha").mkdir(parents=True)
+    (tmp_path / ".git" / "alpha" / "HEAD").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    texts = _completion_texts(completer, "inspect @a")
+
+    assert "src/alpha.py" in texts
+    assert all("node_modules" not in text for text in texts)
+    assert all(".git" not in text for text in texts)
+
+
+def test_file_mention_completer_short_fragment_prefers_basename_prefix(tmp_path):
+    (tmp_path / "src" / "web").mkdir(parents=True)
+    (tmp_path / "src" / "web" / "fetch.py").write_text("")
+    (tmp_path / "src" / "web" / "prefetch.py").write_text("")
+    (tmp_path / "src" / "features").mkdir(parents=True)
+    (tmp_path / "src" / "features" / "cache.py").write_text("")
+
+    completer = FileMentionCompleter(tmp_path)
+
+    texts = _completion_texts(completer, "inspect @f")
+
+    assert texts.index("src/web/fetch.py") < texts.index("src/web/prefetch.py")
+    assert texts.index("src/web/fetch.py") < texts.index("src/features/cache.py")
+
+
 def test_file_mention_discovery_uses_short_lived_cache(tmp_path):
     (tmp_path / "README.md").write_text("")
     discovery = FileMentionDiscovery(tmp_path, refresh_interval=999)

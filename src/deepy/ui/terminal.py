@@ -104,6 +104,7 @@ from deepy.ui.local_command import (
     shell_tool_result_json,
 )
 from deepy.ui.message_view import (
+    ToolOutputView,
     format_tool_display_name,
     format_tool_display_label,
     format_tool_call_summary,
@@ -3981,7 +3982,7 @@ def _print_stream_event(
         call_summary = call.summary if call is not None else ""
         summary = (
             _audit_rejection_tool_summary(call.name if call is not None else view.name)
-            if _is_audit_rejection_tool_output(event.text)
+            if _is_audit_rejection_tool_output(event.text, view)
             else format_tool_progress_summary(call_summary, event.text)
         )
         diff = render_tool_diff_preview(
@@ -4021,7 +4022,9 @@ def _stream_event_writes_terminal(event: DeepyStreamEvent) -> bool:
     return event.kind in {"tool_output", "status"}
 
 
-def _is_audit_rejection_tool_output(output: str) -> bool:
+def _is_audit_rejection_tool_output(output: str, view: ToolOutputView) -> bool:
+    if view.ok is True:
+        return False
     normalized = output.strip().lower()
     return "audit approval" in normalized and "reject" in normalized
 

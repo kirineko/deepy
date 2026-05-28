@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Label, Markdown, OptionList, Static
 from textual.widgets.option_list import Option
+
+from deepy.audit import PendingApproval
+from deepy.ui.audit_approval_panel import build_approval_view
+from deepy.ui.styles import DARK_PALETTE, UiPalette
+
+
+AUDIT_APPROVAL_APPROVE = "approve"
+AUDIT_APPROVAL_REJECT = "reject"
 
 
 class InfoScreen(ModalScreen[None]):
@@ -53,6 +62,179 @@ class InfoScreen(ModalScreen[None]):
 
     async def action_dismiss(self, result: None = None) -> None:
         self.dismiss(None)
+
+
+class AuditApprovalScreen(ModalScreen[str]):
+    BINDINGS = [
+        Binding("escape", "dismiss", "Reject"),
+        Binding("y", "ignore_letter_shortcut", show=False),
+        Binding("a", "ignore_letter_shortcut", show=False),
+        Binding("n", "ignore_letter_shortcut", show=False),
+        Binding("r", "ignore_letter_shortcut", show=False),
+    ]
+
+    CSS = """
+    AuditApprovalScreen {
+        align: center middle;
+    }
+
+    AuditApprovalScreen > Vertical {
+        width: 112;
+        max-width: 98%;
+        height: auto;
+        max-height: 92%;
+        border: round $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    AuditApprovalScreen > Vertical.-has-preview {
+        height: 92%;
+    }
+
+    AuditApprovalScreen .approval-summary {
+        margin-top: 1;
+    }
+
+    AuditApprovalScreen .approval-preview {
+        height: 1fr;
+        max-height: 1fr;
+        margin-top: 1;
+        border: tall $warning;
+        padding: 0 1;
+    }
+
+    AuditApprovalScreen OptionList {
+        height: 4;
+        max-height: 4;
+        margin-top: 1;
+    }
+
+    AuditApprovalScreen .screen-help {
+        color: $text-muted;
+        margin: 1 0 0 0;
+    }
+    """
+
+    def __init__(
+        self,
+        item: PendingApproval,
+        *,
+        project_root: str | Path | None = None,
+        palette: UiPalette | None = None,
+        width: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.item = item
+        self.project_root = project_root
+        self.palette = palette or DARK_PALETTE
+        self.width = width
+        self._title_label: Label | None = None
+        self._summary: Static | None = None
+        self._container: Vertical | None = None
+        self._preview_container: VerticalScroll | None = None
+        self._preview: Static | None = None
+        self._options: OptionList | None = None
+
+    def compose(self) -> ComposeResult:
+        self._container = Vertical()
+        with self._container:
+            self._title_label = Label("", id="approval-title", classes="block-title")
+            self._summary = Static("", id="approval-summary", classes="approval-summary")
+            self._options = OptionList(id="approval-options")
+            yield self._title_label
+            yield self._summary
+            self._preview_container = VerticalScroll(id="approval-preview", classes="approval-preview")
+            with self._preview_container:
+                self._preview = Static("", id="approval-preview-content")
+                yield self._preview
+            yield self._options
+            yield Static("Use Up/Down to select, Enter to activate, Esc to reject.", classes="screen-help")
+
+    def on_mount(self) -> None:
+        self._refresh_view()
+        self._approval_options().focus()
+
+    @on(OptionList.OptionSelected, "#approval-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        option_id = str(event.option_id or "")
+        if option_id == AUDIT_APPROVAL_APPROVE:
+            self.dismiss(AUDIT_APPROVAL_APPROVE)
+            return
+        if option_id == AUDIT_APPROVAL_REJECT:
+            self.dismiss(AUDIT_APPROVAL_REJECT)
+
+    def action_ignore_letter_shortcut(self) -> None:
+        return
+
+    async def action_dismiss(self, result: str | None = None) -> None:
+        self.dismiss(AUDIT_APPROVAL_REJECT)
+
+    def _refresh_view(self) -> None:
+        view = build_approval_view(
+            self.item,
+            palette=self.palette,
+            project_root=self.project_root,
+            expanded=True,
+            width=self.width,
+        )
+        self._approval_title().update(view.title)
+        summary = f"{view.target_label}: {view.target or '-'}"
+        if view.metadata:
+            summary += "\n" + "\n".join(f"{label}: {value}" for label, value in view.metadata)
+        self._approval_summary().update(summary)
+        preview = self._approval_preview()
+        preview_container = self._approval_preview_container()
+        container = self._approval_container()
+        if view.preview is None:
+            preview.update("")
+            preview_container.display = False
+            container.set_class(False, "-has-preview")
+        else:
+            preview.update(view.preview)
+            preview_container.display = True
+            container.set_class(True, "-has-preview")
+        options = self._approval_options()
+        options.clear_options()
+        options.add_options(
+            [
+                Option("Approve", id=AUDIT_APPROVAL_APPROVE),
+                Option("Reject", id=AUDIT_APPROVAL_REJECT),
+            ]
+        )
+        options.highlighted = 0
+        self.call_after_refresh(options.refresh)
+
+    def _approval_title(self) -> Label:
+        if self._title_label is None:
+            raise RuntimeError("Approval title is not mounted.")
+        return self._title_label
+
+    def _approval_summary(self) -> Static:
+        if self._summary is None:
+            raise RuntimeError("Approval summary is not mounted.")
+        return self._summary
+
+    def _approval_container(self) -> Vertical:
+        if self._container is None:
+            raise RuntimeError("Approval container is not mounted.")
+        return self._container
+
+    def _approval_preview(self) -> Static:
+        if self._preview is None:
+            raise RuntimeError("Approval preview is not mounted.")
+        return self._preview
+
+    def _approval_preview_container(self) -> VerticalScroll:
+        if self._preview_container is None:
+            raise RuntimeError("Approval preview container is not mounted.")
+        return self._preview_container
+
+    def _approval_options(self) -> OptionList:
+        if self._options is None:
+            raise RuntimeError("Approval option list is not mounted.")
+        return self._options
 
 
 @dataclass(frozen=True)

@@ -248,7 +248,7 @@ wheels = [
 
 [[package]]
 name = "deepy-cli"
-version = "0.2.24"
+version = "0.2.25"
 source = { editable = "." }
 dependencies = [
     { name = "openai" },

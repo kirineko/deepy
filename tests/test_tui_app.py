@@ -9,11 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 from textual.command import CommandPalette
-from textual.widgets import Label, OptionList, TextArea
+from textual.widgets import Footer, Label, OptionList, TextArea
 from textual.widgets.option_list import Option
 
 import deepy.tui.app as tui_app
 import deepy.tui.runner as tui_runner
+from deepy.audit import AuditConfig, AuditMode, PendingApproval
 from deepy.config import ModelConfig, Settings, UiConfig
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
@@ -23,7 +24,7 @@ from deepy.skills import SkillInfo
 from deepy.status import BalanceInfo, BalanceStatus
 from deepy.tui.app import DeepyTuiApp
 from deepy.tui.commands import DeepyCommandProvider
-from deepy.tui.screens import ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
+from deepy.tui.screens import AuditApprovalScreen, ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
 from deepy.tui.state import set_session_id
 from deepy.tui.widgets import (
     AssistantBlock,
@@ -128,6 +129,7 @@ def test_tui_help_markdown_advertises_ctrl_j_newline(tmp_path) -> None:
     help_markdown = app._help_markdown()
 
     assert "- **Ctrl+J** - insert newline" in help_markdown
+    assert "- **Shift+Tab** - cycle audit mode" in help_markdown
     assert "**/ps**" in help_markdown
     assert "**/stop**" in help_markdown
     assert "Shift+Enter" not in help_markdown
@@ -545,6 +547,74 @@ async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selectio
         assert options.highlighted == 2
         await pilot.press("enter")
         assert prompt.text == "@ui/"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_suggestions_short_fragment_matches_nested_paths(tmp_path) -> None:
+    tmp_path.joinpath("src", "deepy").mkdir(parents=True)
+    tmp_path.joinpath("src", "deepy", "audit.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("docs").mkdir()
+    tmp_path.joinpath("docs", "architecture.md").write_text("", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        prompt.text = "inspect @a"
+        await pilot.pause(0.01)
+
+        assert "@src/deepy/audit.py" in panel.suggestions
+        assert "@docs/architecture.md" in panel.suggestions
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_suggestions_bare_at_stays_top_level(tmp_path) -> None:
+    tmp_path.joinpath("src", "deepy").mkdir(parents=True)
+    tmp_path.joinpath("src", "deepy", "audit.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("README.md").write_text("", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        prompt.text = "inspect @"
+        await pilot.pause(0.01)
+
+        assert "@src/" in panel.suggestions
+        assert "@README.md" in panel.suggestions
+        assert "@src/deepy/" not in panel.suggestions
+        assert "@src/deepy/audit.py" not in panel.suggestions
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_then_delete_clears_prompt_draft(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "delete this draft"
+        prompt.move_cursor((0, 0))
+
+        await pilot.press("delete")
+        assert prompt.text == "elete this draft"
+
+        prompt.text = "delete this draft"
+        await pilot.press("escape")
+        await pilot.press("delete")
+        assert prompt.text == ""
+
+        prompt.text = "delete this draft"
+        await pilot.press("escape")
+        await pilot.press("backspace")
+        assert prompt.text == ""
         app.exit()
 
 
@@ -1289,6 +1359,238 @@ async def test_tui_status_bar_hides_mcp_when_no_servers(tmp_path, monkeypatch) -
 
         left = str(app.query_one("#status-left", Label).content)
         assert not any(segment.strip().startswith("mcp ") for segment in left.split("·"))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_surfaces_show_runtime_audit_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deepy.tui.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    settings = Settings(audit=AuditConfig(mode=AuditMode.NORMAL))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert "audit normal" in left
+        assert "model deepseek-v4-pro[max]" in left
+        assert "cwd" in left
+
+        await pilot.press("shift+tab")
+        await pilot.pause(0.01)
+
+        left = str(app.query_one("#status-left", Label).content)
+        side = str(app.query_one("#side-status").content)
+        assert "audit auto" in left
+        assert "Audit: auto (runtime, config normal)" in side
+
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/status"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InfoScreen))
+        assert isinstance(app.screen, InfoScreen)
+        assert "- Audit: `auto (runtime, config normal)`" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_shift_tab_cycles_audit_mode_without_consuming_plain_tab(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/re"
+        await pilot.pause(0.01)
+
+        await pilot.press("shift+tab")
+        await pilot.press("shift+tab")
+        await pilot.press("shift+tab")
+        await pilot.pause(0.01)
+
+        assert app.audit_state.mode == AuditMode.NORMAL
+        assert prompt.text == "/re"
+        assert calls == []
+
+        await pilot.press("tab")
+
+        assert prompt.text.startswith("/resume ")
+        assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_screen_uses_shared_summary_and_scrollable_preview(tmp_path) -> None:
+    content = "\n".join(f"line {index}" for index in range(40)) + "\n"
+    item = PendingApproval(
+        index=0,
+        name="Write",
+        tool_name="Write",
+        arguments=json.dumps({"path": str(tmp_path / "long.py"), "content": content}),
+        action_kind="text_write",
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.push_screen(AuditApprovalScreen(item, project_root=tmp_path, width=120))
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, AuditApprovalScreen)
+            and app.screen.query("#approval-title").first(),
+        )
+
+        assert isinstance(app.screen, AuditApprovalScreen)
+        assert "Approve write? long.py" in str(app.screen.query_one("#approval-title", Label).content)
+        assert "path: long.py" in str(app.screen.query_one("#approval-summary").content)
+        options = app.screen.query_one("#approval-options", OptionList)
+        preview = app.screen.query_one("#approval-preview")
+        assert options.option_count == 2
+        assert preview.allow_vertical_scroll
+        assert preview.region.y < options.region.y
+        assert options.region.height >= 4
+
+        await pilot.press("y")
+        await pilot.press("a")
+        await pilot.press("n")
+        await pilot.press("r")
+        assert isinstance(app.screen, AuditApprovalScreen)
+
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: not isinstance(app.screen, AuditApprovalScreen))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_screen_hides_empty_preview_for_shell(tmp_path) -> None:
+    item = PendingApproval(
+        index=0,
+        name="shell",
+        tool_name="shell",
+        arguments=json.dumps(
+            {
+                "command": f"mkdir -p {tmp_path / 'leetcode'}",
+                "description": "创建 leetcode 目录",
+            }
+        ),
+        action_kind="command",
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.push_screen(AuditApprovalScreen(item, project_root=tmp_path, width=120))
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, AuditApprovalScreen)
+            and app.screen.query("#approval-title").first(),
+        )
+
+        assert isinstance(app.screen, AuditApprovalScreen)
+        assert "Approve shell command?" in str(app.screen.query_one("#approval-title", Label).content)
+        assert "command:" in str(app.screen.query_one("#approval-summary").content)
+        assert app.screen.query_one("#approval-preview").display is False
+        assert not app.screen.query(Footer)
+        options = app.screen.query_one("#approval-options", OptionList)
+        assert options.option_count == 2
+        assert str(options.get_option_at_index(0).prompt) == "Approve"
+        assert str(options.get_option_at_index(1).prompt) == "Reject"
+        assert options.region.height >= 4
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_resolver_approves_and_resumes_turn_without_transcript_noise(tmp_path) -> None:
+    decisions: list[str] = []
+    audit_modes: list[object] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        audit_modes.append(kwargs["audit_mode"])
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="shell",
+                    tool_name="shell",
+                    arguments=json.dumps({"command": "pwd", "description": "show cwd"}),
+                    action_kind="command",
+                )
+            ]
+        )
+        decisions.extend(decision.outcome for decision in resolved)
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "needs approval"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: isinstance(app.screen, AuditApprovalScreen))
+
+        assert isinstance(app.screen, AuditApprovalScreen)
+        assert "Approve shell command?" in str(app.screen.query_one("#approval-title", Label).content)
+
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: decisions == ["approve"] and app.state.session_id == "s1")
+
+        assert audit_modes == [app.audit_state]
+        assert [block.body for block in app.query(UserBlock)] == ["needs approval"]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_resolver_rejects_with_escape_and_resumes_turn(tmp_path) -> None:
+    decisions: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="mcp_web",
+                    tool_name="mcp_web__fetch",
+                    arguments=json.dumps({"url": "https://example.test"}),
+                    action_kind="mcp_tool",
+                    server_name="mcp_web",
+                )
+            ]
+        )
+        decisions.extend(decision.outcome for decision in resolved)
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "needs mcp"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: isinstance(app.screen, AuditApprovalScreen))
+
+        assert isinstance(app.screen, AuditApprovalScreen)
+        assert "Approve MCP tool?" in str(app.screen.query_one("#approval-title", Label).content)
+
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: decisions == ["reject"] and app.state.session_id == "s1")
         app.exit()
 
 

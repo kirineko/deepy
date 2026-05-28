@@ -14,7 +14,6 @@ from prompt_toolkit.document import Document
 
 DEFAULT_FILE_MENTION_LIMIT = 1000
 DEFAULT_FILE_MENTION_REFRESH_INTERVAL = 2.0
-DEEP_SEARCH_MIN_FRAGMENT_LENGTH = 3
 
 _IGNORED_NAMES = frozenset(
     {
@@ -292,7 +291,7 @@ class FileMentionCompleter(Completer):
             )
 
     def _paths_for_fragment(self, fragment: str) -> list[str]:
-        if "/" not in fragment and len(fragment) < DEEP_SEARCH_MIN_FRAGMENT_LENGTH:
+        if "/" not in fragment and not fragment:
             return self._discovery.top_level_paths()
         scope = fragment.rsplit("/", 1)[0] if "/" in fragment else None
         return self._discovery.deep_paths(scope)

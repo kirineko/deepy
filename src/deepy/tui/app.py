@@ -18,6 +18,7 @@ from textual.reactive import var
 from textual.widget import MountError
 from textual.widgets import Footer, Header, Label, Static
 
+from deepy.audit import ApprovalDecision, AuditModeState, PendingApproval
 from deepy.background_tasks import BackgroundTaskManager, BackgroundTaskSnapshot
 from deepy.config import (
     PROVIDER_CATALOG,
@@ -79,6 +80,8 @@ from deepy.tui.commands import (
 )
 from deepy.tui.diff import diff_view_from_tool_output
 from deepy.tui.screens import (
+    AUDIT_APPROVAL_APPROVE,
+    AuditApprovalScreen,
     Choice,
     ChoiceScreen,
     InfoScreen,
@@ -175,6 +178,7 @@ class DeepyTuiApp(App[None]):
         Binding("ctrl+d", "confirm_quit", "Quit", priority=True),
         Binding("escape", "interrupt_or_focus_prompt", "Interrupt"),
         Binding("ctrl+o", "toggle_help_panel", "Panel"),
+        Binding("shift+tab", "cycle_audit_mode", "Audit", priority=True),
         Binding("alt+up", "focus_previous_block", "Previous block"),
         Binding("alt+down", "focus_next_block", "Next block"),
     ]
@@ -398,6 +402,7 @@ class DeepyTuiApp(App[None]):
         self.run_once = run_once
         self.guide_missing_config = guide_missing_config
         self.controller = TuiController(settings=settings)
+        self.audit_state = AuditModeState(settings.audit.mode)
         self.input_suggestions = InputSuggestionController(
             enabled=settings.ui.input_suggestions_enabled
         )
@@ -622,6 +627,7 @@ class DeepyTuiApp(App[None]):
                 "- **Ctrl+J** - insert newline\n"
                 "- **Ctrl+P** - command palette\n"
                 "- **Ctrl+O** - toggle side panel\n"
+                "- **Shift+Tab** - cycle audit mode\n"
                 "- **Alt+Up / Alt+Down** - move between transcript blocks\n"
                 "- **Ctrl+Up / Ctrl+Down** - prompt history\n"
                 "- **Ctrl+D twice** - exit",
@@ -651,6 +657,7 @@ class DeepyTuiApp(App[None]):
             f"- Session: `{self.state.session_id or 'new'}`",
             f"- Theme: `{self.settings.ui.theme}`",
             f"- View: `{self.settings.ui.view_mode}`",
+            f"- Audit: `{_format_tui_audit_mode(self.audit_state, self.settings)}`",
             f"- Input suggestions: `{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}`",
             f"- Loaded skills: `{', '.join(self.controller.loaded_skill_names) or 'none'}`",
             f"- Sessions: `{report.session_count}`",
@@ -1357,6 +1364,8 @@ class DeepyTuiApp(App[None]):
                 session_id=self.state.session_id,
                 skill_names=skill_names,
                 background_tasks=self.background_tasks,
+                audit_mode=self.audit_state,
+                approval_resolver=self._tui_approval_resolver,
             )
         except Exception as exc:
             self.post_message(TurnFailedMessage(exc))
@@ -1392,6 +1401,27 @@ class DeepyTuiApp(App[None]):
         self.state = set_busy(self.state, False, "Error")
         await self._append_block(ErrorBlock(str(message.error)))
         self._update_status("Error")
+
+    async def _tui_approval_resolver(self, pending: list[PendingApproval]) -> list[ApprovalDecision]:
+        decisions: list[ApprovalDecision] = []
+        for item in pending:
+            choice = await self.push_screen_wait(
+                AuditApprovalScreen(
+                    item,
+                    project_root=self.project_root,
+                    width=max(40, self.size.width - 6),
+                )
+            )
+            approved = choice == AUDIT_APPROVAL_APPROVE
+            decisions.append(
+                ApprovalDecision(
+                    outcome="approve" if approved else "reject",
+                    rejection_message=None
+                    if approved
+                    else "Tool execution was rejected by the user audit approval decision.",
+                )
+            )
+        return decisions
 
     @on(QuestionBlock.Answered)
     async def on_question_answered(self, message: QuestionBlock.Answered) -> None:
@@ -1686,6 +1716,7 @@ class DeepyTuiApp(App[None]):
                 self.state.session_id,
                 self.controller.loaded_skill_names,
                 self._todo_text,
+                audit_state=self.audit_state,
             )
         )
 
@@ -1707,7 +1738,12 @@ class DeepyTuiApp(App[None]):
             project_root=self.project_root,
             settings=self.settings,
             background_tasks=self.background_tasks,
+            audit_state=self.audit_state,
         )
+
+    def action_cycle_audit_mode(self) -> None:
+        mode = self.audit_state.cycle()
+        self._update_status(f"Audit {mode.value}")
 
     def action_confirm_quit(self) -> None:
         if self.state.quit_confirm_pending:
@@ -1810,7 +1846,9 @@ class DeepyTuiApp(App[None]):
             self.state = request_interrupt(self.state)
             self._update_status("Interrupt requested")
             return
-        self.query_one("#prompt-input", PromptTextArea).focus()
+        prompt = self.query_one("#prompt-input", PromptTextArea)
+        prompt.prepare_clear_on_next_delete()
+        prompt.focus()
 
     def action_focus_next_block(self) -> None:
         blocks = list(self.query(".transcript-block"))
@@ -2103,11 +2141,13 @@ def _build_tui_status_context(
     project_root: Path,
     settings: Settings,
     background_tasks: BackgroundTaskManager | None = None,
+    audit_state: AuditModeState | None = None,
 ) -> str:
     segments = [
         f"provider {settings.model.provider}",
         f"model {settings.model.name}[{settings.model.reasoning_mode}]",
         f"cwd {format_home_relative_path(project_root)}",
+        f"audit {_active_tui_audit_mode(audit_state, settings)}",
     ]
     if has_agents_instructions(project_root):
         segments.append("[AGENTS.md]")
@@ -2145,6 +2185,8 @@ def _format_tui_side_status(
     session_id: str | None,
     loaded_skill_names: list[str],
     todo_text: str,
+    *,
+    audit_state: AuditModeState | None = None,
 ) -> str:
     session_entry = _tui_session_entry(project_root, session_id)
     lines = [
@@ -2152,6 +2194,7 @@ def _format_tui_side_status(
         f"Provider: {settings.model.provider}",
         f"Model: {settings.model.name}",
         f"Thinking: {settings.model.reasoning_mode}",
+        f"Audit: {_format_tui_audit_mode(audit_state, settings)}",
         f"Session: {session_id or 'new'}",
         f"Cache: {_format_tui_cache_status(session_entry)}",
         f"Skills: {', '.join(loaded_skill_names) or 'none'}",
@@ -2159,6 +2202,20 @@ def _format_tui_side_status(
     if todo_text:
         lines.extend(["", "Todos:", todo_text])
     return "\n".join(lines)
+
+
+def _active_tui_audit_mode(audit_state: AuditModeState | None, settings: Settings) -> str:
+    if audit_state is not None:
+        return audit_state.mode.value
+    return settings.audit.mode.value
+
+
+def _format_tui_audit_mode(audit_state: AuditModeState | None, settings: Settings) -> str:
+    active = _active_tui_audit_mode(audit_state, settings)
+    configured = settings.audit.mode.value
+    if active == configured:
+        return active
+    return f"{active} (runtime, config {configured})"
 
 
 def _format_tui_cache_status(session_entry: Any | None) -> str:

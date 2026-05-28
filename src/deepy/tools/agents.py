@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
@@ -283,7 +284,10 @@ def build_function_tools(
             name="Read",
             description=(
                 "Read one or more project files or directories. Use files=[...] to read "
-                "multiple targets in one call; use range/head/tail/offset/limit for slices."
+                'multiple targets in one call; use quoted range strings like {"path": '
+                '"src/app.py", "range": "80-120"} or {"files": [{"path": '
+                '"src/app.py", "range": "80-120"}]}. Use head/tail/offset/limit '
+                "for other slices."
             ),
             params_json_schema=READ_SCHEMA,
             on_invoke_tool=invoke_read,
@@ -406,7 +410,7 @@ def _tool_args(
     try:
         parsed = json_utils.loads(raw_input or "{}")
     except json_utils.JSONDecodeError as exc:
-        repaired, repair_metadata = _repair_tool_arguments(raw_input or "")
+        repaired, repair_metadata = _repair_tool_arguments(raw_input or "", tool_name=tool_name)
         if repaired is not None:
             try:
                 parsed = json_utils.loads(repaired)
@@ -460,11 +464,15 @@ def _invalid_tool_arguments_result(
     ).to_json()
 
 
-def _repair_tool_arguments(raw_input: str) -> tuple[str | None, dict[str, Any]]:
+def _repair_tool_arguments(raw_input: str, *, tool_name: str) -> tuple[str | None, dict[str, Any]]:
     repaired = raw_input.strip()
     if not repaired:
         return None, {}
     operations: list[str] = []
+    if tool_name == "Read":
+        repaired, changed = _quote_unquoted_read_ranges(repaired)
+        if changed:
+            operations.append("read_range_string")
     repaired, changed = _replace_unquoted_python_literals(repaired)
     if changed:
         operations.append("json_literals")
@@ -479,6 +487,24 @@ def _repair_tool_arguments(raw_input: str) -> tuple[str | None, dict[str, Any]]:
         "repairApplied": True,
         "repairOperations": operations,
     }
+
+
+def _quote_unquoted_read_ranges(value: str) -> tuple[str, bool]:
+    pattern = re.compile(
+        r'(?P<lead>(?:^|[,{]\s*))(?P<key>"range"|range)\s*:\s*'
+        r'(?P<start>[1-9]\d*)\s*-\s*(?P<end>[1-9]\d*)'
+        r'(?P<trail>\s*(?=[,}\]]))'
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        return (
+            f'{match.group("lead")}"range": '
+            f'"{match.group("start")}-{match.group("end")}"'
+            f'{match.group("trail")}'
+        )
+
+    repaired, count = pattern.subn(replace, value)
+    return repaired, count > 0
 
 
 def _replace_unquoted_python_literals(value: str) -> tuple[str, bool]:

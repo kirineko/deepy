@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import cast
 
@@ -95,6 +96,10 @@ class _KeyboardProtocolTextMixin:
 
 
 class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
+    _clear_draft_delete_deadline: float | None = None
+    _CLEAR_DRAFT_DELETE_WINDOW_SECONDS = 2.0
+    _clock = staticmethod(time.monotonic)
+
     BINDINGS = [
         Binding("enter", "submit", "Send", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
@@ -119,8 +124,25 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
 
     @on(TextArea.Changed)
     def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
+        if self._clear_draft_delete_deadline is not None and not self._normalizing_keyboard_protocol_text:
+            self._clear_draft_delete_deadline = None
         if self._normalize_keyboard_protocol_text():
             event.stop()
+
+    def prepare_clear_on_next_delete(self) -> None:
+        self._clear_draft_delete_deadline = (
+            self._clock() + self._CLEAR_DRAFT_DELETE_WINDOW_SECONDS
+        )
+
+    def action_delete_left(self) -> None:
+        if self._clear_draft_if_pending():
+            return
+        super().action_delete_left()
+
+    def action_delete_right(self) -> None:
+        if self._clear_draft_if_pending():
+            return
+        super().action_delete_right()
 
     def action_submit(self) -> None:
         panel = self.parent
@@ -172,6 +194,18 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
             self.action_history_next()
             return
         super().action_cursor_down(select)
+
+    def _clear_draft_if_pending(self) -> bool:
+        deadline = self._clear_draft_delete_deadline
+        if deadline is None:
+            return False
+        self._clear_draft_delete_deadline = None
+        if self._clock() > deadline:
+            return False
+        if not self.text:
+            return False
+        self.clear()
+        return True
 
 
 class QuestionTextArea(_KeyboardProtocolTextMixin, TextArea):
@@ -322,11 +356,14 @@ class PromptPanel(Vertical):
         mention = extract_file_mention_fragment(text)
         if mention is None:
             return []
-        paths = (
-            self.discovery.top_level_paths()
-            if "/" not in mention.fragment
-            else self.discovery.deep_paths(mention.fragment.rsplit("/", 1)[0])
-        )
+        if "/" not in mention.fragment:
+            paths = (
+                self.discovery.top_level_paths()
+                if not mention.fragment
+                else self.discovery.deep_paths()
+            )
+        else:
+            paths = self.discovery.deep_paths(mention.fragment.rsplit("/", 1)[0])
         return [f"@{path}" for path in rank_file_mention_candidates(paths, mention.fragment)]
 
     def _apply_suggestion(self, text: str, suggestion: str) -> str:
