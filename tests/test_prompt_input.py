@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
+from prompt_toolkit.keys import Keys
 
+from deepy.llm.multimodal import UNSUPPORTED_IMAGE_INPUT_MESSAGE
 from deepy.skills import SkillInfo
 from deepy.ui.file_mentions import FileMentionCompleter
 from deepy.ui.file_mentions import FileMentionDiscovery
 from deepy.ui.file_mentions import extract_file_mention_fragment
 from deepy.ui.file_mentions import is_ignored_file_mention_name
 from deepy.ui.file_mentions import rank_file_mention_candidates
+from deepy.ui import image_input
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.prompt_input import CTRL_D_EXIT_CONFIRM_SIGNAL
 from deepy.ui.prompt_input import PROMPT_MESSAGE
@@ -39,6 +44,7 @@ from deepy.ui.prompt_input import remove_current_slash_token
 from deepy.ui.prompt_input import render_buffer_with_cursor
 from deepy.ui.prompt_input import text_width
 from deepy.ui.prompt_input import toggle_skill_selection
+from deepy.ui.image_input import ClipboardImage, ImageAttachmentController
 from deepy.ui.slash_commands import SlashCommandItem
 from deepy.ui.status_footer import StatusFooter, StatusFooterSegment
 
@@ -90,6 +96,240 @@ def test_file_mention_top_level_discovery_filters_ignored_and_formats_dirs(tmp_p
     assert ".git/" not in paths
     assert "draft file.txt" not in paths
     assert is_ignored_file_mention_name("node_modules")
+
+
+def test_image_attachment_controller_attaches_supported_clipboard_image():
+    controller = ImageAttachmentController(
+        supports_image_input=True,
+        clipboard_reader=lambda: ClipboardImage(data=b"image", mime_type="image/png"),
+    )
+
+    assert controller.paste_from_clipboard()
+    assert controller.labels == "[图片1]"
+    assert controller.display_status == ""
+    attachments = controller.collect_and_reset()
+    assert attachments[0].data_url == "data:image/png;base64,aW1hZ2U="
+    assert controller.display_status == ""
+
+
+def test_image_attachment_controller_collects_only_labels_still_in_prompt_text():
+    controller = ImageAttachmentController(supports_image_input=True)
+    first = controller.attach_image(b"one", "image/png")
+    second = controller.attach_image(b"two", "image/png")
+
+    text, attachments = controller.collect_from_prompt_text(f"inspect {first.display_label}")
+
+    assert text == "inspect"
+    assert attachments == [first]
+    assert second not in attachments
+    assert controller.attachments == []
+
+
+def test_image_attachment_controller_syncs_deleted_prompt_label():
+    controller = ImageAttachmentController(supports_image_input=True)
+    first = controller.attach_image(b"one", "image/png")
+    second = controller.attach_image(b"two", "image/png")
+
+    assert controller.sync_to_prompt_text(f"keep {second.display_label}")
+
+    assert controller.attachments == [second]
+    assert first not in controller.attachments
+
+
+def test_image_attachment_controller_rejects_unsupported_model_without_clearing_text_state():
+    controller = ImageAttachmentController(
+        supports_image_input=False,
+        clipboard_reader=lambda: ClipboardImage(data=b"image", mime_type="image/png"),
+    )
+
+    result = controller.paste_image_from_clipboard()
+    assert result.handled
+    assert "不支持图片输入" in result.notice
+    assert controller.attachments == []
+    assert controller.display_status == ""
+
+
+def test_ctrl_v_unsupported_image_notice_renders_through_terminal_runner(monkeypatch):
+    controller = ImageAttachmentController(
+        supports_image_input=False,
+        clipboard_reader=lambda: ClipboardImage(data=b"image", mime_type="image/png"),
+    )
+    notices: list[str] = []
+    terminal_callbacks = []
+    invalidated: list[bool] = []
+
+    def fake_run_in_terminal(callback):
+        terminal_callbacks.append(callback)
+        callback()
+
+    monkeypatch.setattr("deepy.ui.prompt_input.run_in_terminal", fake_run_in_terminal)
+    bindings = build_prompt_key_bindings(
+        image_attachments=controller,
+        on_image_paste_notice=notices.append,
+    )
+    control_v = next(binding for binding in bindings.bindings if binding.keys == (Keys.ControlV,))
+    buffer = SimpleNamespace(
+        document=Document("typed", cursor_position=5),
+        insert_text=lambda _text: None,
+    )
+    event = SimpleNamespace(
+        current_buffer=buffer,
+        app=SimpleNamespace(
+            clipboard=SimpleNamespace(get_data=lambda: (_ for _ in ()).throw(AssertionError)),
+            invalidate=lambda: invalidated.append(True),
+        ),
+    )
+
+    control_v.handler(event)
+
+    assert terminal_callbacks
+    assert notices == [UNSUPPORTED_IMAGE_INPUT_MESSAGE]
+    assert invalidated == [True]
+
+
+def test_image_attachment_controller_ignores_non_image_clipboard():
+    controller = ImageAttachmentController(
+        supports_image_input=True,
+        clipboard_reader=lambda: None,
+    )
+
+    assert not controller.paste_from_clipboard()
+    assert controller.display_status == ""
+
+
+def test_clipboard_image_reads_macos_copied_image_file(tmp_path, monkeypatch):
+    png_data = b"\x89PNG\r\n\x1a\nimage"
+    path = tmp_path / "screen.png"
+    path.write_bytes(png_data)
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Darwin")
+
+    def fake_run(args, **kwargs):
+        script = " ".join(str(arg) for arg in args)
+        if "POSIX path" in script:
+            return subprocess.CompletedProcess(args, 0, stdout=f"{path}\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=png_data, mime_type="image/png")
+
+
+def test_clipboard_image_reads_macos_raw_png(monkeypatch):
+    png_data = b"\x89PNG\r\n\x1a\nraw"
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Darwin")
+
+    def fake_run(args, **kwargs):
+        script = " ".join(str(arg) for arg in args)
+        if "POSIX path" in script:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if "PNGf" in script:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"«data PNGf{png_data.hex().upper()}»\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=png_data, mime_type="image/png")
+
+
+def test_clipboard_image_reads_linux_uri_list_image_file(tmp_path, monkeypatch):
+    jpeg_data = b"\xff\xd8\xffimage"
+    path = tmp_path / "copied.jpg"
+    path.write_bytes(jpeg_data)
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(image_input.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(args, **kwargs):
+        if "text/uri-list" in args:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"file://{path}\n".encode(),
+                stderr=b"",
+            )
+        return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=jpeg_data, mime_type="image/jpeg")
+
+
+def test_clipboard_image_reads_linux_raw_webp(monkeypatch):
+    webp_data = b"RIFF\x10\x00\x00\x00WEBPVP8 "
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Linux")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(image_input.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(args, **kwargs):
+        if "image/webp" in args:
+            return subprocess.CompletedProcess(args, 0, stdout=webp_data, stderr=b"")
+        return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=webp_data, mime_type="image/webp")
+
+
+def test_clipboard_image_reads_windows_file_drop(tmp_path, monkeypatch):
+    gif_data = b"GIF89aimage"
+    path = tmp_path / "copied.gif"
+    path.write_bytes(gif_data)
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(image_input.shutil, "which", lambda name: "powershell.exe")
+
+    def fake_run(args, **kwargs):
+        script = " ".join(str(arg) for arg in args)
+        if "GetFileDropList" in script:
+            return subprocess.CompletedProcess(args, 0, stdout=f"{path}\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=gif_data, mime_type="image/gif")
+
+
+def test_clipboard_image_reads_windows_raw_image_as_png(monkeypatch):
+    png_data = b"\x89PNG\r\n\x1a\nwindows"
+
+    monkeypatch.setattr(image_input.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(image_input.shutil, "which", lambda name: "powershell.exe")
+
+    def fake_run(args, **kwargs):
+        script = " ".join(str(arg) for arg in args)
+        if "GetFileDropList" in script:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if "ContainsImage" in script:
+            output_path = Path(args[-1])
+            output_path.write_bytes(png_data)
+            return subprocess.CompletedProcess(args, 0, stdout=f"{output_path}\n", stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(image_input.subprocess, "run", fake_run)
+
+    image = image_input.clipboard_image()
+
+    assert image == ClipboardImage(data=png_data, mime_type="image/png")
 
 
 def test_file_mention_scoped_discovery_descends_under_typed_directory(tmp_path):

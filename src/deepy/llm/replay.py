@@ -4,6 +4,8 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Any, cast
 
+from deepy.llm.multimodal import normalize_multimodal_content_blocks
+
 
 def sanitize_model_input_for_chat_completions(input_value: Any) -> Any:
     if not isinstance(input_value, list):
@@ -92,8 +94,16 @@ def _normalize_chat_tool_items(items: Iterable[Any]) -> list[Any]:
                     }
                 )
                 continue
-        normalized.append(item)
+        normalized.append(_normalize_multimodal_item(item))
     return normalized
+
+
+def _normalize_multimodal_item(item: Any) -> Any:
+    if isinstance(item, dict) and "content" in item:
+        normalized = dict(item)
+        normalized["content"] = normalize_multimodal_content_blocks(item.get("content"))
+        return normalized
+    return item
 
 
 def sanitize_chat_completion_stream_event(event: Any) -> Any | None:

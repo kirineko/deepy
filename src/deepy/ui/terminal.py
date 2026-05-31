@@ -58,6 +58,12 @@ from deepy.llm.context import estimate_tokens_for_text
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.compaction import ContextCompactionError
 from deepy.llm.runner import RunSummary, run_prompt_once
+from deepy.llm.multimodal import (
+    format_user_prompt_display,
+    redact_image_data_urls,
+    redacted_content_text,
+    supports_image_input,
+)
 from deepy.mcp import DeepyMcpRuntime, format_mcp_status
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
@@ -103,6 +109,7 @@ from deepy.ui.local_command import (
     run_local_command,
     shell_tool_result_json,
 )
+from deepy.ui.image_input import ImageAttachmentController
 from deepy.ui.message_view import (
     ToolOutputView,
     format_tool_display_name,
@@ -389,12 +396,21 @@ def run_interactive(
     input_suggestions = InputSuggestionController(
         enabled=settings.ui.input_suggestions_enabled
     )
+    image_attachments = ImageAttachmentController(
+        supports_image_input=supports_image_input(settings)
+    )
     prompt_session = _create_interactive_prompt_session(
         root,
         palette,
         loaded_skill_names,
         input_suggestions=input_suggestions,
         audit_state=audit_state,
+        image_attachments=image_attachments,
+        on_image_paste_notice=lambda message: _print_assistant_output(
+            output,
+            message,
+            palette=palette,
+        ),
     )
     async_runner = _AsyncRuntimeWorker()
     mcp_runtime = _create_mcp_runtime(settings, project_root=root, audit_policy=audit_policy)
@@ -444,6 +460,7 @@ def run_interactive(
                         audit_state=audit_state,
                     ),
                     input_suggestions=input_suggestions,
+                    image_attachments=image_attachments,
                 )
                 input_suggestions.dismiss()
             except EOFError:
@@ -468,10 +485,11 @@ def run_interactive(
                 continue
 
             ctrl_d_exit_pending = False
-            if not text:
+            text, pasted_images = image_attachments.collect_from_prompt_text(text)
+            if not text and not pasted_images:
                 continue
 
-            local_command = parse_local_command(text)
+            local_command = parse_local_command(text) if not pasted_images else None
             if local_command is not None:
                 session_id = _handle_local_command(
                     local_command,
@@ -484,7 +502,7 @@ def run_interactive(
                 )
                 continue
 
-            slash = parse_slash_command(text)
+            slash = parse_slash_command(text) if not pasted_images else None
             if slash is not None:
                 if is_subagent_slash_command(slash.name):
                     _print_submitted_user_input(output, text, palette=palette)
@@ -640,10 +658,12 @@ def run_interactive(
                 if slash.name in {"theme", "reset", "model", "view"}:
                     settings = load_theme_settings(settings)
                     input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
+                    image_attachments.supports_image_input = supports_image_input(settings)
                     palette = resolve_ui_palette(settings.ui.theme)
                 if slash.name == "input-suggestion":
                     settings = load_settings(settings.path) if settings.path is not None else settings
                     input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
+                    image_attachments.supports_image_input = supports_image_input(settings)
                 if slash.name in {"skills", "theme", "reset", "model", "input-suggestion", "view"}:
                     prompt_session = _create_interactive_prompt_session(
                         root,
@@ -651,11 +671,21 @@ def run_interactive(
                         loaded_skill_names,
                         input_suggestions=input_suggestions,
                         audit_state=audit_state,
+                        image_attachments=image_attachments,
+                        on_image_paste_notice=lambda message: _print_assistant_output(
+                            output,
+                            message,
+                            palette=palette,
+                        ),
                     )
                 session_id = next_session
                 continue
 
-            _print_submitted_user_input(output, text, palette=palette)
+            _print_submitted_user_input(
+                output,
+                format_user_prompt_display(text, pasted_images),
+                palette=palette,
+            )
             cost_start = _capture_session_cost_start(root, session_id, settings)
             summary = _run_once_with_status(
                 output,
@@ -672,6 +702,7 @@ def run_interactive(
                 startup_state=startup_state,
                 mcp_startup=mcp_startup,
                 audit_mode=audit_state,
+                image_attachments=pasted_images,
             )
             session_id = summary.session_id
             _record_session_cost_start(root, session_id, cost_start)
@@ -729,6 +760,8 @@ def _create_interactive_prompt_session(
     loaded_skill_names: list[str],
     input_suggestions: InputSuggestionController | None = None,
     audit_state: AuditModeState | None = None,
+    image_attachments: ImageAttachmentController | None = None,
+    on_image_paste_notice: Callable[[str], None] | None = None,
 ):
     def cycle_audit_mode() -> None:
         if audit_state is not None:
@@ -742,6 +775,8 @@ def _create_interactive_prompt_session(
         palette=palette,
         project_root=root,
         input_suggestions=input_suggestions,
+        image_attachments=image_attachments,
+        on_image_paste_notice=on_image_paste_notice,
         on_audit_mode_cycle=cycle_audit_mode if audit_state is not None else None,
     )
 
@@ -3060,20 +3095,18 @@ def _tool_output_text(item: dict[str, Any]) -> str:
 
 def _content_text(value: object) -> str:
     if isinstance(value, str):
-        return value
+        return redacted_content_text(value)
     if isinstance(value, list):
-        parts: list[str] = []
-        for part in value:
-            text = _content_text_part(part)
-            if text:
-                parts.append(text)
-        return "\n".join(parts)
+        return redacted_content_text(value)
     if value is None:
         return ""
     value_dict = _string_key_dict(value)
     if value_dict is not None:
+        image_text = redacted_content_text(value_dict)
+        if image_text:
+            return image_text
         text = _content_text_part(value_dict)
-        return text or json_utils.dumps(value_dict)
+        return text or json_utils.dumps(redact_image_data_urls(value_dict))
     if isinstance(value, dict):
         return json_utils.dumps(value)
     return str(value)

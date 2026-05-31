@@ -8,6 +8,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Label, Markdown, OptionList, Static
 from textual.widgets.option_list import Option
@@ -293,7 +294,13 @@ class ChoiceScreen(ModalScreen[str | None]):
             yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one(OptionList).focus()
+        self.call_after_refresh(self._focus_choice_list)
+
+    def _focus_choice_list(self) -> None:
+        try:
+            self.query_one(OptionList).focus()
+        except NoMatches:
+            return
 
     @on(OptionList.OptionSelected)
     def on_option_selected(self, event: OptionList.OptionSelected) -> None:

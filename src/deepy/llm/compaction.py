@@ -132,7 +132,7 @@ async def ensure_context_ready(
     prefix_snapshot: CachePrefixSnapshot | None = None,
     prefix_tools: list[Any] | None = None,
     prefix_mcp_servers: list[Any] | None = None,
-    additional_input: str | None = None,
+    additional_input: Any | None = None,
 ) -> ContextReadiness:
     additional_tokens = estimate_tokens_for_item(additional_input or "")
     state = session.context_token_state()

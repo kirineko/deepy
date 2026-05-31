@@ -13,7 +13,8 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from openai import APIStatusError, BadRequestError
 
 from deepy.config import ContextConfig, Settings
-from deepy.config.settings import LoggingConfig, NotifyConfig
+from deepy.config.settings import LoggingConfig, ModelConfig, NotifyConfig
+from deepy.llm.multimodal import build_prompt_image_attachment
 from deepy.llm.compaction import ContextCompactionError, ContextReadiness
 from deepy.llm.provider import ProviderBundle
 from deepy.llm.runner import DEFAULT_MAX_TURNS, format_deepseek_api_error, run_prompt_once
@@ -344,6 +345,69 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
             instructions=captured[0].instructions,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_sends_supported_image_prompt_as_multipart(monkeypatch, tmp_path):
+    captured: list[object] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured.append(input)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    attachment = build_prompt_image_attachment(data=b"image", mime_type="image/png", index=1)
+
+    await run_prompt_once(
+        "inspect",
+        project_root=tmp_path,
+        settings=Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5")),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        image_attachments=[attachment],
+    )
+
+    assert captured == [
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+                ],
+            }
+        ]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_ignores_image_prompt_for_deepseek_before_model_call(
+    monkeypatch,
+    tmp_path,
+):
+    captured: list[object] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            captured.append(input)
+            return FakeStream()
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    attachment = build_prompt_image_attachment(data=b"image", mime_type="image/png", index=1)
+
+    summary = await run_prompt_once(
+        "inspect",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        image_attachments=[attachment],
+    )
+
+    assert captured == ["inspect"]
+    assert summary.status == "completed"
+    assert summary.output == "hello"
 
 
 @pytest.mark.asyncio
@@ -839,6 +903,38 @@ async def test_run_prompt_once_interrupt_rolls_back_only_persisted_user_input(
         project_root=tmp_path,
         settings=Settings(),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        should_interrupt=lambda: True,
+    )
+
+    items = await DeepySession.open(tmp_path, summary.session_id).get_items()
+    assert summary.status == "interrupted"
+    assert items == []
+    assert streams[0].cancel_calls == ["immediate"]
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_interrupt_rolls_back_persisted_image_user_input(
+    monkeypatch,
+    tmp_path,
+):
+    streams: list[PersistingIdleCancellableStream] = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            stream = PersistingIdleCancellableStream(session, list(input))
+            streams.append(stream)
+            return stream
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+    attachment = build_prompt_image_attachment(data=b"image", mime_type="image/png", index=1)
+
+    summary = await run_prompt_once(
+        "describe",
+        project_root=tmp_path,
+        settings=Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5")),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        image_attachments=[attachment],
         should_interrupt=lambda: True,
     )
 

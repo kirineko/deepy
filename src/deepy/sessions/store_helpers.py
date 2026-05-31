@@ -5,6 +5,7 @@ from typing import Any
 
 from deepy.todos import todo_state_from_tool_output
 from deepy.utils import json as json_utils
+from deepy.llm.multimodal import redacted_content_text
 
 CONTEXT_UNDERCOUNT_REPAIR_RATIO = 2
 CONTEXT_UNDERCOUNT_REPAIR_MIN_DELTA = 128
@@ -173,16 +174,8 @@ def session_status(items: list[dict[str, Any]]) -> str:
 def item_text(item: dict[str, Any]) -> str:
     for key in ("content", "text", "output"):
         value = item.get(key)
-        if isinstance(value, str):
-            return value
-        if isinstance(value, list):
-            parts: list[str] = []
-            for part in value:
-                if isinstance(part, dict):
-                    text = part.get("text") or part.get("input_text")
-                    if isinstance(text, str):
-                        parts.append(text)
-            return "".join(parts)
+        if value is not None:
+            return redacted_content_text(value)
     return ""
 
 

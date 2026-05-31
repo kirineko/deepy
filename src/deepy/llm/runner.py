@@ -30,6 +30,11 @@ from .cache_context import (
 from .compaction import ContextCompactionError, ensure_context_ready
 from .context import build_session_input_callback
 from .events import DeepyStreamEvent, normalize_stream_event
+from .multimodal import (
+    PromptImageAttachment,
+    build_user_input,
+    supports_image_input,
+)
 from .provider import ProviderBundle, build_provider_bundle
 
 DEFAULT_MAX_TURNS = 100
@@ -73,6 +78,7 @@ async def run_prompt_once(
         list[ApprovalDecision] | Awaitable[list[ApprovalDecision]],
     ]
     | None = None,
+    image_attachments: list[PromptImageAttachment] | None = None,
 ) -> RunSummary:
     from agents import RunConfig, Runner
     from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -86,6 +92,9 @@ async def run_prompt_once(
     )
     audit_policy = AuditPolicy(lambda: audit_state.mode, resolved_settings.audit)
     session = DeepySession.open(root, session_id) if session_id else DeepySession.create(root)
+    effective_image_attachments = (
+        list(image_attachments or []) if supports_image_input(resolved_settings) else []
+    )
     initial_todos, _ = normalize_todo_items(session.todo_state())
     runtime = ToolRuntime(
         cwd=root,
@@ -134,7 +143,7 @@ async def run_prompt_once(
             prefix_snapshot=prefix_snapshot,
             prefix_tools=list(getattr(agent, "tools", []) or []),
             prefix_mcp_servers=list(getattr(agent, "mcp_servers", []) or []),
-            additional_input=prompt,
+            additional_input=build_user_input(prompt, effective_image_attachments),
         )
     except ContextCompactionError as exc:
         duration_ms = int((time.time() - started_at) * 1000) if "started_at" in locals() else 0
@@ -175,7 +184,7 @@ async def run_prompt_once(
     prefix_token: Any | None = None
     try:
         prefix_token = set_current_cache_prefix_snapshot(prefix_snapshot)
-        run_input: Any = prompt
+        run_input: Any = build_user_input(prompt, effective_image_attachments)
         while True:
             result = Runner.run_streamed(
                 agent,

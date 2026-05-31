@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from deepy.config.settings import ContextConfig, Settings
+from deepy.config.settings import ModelConfig
 from deepy.llm.context import (
     build_session_input_callback,
     estimate_tokens_for_item,
@@ -19,6 +20,82 @@ def test_session_input_callback_does_not_trim_or_compact():
     prepared = callback(history, new_input)
 
     assert prepared == history + new_input
+
+
+def test_session_input_callback_strips_images_for_text_only_model():
+    settings = Settings(model=ModelConfig(provider="deepseek", name="deepseek-v4-pro"))
+    callback = build_session_input_callback(settings)
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "describe"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="}],
+        },
+    ]
+    new_input = [{"role": "user", "content": "continue"}]
+
+    prepared = callback(history, new_input)
+
+    assert prepared == [
+        {"role": "user", "content": [{"type": "input_text", "text": "describe"}]},
+        {"role": "user", "content": "continue"},
+    ]
+
+
+def test_session_input_callback_preserves_images_for_supported_model():
+    settings = Settings(model=ModelConfig(provider="openrouter", name="xiaomi/mimo-v2.5"))
+    callback = build_session_input_callback(settings)
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "describe"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+            ],
+        }
+    ]
+    new_input = [{"role": "user", "content": "continue"}]
+
+    assert callback(history, new_input) == history + new_input
+
+
+def test_session_input_callback_strips_images_from_resumed_history_but_keeps_text_turn():
+    settings = Settings(model=ModelConfig(provider="deepseek", name="deepseek-v4-pro"))
+    callback = build_session_input_callback(settings)
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "old image"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "old answer",
+        },
+    ]
+    new_input = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "new text"},
+                {"type": "input_image", "image_url": "data:image/png;base64,ignored"},
+            ],
+        }
+    ]
+
+    assert callback(history, new_input) == [
+        {"role": "user", "content": [{"type": "input_text", "text": "old image"}]},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": [{"type": "input_text", "text": "new text"}]},
+    ]
 
 
 def test_should_auto_compact_uses_ratio_or_reserved_context():

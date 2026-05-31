@@ -14,6 +14,7 @@ from textual.reactive import reactive
 from textual.widgets import Label, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from deepy.llm.multimodal import PromptImageAttachment
 from deepy.tui.diff import TuiDiffView, render_unified_diff_rich, render_unified_diff_text
 from deepy.todos import normalize_todo_items, todo_counts
 from deepy.ui.ask_user_question import (
@@ -28,6 +29,7 @@ from deepy.ui.file_mentions import (
     extract_file_mention_fragment,
     rank_file_mention_candidates,
 )
+from deepy.ui.image_input import ImageAttachmentController, image_attachment_input_text
 from deepy.ui.message_view import (
     ToolOutputView,
     build_tool_params_snippet,
@@ -77,6 +79,16 @@ def _end_cursor_location(text: str) -> tuple[int, int]:
     return (len(lines) - 1, len(lines[-1]))
 
 
+def _text_around_cursor(text_area: TextArea) -> tuple[str, str]:
+    row, column = text_area.cursor_location
+    lines = text_area.text.split("\n")
+    offset = 0
+    for line in lines[:row]:
+        offset += len(line) + 1
+    offset += min(column, len(lines[row]) if row < len(lines) else 0)
+    return text_area.text[:offset], text_area.text[offset:]
+
+
 class _KeyboardProtocolTextMixin:
     _normalizing_keyboard_protocol_text = False
 
@@ -104,13 +116,19 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
         Binding("tab", "accept_suggestion", "Accept suggestion", priority=True, show=False),
+        Binding("ctrl+v", "paste_image", "Paste image", priority=True, show=False),
         Binding("ctrl+up", "history_previous", "History previous", priority=True, show=False),
         Binding("ctrl+down", "history_next", "History next", priority=True, show=False),
     ]
 
     class Submitted(Message):
-        def __init__(self, text: str) -> None:
+        def __init__(
+            self,
+            text: str,
+            image_attachments: list[PromptImageAttachment] | None = None,
+        ) -> None:
             self.text = text
+            self.image_attachments = list(image_attachments or [])
             super().__init__()
 
     class SuggestionAccepted(Message):
@@ -121,6 +139,11 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
 
     class HistoryNext(Message):
         pass
+
+    class ImagePasteNotice(Message):
+        def __init__(self, text: str) -> None:
+            self.text = text
+            super().__init__()
 
     @on(TextArea.Changed)
     def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
@@ -148,11 +171,18 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         panel = self.parent
         if isinstance(panel, PromptPanel) and panel.accept_selected_suggestion():
             return
-        text = self.text.strip()
-        if not text:
+        raw_text = self.text.strip()
+        if isinstance(panel, PromptPanel):
+            text, image_attachments = panel.collect_image_prompt(raw_text)
+        else:
+            text = raw_text
+            image_attachments = []
+        if not text and not image_attachments:
             return
-        self.post_message(self.Submitted(text))
+        self.post_message(self.Submitted(text, image_attachments))
         self.clear()
+        if isinstance(panel, PromptPanel):
+            panel.refresh_image_status()
 
     def action_newline(self) -> None:
         self.insert("\n")
@@ -164,6 +194,14 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         if isinstance(panel, PromptPanel) and panel.accept_input_suggestion():
             return
         self.post_message(self.SuggestionAccepted())
+
+    def action_paste_image(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel) and panel.handle_image_paste():
+            return
+        paste = getattr(super(), "action_paste", None)
+        if callable(paste):
+            paste()
 
     def action_cursor_right(self, select: bool = False) -> None:
         panel = self.parent
@@ -250,6 +288,7 @@ class PromptPanel(Vertical):
         slash_commands: list[SlashCommandItem],
         project_root: Path,
         *,
+        image_attachments: ImageAttachmentController | None = None,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
@@ -257,15 +296,21 @@ class PromptPanel(Vertical):
         self.discovery = FileMentionDiscovery(project_root)
         self.suggestions: list[str] = []
         self.input_suggestion: str | None = None
+        self.image_attachments = image_attachments
 
     def compose(self) -> ComposeResult:
         yield Label("Prompt", id="prompt-title")
         yield PromptTextArea(id="prompt-input")
+        yield Label("", id="prompt-images")
         yield Label("", id="prompt-ghost")
         yield OptionList(id="prompt-suggestions")
 
     @on(TextArea.Changed, "#prompt-input")
     def on_prompt_changed(self, event: TextArea.Changed) -> None:
+        if self.image_attachments is not None:
+            changed = self.image_attachments.sync_to_prompt_text(event.text_area.text)
+            if changed:
+                self.refresh_image_status()
         self.refresh_suggestions(event.text_area.text)
 
     def refresh_suggestions(self, text: str) -> None:
@@ -311,6 +356,39 @@ class PromptPanel(Vertical):
 
     def clear_input_suggestion(self) -> None:
         self.set_input_suggestion(None)
+
+    def handle_image_paste(self) -> bool:
+        if self.image_attachments is None:
+            return False
+        result = self.image_attachments.paste_image_from_clipboard()
+        if result.handled:
+            if result.attachment is not None:
+                prompt = self.query_one("#prompt-input", PromptTextArea)
+                before, after = _text_around_cursor(prompt)
+                prompt.insert(
+                    image_attachment_input_text(
+                        result.attachment,
+                        text_before_cursor=before,
+                        text_after_cursor=after,
+                    )
+                )
+            elif result.notice:
+                self.post_message(PromptTextArea.ImagePasteNotice(result.notice))
+            self.refresh_image_status()
+        return result.handled
+
+    def collect_image_prompt(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
+        if self.image_attachments is None:
+            return text, []
+        cleaned_text, attachments = self.image_attachments.collect_from_prompt_text(text)
+        self.refresh_image_status()
+        return cleaned_text, attachments
+
+    def refresh_image_status(self) -> None:
+        label = self.query_one("#prompt-images", Label)
+        status = self.image_attachments.display_status if self.image_attachments is not None else ""
+        label.update(status)
+        label.display = bool(status)
 
     def accept_input_suggestion(self) -> bool:
         if not self.input_suggestion:

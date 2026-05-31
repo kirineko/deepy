@@ -8,8 +8,14 @@ from agents import Model, ModelSettings
 from agents import OpenAIChatCompletionsModel
 
 from deepy.config import Settings
+from deepy.config.settings import infer_provider_from_base_url
 
 from .cache_context import capture_sdk_request_shape
+from .multimodal import (
+    items_contain_image_content,
+    model_supports_image_input,
+    strip_image_content_from_items,
+)
 from .replay import (
     sanitize_chat_completion_stream_event,
     sanitize_model_input_for_chat_completions,
@@ -43,10 +49,21 @@ class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        model_name = str(getattr(self, "model", ""))
+        base_url = str(getattr(self._get_client(), "base_url", "") or "")
+        inferred_provider = infer_provider_from_base_url(base_url) or (
+            "openrouter" if _is_openrouter_base_url(base_url) else ""
+        )
+        if (
+            isinstance(input, list)
+            and items_contain_image_content(input)
+            and not model_supports_image_input(inferred_provider, model_name)
+        ):
+            input = strip_image_content_from_items(input)
         capture_sdk_request_shape(
             system_instructions=system_instructions,
             input=input,
-            model=str(getattr(self, "model", "")),
+            model=model_name,
             model_settings=args[0] if args else None,
             tools=args[1] if len(args) > 1 and isinstance(args[1], list) else None,
             mcp_servers=None,

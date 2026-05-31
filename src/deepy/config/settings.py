@@ -59,6 +59,7 @@ class ModelInfo:
     label: str
     description: str
     supports_thinking: bool = True
+    supports_image_input: bool = False
     default_reasoning_mode: str = "max"
 
 
@@ -102,6 +103,7 @@ OPENROUTER_MODEL_CATALOG = (
         name="xiaomi/mimo-v2.5",
         label="MiMo V2.5",
         description="Xiaomi MiMo V2.5 via OpenRouter.",
+        supports_image_input=True,
         default_reasoning_mode="enabled",
     ),
 )
@@ -116,6 +118,7 @@ XIAOMI_MODEL_CATALOG = (
         name="mimo-v2.5",
         label="MiMo V2.5",
         description="Xiaomi official MiMo V2.5.",
+        supports_image_input=True,
         default_reasoning_mode="enabled",
     ),
 )

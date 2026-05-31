@@ -43,6 +43,12 @@ from deepy.input_suggestions import (
 )
 from deepy.llm.context import estimate_tokens_for_text
 from deepy.llm.events import DeepyStreamEvent
+from deepy.llm.multimodal import (
+    PromptImageAttachment,
+    format_user_prompt_display,
+    redacted_content_text,
+    supports_image_input,
+)
 from deepy.llm.runner import RunSummary
 from deepy.mcp import load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
@@ -133,6 +139,7 @@ from deepy.ui.local_command import (
     run_local_command,
     shell_tool_result_json,
 )
+from deepy.ui.image_input import ImageAttachmentController
 from deepy.ui.message_view import parse_tool_output
 from deepy.ui.session_list import format_session_title
 from deepy.ui.session_picker import ResumeSessionPreview, format_session_time
@@ -240,6 +247,13 @@ class DeepyTuiApp(App[None]):
         margin: 0 1 0 1;
         color: $text-muted;
         text-style: italic;
+    }
+
+    #prompt-images {
+        height: 1;
+        margin: 0 1 0 1;
+        color: $accent;
+        display: none;
     }
 
     #prompt-suggestions {
@@ -406,6 +420,9 @@ class DeepyTuiApp(App[None]):
         self.input_suggestions = InputSuggestionController(
             enabled=settings.ui.input_suggestions_enabled
         )
+        self.image_attachments = ImageAttachmentController(
+            supports_image_input=supports_image_input(settings)
+        )
         self._assistant_block: AssistantBlock | None = None
         self._thinking_block: ThinkingBlock | None = None
         self._tool_blocks: dict[str, ToolBlock] = {}
@@ -431,6 +448,7 @@ class DeepyTuiApp(App[None]):
         yield PromptPanel(
             build_slash_commands(discover_skills(self.project_root)),
             self.project_root,
+            image_attachments=self.image_attachments,
             id="prompt-panel",
         )
         yield Footer()
@@ -466,16 +484,28 @@ class DeepyTuiApp(App[None]):
         if self.state.busy:
             self.notify("Deepy is still working.", severity="warning")
             return
-        local_command = parse_local_command(event.text)
+        image_attachments = list(event.image_attachments)
+        local_command = parse_local_command(event.text) if not image_attachments else None
         if local_command is not None:
             await self._handle_local_command(local_command)
             return
-        if await self._handle_prompt_command(event.text):
+        if not image_attachments and await self._handle_prompt_command(event.text):
             return
         self.controller.add_prompt_history(event.text)
-        await self._append_block(UserBlock(event.text))
+        await self._append_block(UserBlock(format_user_prompt_display(event.text, image_attachments)))
         self._scroll_transcript_to_end(force=True)
-        self._start_model_turn(event.text, list(self.controller.loaded_skill_names), status="Running")
+        self._start_model_turn(
+            event.text,
+            list(self.controller.loaded_skill_names),
+            status="Running",
+            image_attachments=image_attachments,
+        )
+
+    @on(PromptTextArea.ImagePasteNotice)
+    async def on_prompt_image_paste_notice(self, event: PromptTextArea.ImagePasteNotice) -> None:
+        event.stop()
+        await self._append_block(AssistantBlock(event.text))
+        self._scroll_transcript_to_end(force=True)
 
     async def _handle_prompt_command(self, text: str) -> bool:
         slash = parse_slash_command(text)
@@ -542,7 +572,14 @@ class DeepyTuiApp(App[None]):
         await self._append_block(ErrorBlock(f"Unsupported TUI command: /{slash.name}"))
         return True
 
-    def _start_model_turn(self, prompt: str, skill_names: list[str], *, status: str) -> None:
+    def _start_model_turn(
+        self,
+        prompt: str,
+        skill_names: list[str],
+        *,
+        status: str,
+        image_attachments: list[PromptImageAttachment] | None = None,
+    ) -> None:
         self._clear_input_suggestion()
         self._pending_session_cost_start = self._capture_session_cost_start()
         self.state = set_busy(reset_turn_buffers(self.state), True, status)
@@ -551,7 +588,7 @@ class DeepyTuiApp(App[None]):
         self._stream_tokens = 0
         self._tool_blocks.clear()
         self._update_status(status)
-        self.run_model_turn(prompt, skill_names)
+        self.run_model_turn(prompt, skill_names, image_attachments=image_attachments or [])
 
     def invoke_tui_command(self, name: str, argument: str = "") -> None:
         self.run_worker(self._run_tui_command(name, argument), exclusive=False)
@@ -859,6 +896,7 @@ class DeepyTuiApp(App[None]):
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
         self.input_suggestions.set_enabled(self.settings.ui.input_suggestions_enabled)
+        self.image_attachments.supports_image_input = supports_image_input(self.settings)
         self._clear_input_suggestion()
         self._apply_theme()
         await self._append_block(InfoBlock(f"Saved UI theme: {theme}"))
@@ -944,6 +982,7 @@ class DeepyTuiApp(App[None]):
             )
             self.settings = load_settings(self.settings.path)
             self.controller.settings = self.settings
+            self.image_attachments.supports_image_input = supports_image_input(self.settings)
             await self._append_block(
                 InfoBlock(
                     "Saved model: "
@@ -978,6 +1017,7 @@ class DeepyTuiApp(App[None]):
         update_config_view_mode(self.settings.path, selected)
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
+        self.image_attachments.supports_image_input = supports_image_input(self.settings)
         await self._append_block(InfoBlock(_format_view_mode_confirmation(self.settings.ui.view_mode)))
         self._update_status("View updated")
 
@@ -995,6 +1035,7 @@ class DeepyTuiApp(App[None]):
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
         self.input_suggestions.set_enabled(self.settings.ui.input_suggestions_enabled)
+        self.image_attachments.supports_image_input = supports_image_input(self.settings)
         self._clear_input_suggestion()
         await self._append_block(
             InfoBlock(
@@ -1042,6 +1083,7 @@ class DeepyTuiApp(App[None]):
             return
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
+        self.image_attachments.supports_image_input = supports_image_input(self.settings)
         self._apply_theme()
         await self._append_block(InfoBlock(f"Wrote {self.settings.path}"))
         self._update_status("Config reset")
@@ -1353,7 +1395,12 @@ class DeepyTuiApp(App[None]):
         prompt.move_cursor((0, len(prompt.text)))
 
     @work(exclusive=True)
-    async def run_model_turn(self, prompt: str, skill_names: list[str]) -> None:
+    async def run_model_turn(
+        self,
+        prompt: str,
+        skill_names: list[str],
+        image_attachments: list[PromptImageAttachment] | None = None,
+    ) -> None:
         try:
             summary = await self.run_once(
                 prompt,
@@ -1366,6 +1413,7 @@ class DeepyTuiApp(App[None]):
                 background_tasks=self.background_tasks,
                 audit_mode=self.audit_state,
                 approval_resolver=self._tui_approval_resolver,
+                image_attachments=image_attachments or [],
             )
         except Exception as exc:
             self.post_message(TurnFailedMessage(exc))
@@ -1961,17 +2009,15 @@ def _history_tool_output_event(item: dict[str, Any]) -> DeepyStreamEvent:
 
 def _item_text(content: Any) -> str:
     if isinstance(content, str):
-        return content
+        return redacted_content_text(content)
     if isinstance(content, list):
-        parts = []
-        for item in content:
-            text = _content_part_text(item)
-            if text:
-                parts.append(text)
-        return "\n".join(parts)
+        return redacted_content_text(content)
     if content is None:
         return ""
     if isinstance(content, dict):
+        image_text = redacted_content_text(content)
+        if image_text:
+            return image_text
         text = _content_part_text(content)
         return text or json_utils.dumps(content)
     return str(content)

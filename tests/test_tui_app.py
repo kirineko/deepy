@@ -42,6 +42,7 @@ from deepy.tui.widgets import (
 )
 from deepy.sessions import DeepySession
 from deepy.ui.local_command import LocalCommandResult
+from deepy.ui.image_input import ClipboardImage
 from deepy.ui.slash_commands import build_subagent_slash_prompt
 from deepy.usage import TokenUsage
 
@@ -75,6 +76,87 @@ async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable
     prompt.text = text
     prompt.action_submit()
     await _wait_for(pilot, condition)
+
+
+@pytest.mark.asyncio
+async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
+    captured: list[tuple[str, list[object]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "inspect"
+        await pilot.press("ctrl+v")
+        await _wait_for(
+            pilot,
+            lambda: "[图片1]" in app.query_one("#prompt-input", PromptTextArea).text,
+        )
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: captured)
+
+    assert captured[0][0] == "inspect"
+    assert captured[0][1][0].data_url == "data:image/png;base64,aW1hZ2U="
+
+
+@pytest.mark.asyncio
+async def test_tui_rejects_image_paste_for_unsupported_model_without_clearing_text(tmp_path):
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "keep this"
+        await pilot.press("ctrl+v")
+        await _wait_for(
+            pilot,
+            lambda: any("不支持图片输入" in block.markdown for block in app.query(AssistantBlock)),
+        )
+
+        assert prompt.text == "keep this"
+        assert str(app.query_one("#prompt-images", Label).content) == ""
+        assert app.image_attachments.attachments == []
+
+
+@pytest.mark.asyncio
+async def test_tui_deleting_image_label_removes_attachment(tmp_path):
+    captured: list[tuple[str, list[object]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "inspect"
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: "[图片1]" in prompt.text)
+
+        prompt.text = prompt.text.replace("[图片1]", "").strip()
+        await _wait_for(pilot, lambda: app.image_attachments.attachments == [])
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: captured)
+
+    assert captured[0] == ("inspect", [])
 
 
 def test_decode_kitty_text_sequences_decodes_chinese_text_event() -> None:

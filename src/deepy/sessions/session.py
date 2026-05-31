@@ -454,6 +454,14 @@ class DeepySession:
         increment_cache_generation: bool = False,
         reset_cache_generation: bool = False,
     ) -> None:
+        clear_usage_state = (
+            active_tokens is not None
+            and usage is None
+            and latest_context_window_tokens is None
+            and last_usage_tokens is None
+            and last_usage_record_count is None
+            and cache_usage is None
+        )
         with self._transaction() as conn:
             self._update_session_metadata(
                 conn,
@@ -475,6 +483,19 @@ class DeepySession:
                 increment_cache_generation=increment_cache_generation,
                 reset_cache_generation=reset_cache_generation,
             )
+            if clear_usage_state:
+                conn.execute(
+                    """
+                    update sessions
+                    set usage_json = null,
+                        latest_context_window_tokens = null,
+                        last_usage_tokens = null,
+                        last_usage_record_count = null,
+                        cache_usage_json = null
+                    where id = ?
+                    """,
+                    (self.session_id,),
+                )
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:

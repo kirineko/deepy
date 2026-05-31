@@ -12,6 +12,7 @@ from deepy.sessions import (
     project_sessions_db,
     project_sessions_dir,
 )
+from deepy.sessions.store_helpers import session_title
 from deepy.llm.context import estimate_tokens_for_item
 from deepy.llm.cache_context import build_cache_prefix_snapshot
 from deepy.config.settings import ModelConfig, Settings
@@ -65,6 +66,29 @@ async def test_session_index_preserves_created_at_and_lists_sessions(tmp_path):
     assert second_entry.created_at == first_entry.created_at
     assert second_entry.updated_at >= first_entry.updated_at
     assert second_entry.active_tokens >= first_entry.active_tokens
+
+
+@pytest.mark.asyncio
+async def test_session_preview_redacts_image_content(tmp_path):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    session = DeepySession.create(project, deepy_home=home, session_id="images")
+
+    await session.add_items(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect this image"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+                ],
+            }
+        ]
+    )
+
+    items = await session.get_items()
+    assert session_title(items) == "inspect this image [图片1]"
+    assert "aW1hZ2U" not in session_title(items)
 
 
 @pytest.mark.asyncio

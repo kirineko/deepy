@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 from unicodedata import normalize
 
 from prompt_toolkit import PromptSession
@@ -12,11 +12,13 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.application.run_in_terminal import run_in_terminal
 from prompt_toolkit.styles import Style
 
 from deepy.input_suggestions import InputSuggestionController
 from deepy.skills import SkillInfo
 from deepy.ui.file_mentions import FileMentionCompleter
+from deepy.ui.image_input import ImageAttachmentController, image_attachment_input_text
 from deepy.ui.prompt_buffer import PromptBufferState
 from deepy.ui.slash_commands import (
     SlashCommandItem,
@@ -53,6 +55,8 @@ def create_prompt_session(
     on_interrupt: Callable[[], None] | None = None,
     on_audit_mode_cycle: Callable[[], None] | None = None,
     input_suggestions: InputSuggestionController | None = None,
+    image_attachments: ImageAttachmentController | None = None,
+    on_image_paste_notice: Callable[[str], None] | None = None,
     palette: UiPalette | None = None,
     project_root: Path | None = None,
 ) -> PromptSession[str]:
@@ -69,7 +73,7 @@ def create_prompt_session(
     )
     if input_suggestions is not None:
         completer = InputSuggestionAwareCompleter(completer, input_suggestions)
-    return PromptSession(
+    session: PromptSession[str] = PromptSession(
         history=FileHistory(str(path)),
         completer=completer,
         complete_while_typing=True,
@@ -78,12 +82,21 @@ def create_prompt_session(
             on_interrupt=on_interrupt,
             on_audit_mode_cycle=on_audit_mode_cycle,
             input_suggestions=input_suggestions,
+            image_attachments=image_attachments,
+            on_image_paste_notice=on_image_paste_notice,
         ),
         auto_suggest=InputSuggestionAutoSuggest(input_suggestions)
         if input_suggestions is not None
         else None,
         style=prompt_style(palette),
     )
+    if image_attachments is not None:
+
+        def sync_image_attachments(buffer) -> None:  # pragma: no cover - prompt_toolkit callback
+            image_attachments.sync_to_prompt_text(buffer.text)
+
+        session.default_buffer.on_text_changed += sync_image_attachments
+    return session
 
 
 class InputSuggestionAutoSuggest(AutoSuggest):
@@ -153,6 +166,8 @@ def build_prompt_key_bindings(
     on_interrupt: Callable[[], None] | None = None,
     on_audit_mode_cycle: Callable[[], None] | None = None,
     input_suggestions: InputSuggestionController | None = None,
+    image_attachments: ImageAttachmentController | None = None,
+    on_image_paste_notice: Callable[[str], None] | None = None,
 ) -> KeyBindings:
     bindings = KeyBindings()
 
@@ -202,6 +217,31 @@ def build_prompt_key_bindings(
             return
         event.current_buffer.start_completion(select_first=False)
 
+    @bindings.add("c-v", eager=True)
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if image_attachments is not None:
+            result = image_attachments.paste_image_from_clipboard()
+            if result.handled:
+                if result.attachment is not None:
+                    event.current_buffer.insert_text(
+                        image_attachment_input_text(
+                            result.attachment,
+                            text_before_cursor=event.current_buffer.document.text_before_cursor,
+                            text_after_cursor=event.current_buffer.document.text_after_cursor,
+                        )
+                    )
+                elif result.notice and on_image_paste_notice is not None:
+                    run_in_terminal(lambda: on_image_paste_notice(result.notice))
+                event.app.invalidate()
+                return
+        try:
+            clipboard_data = event.app.clipboard.get_data()
+        except Exception:
+            return
+        if clipboard_data.text:
+            event.current_buffer.paste_clipboard_data(clipboard_data)
+            event.app.invalidate()
+
     @bindings.add("s-tab")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         del event
@@ -239,13 +279,45 @@ def prompt_for_input(
     message: AnyFormattedText | None = None,
     bottom_toolbar: AnyFormattedText | None = None,
     input_suggestions: InputSuggestionController | None = None,
+    image_attachments: ImageAttachmentController | None = None,
 ) -> str:
     prompt_message = PROMPT_MESSAGE if message is None else message
     return session.prompt(
         prompt_message,
         placeholder=input_suggestion_placeholder(input_suggestions),
-        bottom_toolbar=prompt_toolbar() if bottom_toolbar is None else bottom_toolbar,
+        bottom_toolbar=prompt_toolbar_with_images(bottom_toolbar, image_attachments),
     ).strip()
+
+
+def prompt_toolbar_with_images(
+    bottom_toolbar: AnyFormattedText | None,
+    image_attachments: ImageAttachmentController | None,
+) -> AnyFormattedText:
+    if image_attachments is None:
+        return prompt_toolbar() if bottom_toolbar is None else bottom_toolbar
+
+    def resolve() -> AnyFormattedText:
+        base = prompt_toolbar() if bottom_toolbar is None else bottom_toolbar
+        if callable(base):
+            base = cast(Callable[[], AnyFormattedText], base)()
+        status = image_attachments.display_status if image_attachments is not None else ""
+        if not status:
+            return base
+        if isinstance(base, list):
+            base_toolbar = cast(StyleAndTextTuples, base)
+            toolbar: StyleAndTextTuples = [
+                *base_toolbar,
+                ("class:toolbar.separator", " · "),
+                ("class:toolbar.loaded", status),
+            ]
+            return toolbar
+        return [
+            ("class:toolbar.context", str(base)),
+            ("class:toolbar.separator", " · "),
+            ("class:toolbar.loaded", status),
+        ]
+
+    return resolve
 
 
 def input_suggestion_placeholder(

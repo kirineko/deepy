@@ -3767,6 +3767,41 @@ def test_run_interactive_waits_for_mcp_before_first_model_turn(tmp_path, monkeyp
     assert events.index("connect-finish") < events.index("run-once")
 
 
+def test_run_interactive_submits_supported_image_only_prompt_as_attachment(tmp_path, monkeypatch):
+    console = Console(record=True, width=160)
+    prompt_calls = 0
+    captured: list[tuple[str, list[object]]] = []
+
+    def fake_prompt_for_input(session, **kwargs):
+        nonlocal prompt_calls
+        prompt_calls += 1
+        if prompt_calls == 1:
+            image_attachments = kwargs["image_attachments"]
+            attachment = image_attachments.attach_image(b"image", "image/png")
+            return attachment.display_label
+        return CTRL_D_EXIT_CONFIRM_SIGNAL
+
+    async def fake_run_once(prompt, **kwargs):
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    monkeypatch.setattr(terminal, "create_prompt_session", lambda **kwargs: object())
+    monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
+
+    result = terminal.run_interactive(
+        Settings(model=ModelConfig(provider="openrouter", name="xiaomi/mimo-v2.5")),
+        project_root=tmp_path,
+        console=console,
+        run_once=fake_run_once,
+        version_update_checker=None,
+    )
+
+    assert result == 0
+    assert captured[0][0] == ""
+    assert captured[0][1][0].data_url == "data:image/png;base64,aW1hZ2U="
+    assert "[图片1]" in console.export_text()
+
+
 def test_run_interactive_local_command_does_not_wait_for_pending_mcp(tmp_path, monkeypatch):
     console = Console(record=True, width=160)
     prompts = iter(["!printf ok", "/exit"])

@@ -30,6 +30,7 @@ from .config import (
 from .config.settings import DEFAULT_UI_THEME, UI_THEMES
 from .errors import format_error_display
 from .llm.cache_context import format_cache_usage
+from .llm.multimodal import redact_image_data_urls
 from .llm.provider import build_provider_bundle
 from .llm.runner import DEFAULT_MAX_TURNS, run_prompt_once
 from .sessions import DeepySession, list_session_entries
@@ -614,7 +615,7 @@ def _cmd_sessions(args: argparse.Namespace) -> int:
                     else 0,
                     "cache_break_reason": entry.cache_break_reason if entry is not None else None,
                     "cache_usage": entry.cache_usage if entry is not None else None,
-                    "items": items,
+                    "items": redact_image_data_urls(items),
                 }
             )
         )

@@ -4,6 +4,8 @@ from math import ceil
 from typing import Any
 
 from deepy.config import Settings
+from deepy.llm.multimodal import item_contains_image_content, strip_image_content_from_items
+from deepy.llm.multimodal import supports_image_input
 from deepy.types.sdk import SessionInputCallback
 from deepy.utils import json as json_utils
 
@@ -28,6 +30,8 @@ def estimate_tokens_for_text(text: str) -> int:
 
 
 def estimate_tokens_for_item(item: Any) -> int:
+    if item_contains_image_content(item):
+        return _estimate_multimodal_item_tokens(item)
     if isinstance(item, str):
         return estimate_tokens_for_text(item)
     if isinstance(item, dict):
@@ -37,13 +41,34 @@ def estimate_tokens_for_item(item: Any) -> int:
     return estimate_tokens_for_text(str(item))
 
 
+def _estimate_multimodal_item_tokens(item: Any) -> int:
+    if not isinstance(item, dict):
+        return estimate_tokens_for_text(str(item))
+    content = item.get("content")
+    if not isinstance(content, list):
+        return estimate_tokens_for_text(json_utils.dumps(item))
+    tokens = 0
+    for part in content:
+        if not isinstance(part, dict):
+            tokens += estimate_tokens_for_item(part)
+            continue
+        if part.get("type") in {"input_image", "image", "image_url"} or "image_url" in part:
+            tokens += 1024
+            continue
+        tokens += estimate_tokens_for_item(part)
+    return max(tokens, 1)
+
+
 def estimate_tokens_for_items(items: list[dict[str, Any]]) -> int:
     return sum(estimate_tokens_for_item(item) for item in items)
 
 
 def build_session_input_callback(settings: Settings) -> SessionInputCallback:
     def callback(history: list[Any], new_input: list[Any]) -> list[Any]:
-        return [*history, *new_input]
+        items = [*history, *new_input]
+        if not supports_image_input(settings):
+            return strip_image_content_from_items(items)
+        return items
 
     return callback
 

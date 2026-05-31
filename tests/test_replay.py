@@ -7,6 +7,7 @@ from deepy.llm.replay import (
     sanitize_model_input_for_chat_completions,
     sanitize_model_response_output,
 )
+from deepy.llm.multimodal import IMAGE_ONLY_DEFAULT_TEXT
 
 
 def test_sanitize_model_input_normalizes_chat_tool_call_items_for_agents_sdk():
@@ -102,6 +103,55 @@ def test_sanitize_model_input_keeps_non_empty_assistant_preamble():
         preamble,
         call,
         output,
+    ]
+
+
+def test_sanitize_model_input_normalizes_multimodal_user_content_for_chat_completions():
+    items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "inspect this"},
+                {"type": "input_image", "image_url": "data:image/png;base64,abc"},
+            ],
+        }
+    ]
+
+    assert sanitize_model_input_for_chat_completions(items) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "inspect this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,abc"},
+                },
+            ],
+        }
+    ]
+
+
+def test_sanitize_model_input_adds_default_text_for_image_only_turn():
+    items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": "data:image/png;base64,abc"},
+            ],
+        }
+    ]
+
+    assert sanitize_model_input_for_chat_completions(items) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": IMAGE_ONLY_DEFAULT_TEXT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,abc"},
+                },
+            ],
+        }
     ]
 
 

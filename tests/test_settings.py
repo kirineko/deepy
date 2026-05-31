@@ -9,6 +9,8 @@ from deepy.config import (
     DEFAULT_XIAOMI_BASE_URL,
     DEFAULT_UI_VIEW_MODE,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
+    ModelConfig,
+    Settings,
     load_settings,
     settings_to_toml_dict,
     update_config_model_settings,
@@ -19,6 +21,7 @@ from deepy.config import (
     ui_theme_from_selection,
     write_config,
 )
+from deepy.llm.multimodal import model_supports_image_input, supports_image_input
 
 
 def test_loads_toml_config_and_resolves_context_threshold(tmp_path):
@@ -115,6 +118,30 @@ reasoning_effort = "max"
     assert settings.model.base_url == DEFAULT_OPENROUTER_BASE_URL
     assert settings.model.reasoning_mode == "none"
     assert settings.model.reasoning_effort == "none"
+
+
+def test_image_input_capability_is_limited_to_mimo_models():
+    assert model_supports_image_input("xiaomi", "mimo-v2.5")
+    assert not model_supports_image_input("xiaomi", "mimo-v2.5-pro")
+    assert model_supports_image_input("openrouter", "xiaomi/mimo-v2.5")
+    assert not model_supports_image_input("openrouter", "xiaomi/mimo-v2.5-pro")
+    assert not model_supports_image_input("deepseek", "deepseek-v4-pro")
+    assert not model_supports_image_input("openrouter", "anthropic/claude-sonnet-4")
+
+    xiaomi_models = {model.name: model for model in provider_info_for("xiaomi").models}
+    openrouter_models = {model.name: model for model in provider_info_for("openrouter").models}
+    deepseek_models = {model.name: model for model in provider_info_for("deepseek").models}
+
+    assert xiaomi_models["mimo-v2.5"].supports_image_input
+    assert not xiaomi_models["mimo-v2.5-pro"].supports_image_input
+    assert openrouter_models["xiaomi/mimo-v2.5"].supports_image_input
+    assert not openrouter_models["xiaomi/mimo-v2.5-pro"].supports_image_input
+    assert not any(model.supports_image_input for model in deepseek_models.values())
+
+
+def test_settings_image_input_helper_respects_active_provider_and_model():
+    assert supports_image_input(Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5")))
+    assert not supports_image_input(Settings())
 
 
 def test_loads_openrouter_custom_model_and_reasoning_effort(tmp_path):
