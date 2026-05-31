@@ -73,6 +73,10 @@ def _completions(completer, text: str):
     return list(completer.get_completions(document, event))
 
 
+def _key_values(binding) -> tuple[str, ...]:
+    return tuple(getattr(key, "value", str(key)) for key in binding.keys)
+
+
 def test_extract_file_mention_fragment_handles_plain_scoped_and_invalid_tokens():
     assert extract_file_mention_fragment("@").fragment == ""
     assert extract_file_mention_fragment("please inspect @src/deepy").fragment == "src/deepy"
@@ -136,6 +140,20 @@ def test_image_attachment_controller_syncs_deleted_prompt_label():
     assert first not in controller.attachments
 
 
+def test_image_attachment_controller_deletes_label_as_atomic_unit():
+    controller = ImageAttachmentController(supports_image_input=True)
+    attachment = controller.attach_image(b"image", "image/png")
+    text = f"inspect {attachment.display_label} now"
+    cursor = text.index(attachment.display_label) + len(attachment.display_label)
+
+    edit = controller.delete_label_near_cursor(text, cursor, direction="backward")
+
+    assert edit is not None
+    assert edit.text == "inspect  now"
+    assert edit.cursor_position == len("inspect ")
+    assert controller.attachments == []
+
+
 def test_image_attachment_controller_rejects_unsupported_model_without_clearing_text_state():
     controller = ImageAttachmentController(
         supports_image_input=False,
@@ -185,6 +203,62 @@ def test_ctrl_v_unsupported_image_notice_renders_through_terminal_runner(monkeyp
     assert terminal_callbacks
     assert notices == [UNSUPPORTED_IMAGE_INPUT_MESSAGE]
     assert invalidated == [True]
+
+
+def test_ctrl_backspace_deletes_image_label_as_atomic_unit(monkeypatch):
+    controller = ImageAttachmentController(supports_image_input=True)
+    attachment = controller.attach_image(b"image", "image/png")
+    text = f"inspect {attachment.display_label}"
+    invalidated: list[bool] = []
+    calls: list[str] = []
+    bindings = build_prompt_key_bindings(image_attachments=controller)
+    backspace = next(
+        binding for binding in bindings.bindings if _key_values(binding) in {("backspace",), ("c-h",)}
+    )
+    buffer = SimpleNamespace(
+        text=text,
+        cursor_position=len(text),
+        delete_before_cursor=lambda count=1: calls.append(f"delete-before:{count}"),
+    )
+    event = SimpleNamespace(
+        current_buffer=buffer,
+        app=SimpleNamespace(invalidate=lambda: invalidated.append(True)),
+    )
+
+    backspace.handler(event)
+
+    assert buffer.text == "inspect "
+    assert buffer.cursor_position == len("inspect ")
+    assert controller.attachments == []
+    assert invalidated == [True]
+    assert calls == []
+
+
+def test_delete_deletes_image_label_as_atomic_unit():
+    controller = ImageAttachmentController(supports_image_input=True)
+    attachment = controller.attach_image(b"image", "image/png")
+    text = f"inspect {attachment.display_label} now"
+    invalidated: list[bool] = []
+    calls: list[str] = []
+    bindings = build_prompt_key_bindings(image_attachments=controller)
+    delete = next(binding for binding in bindings.bindings if _key_values(binding) == ("delete",))
+    buffer = SimpleNamespace(
+        text=text,
+        cursor_position=text.index(attachment.display_label),
+        delete=lambda count=1: calls.append(f"delete:{count}"),
+    )
+    event = SimpleNamespace(
+        current_buffer=buffer,
+        app=SimpleNamespace(invalidate=lambda: invalidated.append(True)),
+    )
+
+    delete.handler(event)
+
+    assert buffer.text == "inspect  now"
+    assert buffer.cursor_position == len("inspect ")
+    assert controller.attachments == []
+    assert invalidated == [True]
+    assert calls == []
 
 
 def test_image_attachment_controller_ignores_non_image_clipboard():

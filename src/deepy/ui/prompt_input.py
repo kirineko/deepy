@@ -196,6 +196,21 @@ def build_prompt_key_bindings(
             event.current_buffer.cancel_completion()
         return True
 
+    def delete_image_attachment_label(event, direction: str) -> bool:
+        if image_attachments is None:
+            return False
+        edit = image_attachments.delete_label_near_cursor(
+            event.current_buffer.text,
+            event.current_buffer.cursor_position,
+            direction="backward" if direction == "backward" else "forward",
+        )
+        if edit is None:
+            return False
+        event.current_buffer.text = edit.text
+        event.current_buffer.cursor_position = edit.cursor_position
+        event.app.invalidate()
+        return True
+
     @bindings.add("escape")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
         if on_interrupt is not None:
@@ -241,6 +256,18 @@ def build_prompt_key_bindings(
         if clipboard_data.text:
             event.current_buffer.paste_clipboard_data(clipboard_data)
             event.app.invalidate()
+
+    @bindings.add("backspace")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if delete_image_attachment_label(event, "backward"):
+            return
+        event.current_buffer.delete_before_cursor(count=1)
+
+    @bindings.add("delete")
+    def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback
+        if delete_image_attachment_label(event, "forward"):
+            return
+        event.current_buffer.delete(count=1)
 
     @bindings.add("s-tab")
     def _(event) -> None:  # pragma: no cover - prompt_toolkit calls this callback

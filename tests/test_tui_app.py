@@ -148,6 +148,7 @@ async def test_tui_deleting_image_label_removes_attachment(tmp_path):
         )
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "inspect"
+        prompt.move_cursor((0, len(prompt.text)))
         await pilot.press("ctrl+v")
         await _wait_for(pilot, lambda: "[图片1]" in prompt.text)
 
@@ -157,6 +158,39 @@ async def test_tui_deleting_image_label_removes_attachment(tmp_path):
         await _wait_for(pilot, lambda: captured)
 
     assert captured[0] == ("inspect", [])
+
+
+@pytest.mark.asyncio
+async def test_tui_backspace_and_delete_remove_image_label_as_atomic_unit(tmp_path):
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "inspect"
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: "[图片1]" in prompt.text)
+
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("backspace")
+        await _wait_for(pilot, lambda: "[图片1]" not in prompt.text)
+
+        assert prompt.text == "inspect "
+        assert app.image_attachments.attachments == []
+
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: "[图片1]" in prompt.text)
+        prompt.move_cursor((0, prompt.text.index("[图片1]")))
+        await pilot.press("delete")
+        await _wait_for(pilot, lambda: "[图片1]" not in prompt.text)
+
+        assert prompt.text == "inspect "
+        assert app.image_attachments.attachments == []
 
 
 def test_decode_kitty_text_sequences_decodes_chinese_text_event() -> None:

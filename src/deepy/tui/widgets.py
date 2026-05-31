@@ -79,6 +79,12 @@ def _end_cursor_location(text: str) -> tuple[int, int]:
     return (len(lines) - 1, len(lines[-1]))
 
 
+def _cursor_location_for_offset(text: str, offset: int) -> tuple[int, int]:
+    before = text[: max(0, min(offset, len(text)))]
+    lines = before.split("\n")
+    return (len(lines) - 1, len(lines[-1]))
+
+
 def _text_around_cursor(text_area: TextArea) -> tuple[str, str]:
     row, column = text_area.cursor_location
     lines = text_area.text.split("\n")
@@ -160,10 +166,14 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
     def action_delete_left(self) -> None:
         if self._clear_draft_if_pending():
             return
+        if self._delete_image_label("backward"):
+            return
         super().action_delete_left()
 
     def action_delete_right(self) -> None:
         if self._clear_draft_if_pending():
+            return
+        if self._delete_image_label("forward"):
             return
         super().action_delete_right()
 
@@ -243,6 +253,23 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         if not self.text:
             return False
         self.clear()
+        return True
+
+    def _delete_image_label(self, direction: str) -> bool:
+        panel = self.parent
+        if not isinstance(panel, PromptPanel) or panel.image_attachments is None:
+            return False
+        before, _after = _text_around_cursor(self)
+        edit = panel.image_attachments.delete_label_near_cursor(
+            self.text,
+            len(before),
+            direction="backward" if direction == "backward" else "forward",
+        )
+        if edit is None:
+            return False
+        self.text = edit.text
+        self.move_cursor(_cursor_location_for_offset(edit.text, edit.cursor_position))
+        panel.refresh_image_status()
         return True
 
 

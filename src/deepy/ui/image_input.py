@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 from urllib.parse import unquote, urlparse
 
 from deepy.llm.multimodal import (
@@ -30,6 +30,12 @@ class ImagePasteResult:
     handled: bool
     attachment: PromptImageAttachment | None = None
     notice: str = ""
+
+
+@dataclass(frozen=True)
+class ImageLabelEdit:
+    text: str
+    cursor_position: int
 
 
 ClipboardImageReader = Callable[[], ClipboardImage | None]
@@ -100,6 +106,23 @@ class ImageAttachmentController:
         self.attachments = kept
         return True
 
+    def delete_label_near_cursor(
+        self,
+        text: str,
+        cursor_position: int,
+        *,
+        direction: Literal["backward", "forward"],
+    ) -> ImageLabelEdit | None:
+        edit = delete_image_attachment_label_at_cursor(
+            text,
+            cursor_position,
+            self.attachments,
+            direction=direction,
+        )
+        if edit is not None:
+            self.sync_to_prompt_text(edit.text)
+        return edit
+
     def clear(self) -> None:
         self.attachments.clear()
         self.status_message = ""
@@ -132,6 +155,33 @@ def image_attachment_input_text(
     prefix = "" if not text_before_cursor or text_before_cursor[-1].isspace() else " "
     suffix = "" if not text_after_cursor or text_after_cursor[0].isspace() else " "
     return f"{prefix}{attachment.display_label}{suffix}"
+
+
+def delete_image_attachment_label_at_cursor(
+    text: str,
+    cursor_position: int,
+    attachments: list[PromptImageAttachment],
+    *,
+    direction: Literal["backward", "forward"],
+) -> ImageLabelEdit | None:
+    cursor = max(0, min(cursor_position, len(text)))
+    for attachment in attachments:
+        label = attachment.display_label
+        start = text.find(label)
+        while start != -1:
+            end = start + len(label)
+            should_delete = (
+                start < cursor <= end
+                if direction == "backward"
+                else start <= cursor < end
+            )
+            if should_delete:
+                return ImageLabelEdit(
+                    text=f"{text[:start]}{text[end:]}",
+                    cursor_position=start,
+                )
+            start = text.find(label, start + 1)
+    return None
 
 
 def clipboard_image() -> ClipboardImage | None:
