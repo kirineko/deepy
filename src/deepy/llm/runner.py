@@ -527,7 +527,7 @@ def _approval_server_name(raw_item: Any, tool_name: str) -> str:
 def _approval_action_kind(tool_name: str) -> str:
     if tool_name in {"Write", "Update"}:
         return "text_write"
-    if tool_name == "shell":
+    if tool_name in {"shell", "test_shell"}:
         return "command"
     if tool_name == "task_stop":
         return "background_task_control"

@@ -10,6 +10,7 @@ from deepy.utils import json as json_utils
 
 from .builtin import ToolRuntime
 from .result import ToolResult
+from .test_shell import TestShellDecision, TestShellPolicy, classify_test_shell_command
 
 if TYPE_CHECKING:
     from agents import Tool
@@ -44,6 +45,15 @@ def build_function_tools(
     ) -> bool:
         return bool(audit_policy and audit_policy.needs_approval("background_task_control"))
 
+    async def needs_test_shell_approval(
+        _context: object,
+        params: dict[str, Any],
+        _call_id: str,
+    ) -> bool:
+        if audit_policy is None or not audit_policy.needs_approval("command"):
+            return False
+        return _test_shell_decision(runtime, params).decision == "approval_required"
+
     async def invoke_shell(_context: object, raw_input: str) -> str:
         args, error, repair_metadata = _tool_args(raw_input, "shell", SHELL_SCHEMA)
         if error is not None:
@@ -65,6 +75,7 @@ def build_function_tools(
             _string_arg(args, "command"),
             _int_arg(args, "timeout_ms", 120_000),
             approval_token=_optional_string_arg(args, "approval_token"),
+            approved_by_audit=_test_shell_approved_by_audit(runtime, args, audit_policy),
         )
         return _merge_tool_result_metadata(result, repair_metadata)
 
@@ -222,11 +233,12 @@ def build_function_tools(
             description=(
                 "Run constrained development verification commands for tester subagents. "
                 "The command is parsed without an unrestricted shell, classified by policy, "
-                "and may return approval_required instead of executing."
+                "and medium-risk commands are routed through Deepy's audit approval flow."
             ),
             params_json_schema=TEST_SHELL_SCHEMA,
             on_invoke_tool=invoke_test_shell,
             strict_json_schema=True,
+            needs_approval=needs_test_shell_approval,
         ),
         make_function_tool(
             name="task_list",
@@ -356,6 +368,31 @@ def build_function_tools(
         allowed = set(include_tools)
         return [tool for tool in tools if tool.name in allowed]
     return [tool for tool in tools if tool.name != "test_shell"]
+
+
+def _test_shell_policy(runtime: ToolRuntime) -> TestShellPolicy:
+    return TestShellPolicy(
+        allow_patterns=runtime.settings.tools.test_shell.allow_patterns,
+        approval_required_patterns=runtime.settings.tools.test_shell.approval_required_patterns,
+    )
+
+
+def _test_shell_decision(runtime: ToolRuntime, args: dict[str, Any]) -> TestShellDecision:
+    return classify_test_shell_command(
+        _string_arg(args, "command"),
+        policy=_test_shell_policy(runtime),
+        platform_name=runtime.platform_name,
+    )
+
+
+def _test_shell_approved_by_audit(
+    runtime: ToolRuntime,
+    args: dict[str, Any],
+    audit_policy: AuditPolicy | None,
+) -> bool:
+    if audit_policy is None:
+        return False
+    return _test_shell_decision(runtime, args).decision == "approval_required"
 
 
 def make_mimo_compatible_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:

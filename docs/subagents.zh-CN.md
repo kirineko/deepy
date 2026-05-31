@@ -105,7 +105,8 @@ MCP 配置细节见 [mcp.zh-CN.md](mcp.zh-CN.md)。
 
 - `allow`：立即执行，带有受限 timeout、固定项目 cwd、stdout、stderr、exit code、
   elapsed time 和截断元数据。
-- `approval_required`：不执行；返回命令、原因和 approval token，让 Deepy 询问用户。
+- `approval_required`：audit 启用时通过 Deepy 外层 audit approval 流程处理；没有
+  active audit policy 时返回命令、原因和 approval token，用于同一命令重试。
 - `deny`：拒绝 destructive、publishing、source-mutating 或不支持的命令。
 
 支持的低风险命令族包括 Python/uv/pip 测试和检查命令、Node 包管理器 test/lint/typecheck/build
@@ -113,8 +114,8 @@ MCP 配置细节见 [mcp.zh-CN.md](mcp.zh-CN.md)。
 Go `go test/vet`、只读 `curl`、`ping`、只读 `mysql`、只读 Docker/Docker Compose
 诊断、`head` 和 `tail`。
 
-需要 approval 的例子包括依赖安装、Spring Boot 服务启动、Docker Compose 启动/构建，
-以及项目自定义的中风险模式。
+需要 approval 的例子包括依赖安装、Spring Boot 服务启动、Docker Compose 启动/构建、
+Rust `cargo run`，以及项目自定义的中风险模式。
 
 拒绝的例子包括 `rm`、会修改源码的 `mv`/`cp`、`chmod`、`chown`、会修改的 git 命令、
 包发布/部署、`docker system prune`、`docker compose down -v`、会修改的 `curl`、

@@ -2018,6 +2018,7 @@ class ToolRuntime:
         timeout_ms: int = 120_000,
         *,
         approval_token: str | None = None,
+        approved_by_audit: bool = False,
     ) -> str:
         return run_test_shell_command(
             command,
@@ -2033,6 +2034,7 @@ class ToolRuntime:
             should_interrupt=self.should_interrupt,
             approval_token=approval_token,
             approved_commands=self.test_shell_approvals,
+            approved_by_audit=approved_by_audit,
         )
 
     def _wait_for_shell_process(self, process: subprocess.Popen[bytes], *, timeout: float) -> bool:

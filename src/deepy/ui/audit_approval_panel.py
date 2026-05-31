@@ -63,6 +63,8 @@ def build_approval_view(
     tool_name = item.tool_name or item.name or "tool"
     if item.server_name or item.action_kind == "mcp_tool":
         return _mcp_approval_view(item, args)
+    if tool_name == "test_shell":
+        return _shell_approval_view(args, title="Approve test command?")
     if tool_name == "shell" or item.action_kind == "command":
         return _shell_approval_view(args)
     if tool_name == "Write":
@@ -123,7 +125,11 @@ def format_approval_path(path: str, *, project_root: str | Path | None = None) -
     return format_home_relative_path(raw_path)
 
 
-def _shell_approval_view(args: dict[str, Any] | None) -> ApprovalPanelView:
+def _shell_approval_view(
+    args: dict[str, Any] | None,
+    *,
+    title: str = "Approve shell command?",
+) -> ApprovalPanelView:
     command = _string_arg(args, "command") or "(missing command)"
     metadata = _metadata_items(
         (
@@ -132,7 +138,7 @@ def _shell_approval_view(args: dict[str, Any] | None) -> ApprovalPanelView:
         )
     )
     return ApprovalPanelView(
-        title="Approve shell command?",
+        title=title,
         target_label="command",
         target=command,
         metadata=metadata,

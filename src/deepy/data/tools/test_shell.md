@@ -11,6 +11,8 @@ redirection, command substitution, heredocs, and background operators.
 
 Low-risk verification commands run immediately and return command, cwd,
 exit-code, elapsed time, stdout, stderr, and truncation metadata. Medium-risk
-commands return `approval_required` with an `approvalToken`; the main Deepy
-agent must ask the user before retrying the same command with that token.
-Destructive, publishing, mutating, or unsupported commands are denied.
+commands are routed through Deepy's outer audit approval flow when an audit
+policy is active; after approval they still execute through this constrained
+tool. Without an active audit policy, medium-risk commands return
+`approval_required` with an `approvalToken` for same-command retry. Destructive,
+publishing, mutating, or unsupported commands are denied.

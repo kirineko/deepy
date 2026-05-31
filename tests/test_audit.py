@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from deepy.audit import (
@@ -8,13 +10,16 @@ from deepy.audit import (
     AuditModeState,
     AuditPolicy,
     McpSafeTool,
+    PendingApproval,
     parse_audit_mode,
 )
-from deepy.config import Settings, load_settings
+from deepy.config import Settings, TestShellToolConfig as ShellTestToolConfig, ToolsConfig, load_settings
 from deepy.llm.runner import run_prompt_once
 from deepy.llm.provider import ProviderBundle
 from deepy.tools import ToolRuntime
 from deepy.tools.agents import build_function_tools
+from deepy.ui.audit_approval_panel import build_approval_view
+from deepy.utils import json as json_utils
 
 
 def test_audit_mode_parsing_and_cycle():
@@ -46,6 +51,21 @@ mcp_safe_tools = [
     assert settings.audit.mcp_safe_tools == (McpSafeTool("github", "search_issues"),)
 
 
+def test_test_shell_approval_view_uses_test_command_title():
+    view = build_approval_view(
+        PendingApproval(
+            index=0,
+            name="test_shell",
+            tool_name="test_shell",
+            arguments=json_utils.dumps({"command": "cargo run"}),
+            action_kind="command",
+        )
+    )
+
+    assert view.title == "Approve test command?"
+    assert view.target == "cargo run"
+
+
 @pytest.mark.asyncio
 async def test_builtin_tool_approval_policy_by_mode(tmp_path):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
@@ -71,6 +91,75 @@ async def test_builtin_tool_approval_policy_by_mode(tmp_path):
     assert await auto_tools["Write"].needs_approval(None, {}, "call") is False
     assert await auto_tools["shell"].needs_approval(None, {}, "call") is True
     assert await yolo_tools["shell"].needs_approval(None, {}, "call") is False
+
+
+@pytest.mark.asyncio
+async def test_test_shell_approval_policy_by_mode(tmp_path):
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    normal_tool = next(
+        tool
+        for tool in build_function_tools(
+            runtime,
+            include_tools={"test_shell"},
+            audit_policy=AuditPolicy.from_mode(AuditMode.NORMAL),
+        )
+        if tool.name == "test_shell"
+    )
+    auto_tool = next(
+        tool
+        for tool in build_function_tools(
+            runtime,
+            include_tools={"test_shell"},
+            audit_policy=AuditPolicy.from_mode(AuditMode.AUTO),
+        )
+        if tool.name == "test_shell"
+    )
+    yolo_tool = next(
+        tool
+        for tool in build_function_tools(
+            runtime,
+            include_tools={"test_shell"},
+            audit_policy=AuditPolicy.from_mode(AuditMode.YOLO),
+        )
+        if tool.name == "test_shell"
+    )
+
+    assert await normal_tool.needs_approval(None, {"command": "cargo run"}, "call") is True
+    assert await auto_tool.needs_approval(None, {"command": "cargo run"}, "call") is True
+    assert await yolo_tool.needs_approval(None, {"command": "cargo run"}, "call") is False
+    assert await normal_tool.needs_approval(None, {"command": "cargo test"}, "call") is False
+    assert await normal_tool.needs_approval(None, {"command": "git push"}, "call") is False
+
+
+@pytest.mark.asyncio
+async def test_test_shell_audit_approved_invocation_uses_constrained_runner(tmp_path):
+    command = f"{sys.executable} -c 'print(\"audit-ok\")'"
+    settings = Settings(
+        tools=ToolsConfig(
+            test_shell=ShellTestToolConfig(approval_required_patterns=(f"{sys.executable} -c *",))
+        )
+    )
+    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    tool = next(
+        tool
+        for tool in build_function_tools(
+            runtime,
+            include_tools={"test_shell"},
+            audit_policy=AuditPolicy.from_mode(AuditMode.NORMAL),
+        )
+        if tool.name == "test_shell"
+    )
+
+    result = json_utils.loads(
+        await tool.on_invoke_tool(None, json_utils.dumps({"command": command}))
+    )
+
+    assert result["ok"] is True
+    assert result["name"] == "test_shell"
+    assert result["metadata"]["approvedByAudit"] is True
+    assert result["metadata"]["decision"] == "approval_required"
+    assert "audit-ok" in result["metadata"]["stdout"]
 
 
 @pytest.mark.asyncio

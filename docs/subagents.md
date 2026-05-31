@@ -112,8 +112,9 @@ unrestricted shell. It classifies commands as:
 
 - `allow`: execute immediately with bounded timeout, fixed project cwd, stdout,
   stderr, exit code, elapsed time, and truncation metadata.
-- `approval_required`: do not execute; return a command, reason, and approval
-  token for Deepy to ask the user.
+- `approval_required`: route the command through Deepy's outer audit approval
+  flow when audit is active; without audit, return a command, reason, and
+  approval token for same-command retry.
 - `deny`: refuse destructive, publishing, source-mutating, or unsupported
   commands.
 
@@ -124,7 +125,8 @@ read-only `curl`, `ping`, read-only `mysql`, read-only Docker/Docker Compose
 diagnostics, `head`, and `tail`.
 
 Approval-required examples include dependency installation, Spring Boot service
-startup, Docker Compose startup/build, and project-defined medium-risk patterns.
+startup, Docker Compose startup/build, Rust `cargo run`, and project-defined
+medium-risk patterns.
 
 Denied examples include `rm`, source-mutating `mv`/`cp`, `chmod`, `chown`,
 mutating git commands, package publish/deploy, `docker system prune`,

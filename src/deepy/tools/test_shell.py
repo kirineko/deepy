@@ -115,16 +115,17 @@ def run_test_shell_command(
     should_interrupt: Callable[[], bool] | None = None,
     approval_token: str | None = None,
     approved_commands: dict[str, str] | None = None,
+    approved_by_audit: bool = False,
 ) -> str:
     name = "test_shell"
     decision = classify_test_shell_command(command, policy=policy, platform_name=platform_name)
     metadata = _decision_metadata(command, cwd, decision)
     if decision.decision == "deny":
         return ToolResult.error_result(name, decision.reason, metadata=metadata).to_json()
-    if decision.decision == "approval_required" and not _approval_token_matches(
-        command,
-        approval_token,
-        approved_commands,
+    if (
+        decision.decision == "approval_required"
+        and not approved_by_audit
+        and not _approval_token_matches(command, approval_token, approved_commands)
     ):
         token = _approval_token_for(command, approved_commands)
         return ToolResult.error_result(
@@ -185,7 +186,8 @@ def run_test_shell_command(
     output_text, output_truncated = _truncate(output)
     result_metadata = {
         **metadata,
-        "approved": bool(approval_token),
+        "approved": bool(approval_token or approved_by_audit),
+        "approvedByAudit": approved_by_audit,
         "exitCode": returncode,
         "elapsedMs": elapsed_ms,
         "timeoutMs": int(timeout_seconds * 1000),
@@ -221,7 +223,7 @@ def _classify_known_command(argv: list[str]) -> TestShellDecision:
     if exe in {"mvn", "mvnw", "gradle", "gradlew"}:
         return _classify_jvm_tools(exe, argv, lower)
     if exe == "cargo":
-        return _decision_for_subcommand(argv, {"test", "check", "clippy"}, "Rust verification")
+        return _classify_cargo(argv, lower)
     if exe == "go":
         return _decision_for_subcommand(argv, {"test", "vet"}, "Go verification")
     if exe == "curl":
@@ -329,6 +331,19 @@ def _classify_jvm_tools(exe: str, argv: list[str], lower: list[str]) -> TestShel
     if any(arg in allowed for arg in lower[1:]):
         return TestShellDecision("allow", "JVM verification command.", tuple(argv), "jvm")
     return TestShellDecision("deny", f"Unsupported {exe} command for test_shell.", tuple(argv), "jvm")
+
+
+def _classify_cargo(argv: list[str], lower: list[str]) -> TestShellDecision:
+    if len(argv) >= 2 and lower[1] in {"test", "check", "clippy"}:
+        return TestShellDecision("allow", "Rust verification.", tuple(argv), "cargo")
+    if len(argv) >= 2 and lower[1] == "run":
+        return TestShellDecision(
+            "approval_required",
+            "cargo run executes local project code.",
+            tuple(argv),
+            "rust_run",
+        )
+    return TestShellDecision("deny", "Unsupported cargo command for test_shell.", tuple(argv), "cargo")
 
 
 def _classify_curl(argv: list[str], lower: list[str]) -> TestShellDecision:

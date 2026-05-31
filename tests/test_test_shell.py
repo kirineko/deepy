@@ -46,6 +46,7 @@ def test_test_shell_approval_required_and_denied_commands():
         "npm install",
         "mvn spring-boot:run",
         "docker compose up",
+        "cargo run",
     ]
     denied = [
         "rm -rf build",
