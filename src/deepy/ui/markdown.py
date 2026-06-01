@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rich.cells import cell_len
+from rich.style import Style
 from rich.style import StyleType
 from rich.syntax import Syntax
 from rich.text import Text
 
 from deepy.ui.styles import DARK_PALETTE, UiPalette
+from deepy.ui.syntax import normalize_syntax_lexer, syntax_style_on_background
 
 
 SegmentKind = Literal["text", "code"]
@@ -45,12 +47,15 @@ def _render_code_block(
     palette: UiPalette,
     width: int,
 ) -> Text:
+    background = _syntax_background_for_palette(palette)
+    lexer = normalize_syntax_lexer(language=segment.lang, sample=segment.body) or "text"
     highlighted = Syntax(
         "",
-        segment.lang or "text",
+        lexer,
         theme=_syntax_theme_for_palette(palette),
-        background_color=_syntax_background_for_palette(palette),
+        background_color=background,
     ).highlight(segment.body)
+    highlighted = _rebase_syntax_background(highlighted, background=background)
     lines = highlighted.split("\n", allow_blank=False)
     if not lines:
         lines = [Text("")]
@@ -71,6 +76,14 @@ def _code_block_line(line: Text, *, style: StyleType, width: int) -> Text:
     if padding:
         rendered.append(padding, style=style)
     return rendered
+
+
+def _rebase_syntax_background(text: Text, *, background: str) -> Text:
+    base = Style(bgcolor=Style.parse(background).color)
+    rebased = Text(text.plain, style=base)
+    for span in text.spans:
+        rebased.stylize(syntax_style_on_background(span.style, base), span.start, span.end)
+    return rebased
 
 
 def _syntax_theme_for_palette(palette: UiPalette) -> str:

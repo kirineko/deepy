@@ -109,6 +109,69 @@ def test_tui_diff_rich_rendering_uses_diff_colors_and_syntax() -> None:
     assert cell_len(lines[2].plain) == 64
 
 
+def test_tui_diff_rich_rendering_highlights_multiline_xml_syntax() -> None:
+    output = _tool_output(
+        "--- /dev/null\n+++ b/pom.xml\n@@ -0,0 +1,6 @@\n"
+        "+<dependency\n"
+        '+    groupId="com.example">\n'
+        "+</dependency>\n"
+        "+<!--\n"
+        "+  comment text\n"
+        "+-->\n",
+        path="pom.xml",
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    rendered = render_unified_diff_rich(view, width=96)
+    lines = list(rendered.renderables)
+
+    attribute_spans = str(lines[2].spans)
+    comment_spans = str(lines[5].spans)
+    assert "#a6e22e" in attribute_spans
+    assert "#e6db74" in attribute_spans
+    assert "#1f3d2b" in attribute_spans
+    assert "#959077" in comment_spans
+    assert "#1f3d2b" in comment_spans
+
+
+def test_tui_diff_rich_rendering_uses_xml_for_xml_like_paths() -> None:
+    output = _tool_output(
+        "--- a/icon.svg\n+++ b/icon.svg\n@@ -1,1 +1,1 @@\n"
+        '-<svg viewBox="0 0 10 10"></svg>\n'
+        '+<svg viewBox="0 0 12 12"></svg>\n',
+        path="icon.svg",
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    rendered = render_unified_diff_rich(view, width=96)
+    lines = list(rendered.renderables)
+
+    assert "#ff4689" in str(lines[1].spans)
+    assert "#4a2528" in str(lines[1].spans)
+    assert "#a6e22e" in str(lines[2].spans)
+    assert "#e6db74" in str(lines[2].spans)
+    assert "#1f3d2b" in str(lines[2].spans)
+
+
+def test_tui_diff_rich_rendering_preserves_non_xml_syntax() -> None:
+    output = _tool_output(
+        "--- a/sample.py\n+++ b/sample.py\n@@ -1,1 +1,1 @@\n"
+        "-def old(value):\n+def new(value):\n",
+        path="sample.py",
+    )
+    view = diff_view_from_tool_output(output)
+
+    assert view is not None
+    rendered = render_unified_diff_rich(view, width=64)
+    lines = list(rendered.renderables)
+
+    assert "#66d9ef" in str(lines[2].spans)
+    assert "#1f3d2b" in str(lines[2].spans)
+    assert "#272822" not in str(lines[2].spans)
+
+
 def test_tui_diff_rich_rendering_wraps_to_narrow_and_wide_widths() -> None:
     output = _tool_output(
         "--- a/sample.py\n+++ b/sample.py\n@@ -1,1 +1,1 @@\n"

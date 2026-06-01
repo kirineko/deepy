@@ -954,6 +954,110 @@ def test_render_tool_diff_preview_preserves_light_diff_background_with_syntax():
     assert cell_len(lines[2].plain) == 64
 
 
+def test_render_tool_diff_preview_highlights_multiline_xml_syntax():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "Write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "pom.xml",
+                "diff": "--- /dev/null\n+++ b/pom.xml\n@@ -0,0 +1,9 @@\n"
+                "+<dependency\n"
+                '+    groupId="com.example"\n'
+                "+>\n"
+                "+<!--\n"
+                "+  comment text\n"
+                "+-->\n"
+                "+<![CDATA[\n"
+                "+  <not-a-tag>\n"
+                "+]]>\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    rendered = render_tool_diff_preview(output, width=96)
+    assert rendered is not None
+    lines = list(rendered.renderables)
+
+    attribute_spans = str(lines[2].spans)
+    comment_spans = str(lines[5].spans)
+    cdata_spans = str(lines[8].spans)
+    assert "#a6e22e" in attribute_spans
+    assert "#e6db74" in attribute_spans
+    assert "#1f3d2b" in attribute_spans
+    assert "#959077" in comment_spans
+    assert "#1f3d2b" in comment_spans
+    assert "#959077" in cdata_spans
+    assert "#1f3d2b" in cdata_spans
+    assert "#272822" not in attribute_spans
+
+
+def test_render_tool_diff_preview_uses_xml_for_xml_like_paths():
+    output = json.dumps(
+        {
+            "ok": True,
+            "name": "Update",
+            "output": "Edited file",
+            "error": None,
+            "metadata": {
+                "path": "icon.svg",
+                "diff": "--- a/icon.svg\n+++ b/icon.svg\n@@ -1,1 +1,1 @@\n"
+                '-<svg viewBox="0 0 10 10"></svg>\n'
+                '+<svg viewBox="0 0 12 12"></svg>\n',
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    rendered = render_tool_diff_preview(output, width=96)
+    assert rendered is not None
+    lines = list(rendered.renderables)
+
+    removed_spans = str(lines[1].spans)
+    added_spans = str(lines[2].spans)
+    assert "#ff4689" in removed_spans
+    assert "#4a2528" in removed_spans
+    assert "#a6e22e" in added_spans
+    assert "#e6db74" in added_spans
+    assert "#1f3d2b" in added_spans
+
+
+def test_render_tool_diff_preview_preserves_mainstream_language_highlighting():
+    cases = [
+        ("sample.py", "-def old(value):\n+def new(value):\n", "#66d9ef"),
+        ("app.tsx", '-export const App = () => <div className="old" />;\n'
+        '+export const App = () => <div className="new" />;\n', "#66d9ef"),
+        ("package.json", '-{"enabled":false}\n+{"enabled":true}\n', "#66d9ef"),
+        ("config.yaml", "-name: old\n+name: new\n", "#f8f8f2"),
+        ("pyproject.toml", '-name = "old"\n+name = "new"\n', "#e6db74"),
+        ("lib.rs", "-fn old_name() {}\n+fn new_name() {}\n", "#66d9ef"),
+        ("style.css", "-.app { color: red; }\n+.app { color: green; }\n", "#66d9ef"),
+        ("script.sh", "-echo old\n+echo new\n", "#f8f8f2"),
+        ("query.sql", "-select * from old;\n+select * from new;\n", "#66d9ef"),
+    ]
+    for path, body, expected_color in cases:
+        output = json.dumps(
+            {
+                "ok": True,
+                "name": "Update",
+                "output": "Edited file",
+                "error": None,
+                "metadata": {
+                    "path": path,
+                    "diff": f"--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n{body}",
+                },
+                "awaitUserResponse": False,
+            }
+        )
+        rendered = render_tool_diff_preview(output, width=96)
+        assert rendered is not None
+        spans = str(list(rendered.renderables)[2].spans)
+        assert expected_color in spans
+        assert "#1f3d2b" in spans
+        assert "#272822" not in spans
+
+
 def test_render_write_preview_does_not_truncate_large_writes():
     line_count = MAX_DIFF_LINES + 10
     body = "\n".join(f"+line {index}" for index in range(1, line_count + 1))

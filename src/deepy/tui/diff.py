@@ -8,13 +8,13 @@ from rich.text import Text
 from deepy.ui.message_view import (
     DiffPreview,
     DiffPreviewLine,
+    _diff_preview_highlights as diff_preview_highlights,
     parse_diff_preview_view,
     parse_tool_output,
     render_diff_preview_header,
     render_diff_preview_line,
     split_diff_preview_sections,
 )
-from deepy.ui.message_view import _diff_preview_syntax as diff_preview_syntax
 from deepy.ui.styles import DARK_PALETTE, LIGHT_PALETTE, UiPalette
 
 
@@ -108,28 +108,38 @@ def render_unified_diff_rich(
         for index, preview in enumerate(view.sections):
             if index:
                 renderables.append(Text(""))
-            syntax = diff_preview_syntax(preview, palette)
+            highlights = diff_preview_highlights(preview, palette)
             renderables.append(render_diff_preview_header(preview, tool_name=view.tool_name, palette=palette))
             renderables.extend(
                 _fit_diff_line(
-                    render_diff_preview_line(line, palette=palette, width=width, syntax=syntax),
+                    render_diff_preview_line(
+                        line,
+                        palette=palette,
+                        width=width,
+                        highlighted_content=highlights.get(line_index),
+                    ),
                     width=width,
                 )
-                for line in preview.lines
+                for line_index, line in enumerate(preview.lines)
             )
         if view.truncated:
             renderables.append(Text("... diff truncated ...", style=palette.diff_context))
         return Group(*renderables)
     preview = _view_as_preview(view)
-    syntax = diff_preview_syntax(preview, palette)
+    highlights = diff_preview_highlights(preview, palette)
     renderables = [
         render_diff_preview_header(preview, tool_name=view.tool_name, palette=palette),
         *(
             _fit_diff_line(
-                render_diff_preview_line(line, palette=palette, width=width, syntax=syntax),
+                render_diff_preview_line(
+                    line,
+                    palette=palette,
+                    width=width,
+                    highlighted_content=highlights.get(line_index),
+                ),
                 width=width,
             )
-            for line in preview.lines
+            for line_index, line in enumerate(preview.lines)
         ),
     ]
     if view.truncated:

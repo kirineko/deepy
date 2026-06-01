@@ -33,6 +33,27 @@ def test_render_markdown_highlights_rust_code_blocks():
     assert len({str(span.style) for span in result.spans}) > 1
 
 
+def test_render_markdown_rebases_xml_code_block_background():
+    result = render_markdown('```xml\n<root name="demo">value</root>\n```', width=80)
+    spans = str(result.spans)
+
+    assert "#ff4689" in spans
+    assert "#a6e22e" in spans
+    assert "#e6db74" in spans
+    assert "#1f2430" in spans
+    assert "#272822" not in spans
+
+
+def test_render_markdown_uses_xml_highlighting_for_svg_code_blocks():
+    result = render_markdown('```svg\n<svg viewBox="0 0 10 10"></svg>\n```', width=80)
+    spans = str(result.spans)
+
+    assert "#ff4689" in spans
+    assert "#a6e22e" in spans
+    assert "#e6db74" in spans
+    assert "#1f2430" in spans
+
+
 def test_render_markdown_styles_inline_code_without_removing_it():
     result = render_markdown("Use `npm install` first.").plain
 

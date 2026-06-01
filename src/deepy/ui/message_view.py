@@ -18,6 +18,7 @@ from deepy.ui.styles import (
     UiPalette,
     status_style,
 )
+from deepy.ui.syntax import normalize_syntax_lexer, syntax_style_on_background
 
 
 MAX_SUMMARY_CHARS = 160
@@ -267,7 +268,7 @@ def render_unified_diff_preview(
     if len(sections) > 1:
         renderables: list[Any] = []
         for preview in sections:
-            syntax = _diff_preview_syntax(preview, palette)
+            highlights = _diff_preview_highlights(preview, palette)
             renderables.append(
                 render_diff_preview_header(
                     preview,
@@ -277,14 +278,19 @@ def render_unified_diff_preview(
                 )
             )
             renderables.extend(
-                render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
-                for line in preview.lines
+                render_diff_preview_line(
+                    line,
+                    palette=palette,
+                    width=width,
+                    highlighted_content=highlights.get(index),
+                )
+                for index, line in enumerate(preview.lines)
             )
         return Group(*renderables)
     preview = sections[0] if sections else parse_diff_preview_view(diff, path=path)
     if not preview.lines:
         return None
-    syntax = _diff_preview_syntax(preview, palette)
+    highlights = _diff_preview_highlights(preview, palette)
     return Group(
         render_diff_preview_header(
             preview,
@@ -293,8 +299,13 @@ def render_unified_diff_preview(
             project_root=project_root,
         ),
         *(
-            render_diff_preview_line(line, palette=palette, width=width, syntax=syntax)
-            for line in preview.lines
+            render_diff_preview_line(
+                line,
+                palette=palette,
+                width=width,
+                highlighted_content=highlights.get(index),
+            )
+            for index, line in enumerate(preview.lines)
         ),
     )
 
@@ -363,6 +374,7 @@ def render_diff_preview_line(
     palette: UiPalette | None = None,
     width: int | None = None,
     syntax: Syntax | None = None,
+    highlighted_content: Text | None = None,
 ) -> Text:
     palette = palette or DARK_PALETTE
     content = line.content if line.content else " "
@@ -373,7 +385,8 @@ def render_diff_preview_line(
             Text.assemble(
                 (f"{old_lineno} {new_lineno} ", palette.diff_added_gutter),
                 ("+ ", palette.diff_added_marker),
-                _highlight_diff_content(content, syntax=syntax, style=palette.diff_added),
+                highlighted_content
+                or _highlight_diff_content(content, syntax=syntax, style=palette.diff_added),
             ),
             width=width,
             style=palette.diff_added,
@@ -383,7 +396,8 @@ def render_diff_preview_line(
             Text.assemble(
                 (f"{old_lineno} {new_lineno} ", palette.diff_removed_gutter),
                 ("- ", palette.diff_removed_marker),
-                _highlight_diff_content(content, syntax=syntax, style=palette.diff_removed),
+                highlighted_content
+                or _highlight_diff_content(content, syntax=syntax, style=palette.diff_removed),
             ),
             width=width,
             style=palette.diff_removed,
@@ -429,11 +443,82 @@ def _guess_diff_preview_lexer(preview: DiffPreview) -> str | None:
     sample = "\n".join(sample_lines)
     if not sample.strip():
         return None
+    return normalize_syntax_lexer(path=path, sample=sample)
+
+
+def _diff_preview_highlights(preview: DiffPreview, palette: UiPalette) -> dict[int, Text]:
+    syntax = _diff_preview_syntax(preview, palette)
+    if syntax is None:
+        return {}
+    highlights: dict[int, Text] = {}
+    highlights.update(
+        _diff_side_highlights(
+            preview.lines,
+            syntax=syntax,
+            side="old",
+            style=palette.diff_removed,
+        )
+    )
+    highlights.update(
+        _diff_side_highlights(
+            preview.lines,
+            syntax=syntax,
+            side="new",
+            style=palette.diff_added,
+        )
+    )
+    return highlights
+
+
+def _diff_side_highlights(
+    lines: list[DiffPreviewLine],
+    *,
+    syntax: Syntax,
+    side: str,
+    style: str,
+) -> dict[int, Text]:
+    included_kinds = {"removed", "context"} if side == "old" else {"added", "context"}
+    parts: list[str] = []
+    mapping: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        if line.kind not in included_kinds:
+            continue
+        mapping.append((index, len(line.content)))
+        parts.append(line.content)
+    if not parts or not any(part.strip() for part in parts):
+        return {}
     try:
-        lexer = Syntax.guess_lexer(path, sample)
+        highlighted = syntax.highlight("\n".join(parts))
     except Exception:
-        return None
-    return lexer if lexer and lexer != "default" else None
+        return {}
+
+    offsets: list[int] = []
+    offset = 0
+    for part in parts:
+        offsets.append(offset)
+        offset += len(part) + 1
+
+    base = Style.parse(style)
+    by_index: dict[int, Text] = {}
+    for part_index, (line_index, line_length) in enumerate(mapping):
+        line = lines[line_index]
+        if line.kind == "context":
+            continue
+        content = line.content if line.content else " "
+        text = Text(content, style=base)
+        line_start = offsets[part_index]
+        line_end = line_start + line_length
+        for span in highlighted.spans:
+            start = max(span.start, line_start)
+            end = min(span.end, line_end)
+            if start < end:
+                text.stylize(
+                    syntax_style_on_background(span.style, base),
+                    start - line_start,
+                    end - line_start,
+                )
+        by_index[line_index] = text
+    return by_index
 
 
 def _highlight_diff_content(
@@ -452,7 +537,7 @@ def _highlight_diff_content(
     base = Style.parse(style)
     text = Text(content, style=base)
     for span in highlighted.spans:
-        text.stylize(_syntax_style_on_diff_background(span.style, base), span.start, span.end)
+        text.stylize(syntax_style_on_background(span.style, base), span.start, span.end)
     return text
 
 
@@ -461,16 +546,7 @@ def _diff_syntax_theme(palette: UiPalette) -> str:
 
 
 def _syntax_style_on_diff_background(style: str | Style, base: Style) -> Style:
-    syntax_style = Style.parse(style) if isinstance(style, str) else style
-    return Style(
-        color=syntax_style.color or base.color,
-        bgcolor=base.bgcolor,
-        bold=syntax_style.bold,
-        italic=syntax_style.italic,
-        underline=syntax_style.underline,
-        dim=syntax_style.dim,
-        strike=syntax_style.strike,
-    )
+    return syntax_style_on_background(style, base)
 
 
 def parse_diff_preview(diff_preview: str) -> list[DiffPreviewLine]:
