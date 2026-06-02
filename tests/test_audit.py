@@ -160,6 +160,9 @@ async def test_test_shell_approval_policy_by_mode(tmp_path):
     assert await normal_tool.needs_approval(None, {"command": "cargo run"}, "call") is True
     assert await auto_tool.needs_approval(None, {"command": "cargo run"}, "call") is True
     assert await yolo_tool.needs_approval(None, {"command": "cargo run"}, "call") is False
+    assert await normal_tool.needs_approval(None, {"command": "python solution.py"}, "call") is True
+    assert await auto_tool.needs_approval(None, {"command": "python solution.py"}, "call") is True
+    assert await yolo_tool.needs_approval(None, {"command": "python solution.py"}, "call") is False
     assert await normal_tool.needs_approval(None, {"command": "cargo test"}, "call") is False
     assert await normal_tool.needs_approval(None, {"command": "git push"}, "call") is False
 

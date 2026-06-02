@@ -225,7 +225,14 @@ def _classify_known_command(argv: list[str]) -> TestShellDecision:
     if exe == "cargo":
         return _classify_cargo(argv, lower)
     if exe == "go":
-        return _decision_for_subcommand(argv, {"test", "vet"}, "Go verification")
+        return _classify_go(argv, lower)
+    if exe == "java":
+        return TestShellDecision(
+            "approval_required",
+            "Java execution runs local application code.",
+            tuple(argv),
+            "jvm_run",
+        )
     if exe == "curl":
         return _classify_curl(argv, lower)
     if exe == "ping":
@@ -256,8 +263,10 @@ def _classify_uv(argv: list[str], lower: list[str]) -> TestShellDecision:
         )
     if len(argv) >= 3 and lower[1] == "run":
         tool = _basename(argv[2]).lower()
-        if tool in {"pytest", "ruff", "ty", "mypy", "pyright", "python", "python3"}:
+        if tool in {"pytest", "ruff", "ty", "mypy", "pyright"}:
             return TestShellDecision("allow", "Python verification command.", tuple(argv), "python")
+        if tool in {"python", "python3"}:
+            return _classify_uv_python_execution(argv, lower)
         if tool == "pip" and len(argv) >= 5 and lower[3] == "list":
             return TestShellDecision("allow", "Python environment inspection.", tuple(argv), "python")
     if len(argv) >= 2 and lower[1] in {"sync", "pip"}:
@@ -270,9 +279,35 @@ def _classify_uv(argv: list[str], lower: list[str]) -> TestShellDecision:
     return TestShellDecision("deny", "Unsupported uv command for test_shell.", tuple(argv), "python")
 
 
+def _classify_uv_python_execution(argv: list[str], lower: list[str]) -> TestShellDecision:
+    if len(argv) >= 4 and lower[3] in {"--version", "-v"}:
+        return TestShellDecision("allow", "Python environment inspection.", tuple(argv), "python")
+    if len(argv) >= 5 and lower[3] == "-m":
+        module = lower[4]
+        if module in {"pytest", "ruff", "ty", "mypy", "pyright"}:
+            return TestShellDecision("allow", "Python verification command.", tuple(argv), "python")
+        if module == "pip" and len(argv) >= 6 and lower[5] == "list":
+            return TestShellDecision("allow", "Python environment inspection.", tuple(argv), "python")
+        if module == "pip" and len(argv) >= 6 and lower[5] == "install":
+            return TestShellDecision(
+                "approval_required",
+                "Dependency installation can modify the local environment.",
+                tuple(argv),
+                "dependency_install",
+            )
+    return TestShellDecision(
+        "approval_required",
+        "Python execution runs local project code.",
+        tuple(argv),
+        "python_run",
+    )
+
+
 def _classify_python_tools(exe: str, argv: list[str], lower: list[str]) -> TestShellDecision:
     if exe in {"pytest", "ruff", "ty", "mypy", "pyright"}:
         return TestShellDecision("allow", "Python verification command.", tuple(argv), "python")
+    if exe in {"python", "python3"} and len(argv) >= 2 and lower[1] in {"--version", "-v"}:
+        return TestShellDecision("allow", "Python environment inspection.", tuple(argv), "python")
     if exe in {"pip", "pip3"}:
         if len(argv) >= 2 and lower[1] == "list":
             return TestShellDecision("allow", "Python environment inspection.", tuple(argv), "python")
@@ -296,6 +331,13 @@ def _classify_python_tools(exe: str, argv: list[str], lower: list[str]) -> TestS
                 tuple(argv),
                 "dependency_install",
             )
+    if exe in {"python", "python3"}:
+        return TestShellDecision(
+            "approval_required",
+            "Python execution runs local project code.",
+            tuple(argv),
+            "python_run",
+        )
     return TestShellDecision("deny", "Unsupported Python command for test_shell.", tuple(argv), "python")
 
 
@@ -310,17 +352,33 @@ def _classify_node_tools(exe: str, argv: list[str], lower: list[str]) -> TestShe
             "dependency_install",
         )
     allowed_scripts = {"test", "lint", "typecheck", "check", "build"}
+    run_scripts = {"start", "dev", "serve", "preview"}
     if len(argv) >= 2 and lower[1] in allowed_scripts:
         return TestShellDecision("allow", "Node/frontend verification command.", tuple(argv), "node")
     if len(argv) >= 3 and lower[1] == "run" and lower[2] in allowed_scripts:
         return TestShellDecision("allow", "Node/frontend verification command.", tuple(argv), "node")
+    if len(argv) >= 2 and lower[1] in run_scripts:
+        return TestShellDecision(
+            "approval_required",
+            "Node package script runs local application code.",
+            tuple(argv),
+            "node_run",
+        )
+    if len(argv) >= 3 and lower[1] == "run" and lower[2] in run_scripts:
+        return TestShellDecision(
+            "approval_required",
+            "Node package script runs local application code.",
+            tuple(argv),
+            "node_run",
+        )
     return TestShellDecision("deny", f"Unsupported {exe} command for test_shell.", tuple(argv), "node")
 
 
 def _classify_jvm_tools(exe: str, argv: list[str], lower: list[str]) -> TestShellDecision:
     if any(arg == "deploy" for arg in lower):
         return TestShellDecision("deny", "Deploy/publish commands are blocked.", tuple(argv), "publish")
-    if any(arg == "spring-boot:run" for arg in lower):
+    run_targets = {"spring-boot:run", "bootrun", "run", "exec:java"}
+    if any(arg in run_targets for arg in lower):
         return TestShellDecision(
             "approval_required",
             "Service startup can affect local runtime state.",
@@ -344,6 +402,19 @@ def _classify_cargo(argv: list[str], lower: list[str]) -> TestShellDecision:
             "rust_run",
         )
     return TestShellDecision("deny", "Unsupported cargo command for test_shell.", tuple(argv), "cargo")
+
+
+def _classify_go(argv: list[str], lower: list[str]) -> TestShellDecision:
+    if len(argv) >= 2 and lower[1] in {"test", "vet"}:
+        return TestShellDecision("allow", "Go verification.", tuple(argv), "go")
+    if len(argv) >= 2 and lower[1] == "run":
+        return TestShellDecision(
+            "approval_required",
+            "go run executes local project code.",
+            tuple(argv),
+            "go_run",
+        )
+    return TestShellDecision("deny", "Unsupported go command for test_shell.", tuple(argv), "go")
 
 
 def _classify_curl(argv: list[str], lower: list[str]) -> TestShellDecision:
@@ -384,10 +455,10 @@ def _classify_docker(argv: list[str], lower: list[str]) -> TestShellDecision:
         subcommand = lower[2]
         if subcommand in {"ps", "logs", "config"}:
             return TestShellDecision("allow", "Read-only Docker Compose diagnostic.", tuple(argv), "docker")
-        if subcommand in {"up", "build"}:
+        if subcommand in {"up", "build", "run"}:
             return TestShellDecision(
                 "approval_required",
-                "Docker Compose startup/build can affect local runtime state.",
+                "Docker Compose startup/build/run can affect local runtime state.",
                 tuple(argv),
                 "docker",
             )

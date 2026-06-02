@@ -28,6 +28,7 @@ from deepy.tools.builtin import (
     _build_shell_command,
     _extract_bash_sentinel,
 )
+from deepy.tools.test_shell import classify_test_shell_command
 
 
 def decode(payload: str) -> dict:
@@ -106,6 +107,74 @@ def test_tool_result_shape_is_stable():
         "metadata": {},
         "awaitUserResponse": False,
     }
+
+
+def test_test_shell_classifies_python_execution_as_approval_required():
+    commands = [
+        "python leetcode/two-sum/solution.py",
+        "python3 solution.py",
+        "python -c 'print(1)'",
+        "uv run python leetcode/two-sum/solution.py",
+        "uv run python3 -c 'print(1)'",
+    ]
+
+    for command in commands:
+        decision = classify_test_shell_command(command)
+
+        assert decision.decision == "approval_required"
+        assert decision.category == "python_run"
+        assert decision.argv
+
+
+def test_test_shell_keeps_python_verification_commands_low_risk():
+    commands = [
+        "pytest -q",
+        "python -m pytest -q",
+        "python3 -m ruff check src",
+        "uv run python -m ty check src",
+    ]
+
+    for command in commands:
+        decision = classify_test_shell_command(command)
+
+        assert decision.decision == "allow"
+        assert decision.category == "python"
+
+
+def test_test_shell_classifies_common_local_run_commands_as_approval_required():
+    commands = {
+        "go run ./cmd/app": "go_run",
+        "npm start": "node_run",
+        "pnpm run dev": "node_run",
+        "yarn preview": "node_run",
+        "bun run serve": "node_run",
+        "mvn spring-boot:run": "service_startup",
+        "gradle bootRun": "service_startup",
+        "java -jar app.jar": "jvm_run",
+        "docker compose run web pytest": "docker",
+    }
+
+    for command, category in commands.items():
+        decision = classify_test_shell_command(command)
+
+        assert decision.decision == "approval_required"
+        assert decision.category == category
+
+
+def test_test_shell_keeps_common_language_test_commands_allowed():
+    commands = [
+        "go test ./...",
+        "npm test",
+        "pnpm run lint",
+        "yarn run build",
+        "mvn test",
+        "gradle check",
+    ]
+
+    for command in commands:
+        decision = classify_test_shell_command(command)
+
+        assert decision.decision == "allow"
 
 
 def test_todo_write_updates_reads_and_clears_state(tmp_path):
