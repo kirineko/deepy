@@ -88,10 +88,9 @@ TUI_INTERACTION_SURFACES: tuple[TuiInteractionSurface, ...] = (
     ),
     TuiInteractionSurface(
         "reset-config",
-        "management-screen",
-        "ResetConfigScreen",
-        "configuration editing needs a focused form with validation and save/cancel",
-        management_reason="provider-aware configuration form",
+        "composer-adjacent",
+        "InlineChoiceBlock/TextInputScreen",
+        "provider-aware staged reset flow aligned with Classic UI setup",
     ),
     TuiInteractionSurface(
         "skills-management",

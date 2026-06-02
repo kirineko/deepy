@@ -180,8 +180,9 @@ class AuditApprovalScreen(ModalScreen[str]):
         )
         self._approval_title().update(view.title)
         summary = f"{view.target_label}: {view.target or '-'}"
-        if view.metadata:
-            summary += "\n" + "\n".join(f"{label}: {value}" for label, value in view.metadata)
+        metadata = _tui_approval_metadata(self.item, view.metadata)
+        if metadata:
+            summary += "\n" + "\n".join(f"{label}: {value}" for label, value in metadata)
         self._approval_summary().update(summary)
         preview = self._approval_preview()
         preview_container = self._approval_preview_container()
@@ -234,6 +235,16 @@ class AuditApprovalScreen(ModalScreen[str]):
         if self._options is None:
             raise RuntimeError("Approval option list is not mounted.")
         return self._options
+
+
+def _tui_approval_metadata(
+    item: PendingApproval,
+    metadata: tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    tool_name = item.tool_name or item.name or ""
+    if tool_name == "shell" or item.action_kind == "command":
+        return tuple((label, value) for label, value in metadata if label != "description")
+    return metadata
 
 
 @dataclass(frozen=True)
@@ -307,6 +318,79 @@ class ChoiceScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class TextInputScreen(ModalScreen[str | None]):
+    BINDINGS = [
+        Binding("enter", "submit", "Submit"),
+        Binding("escape", "dismiss", "Cancel"),
+        Binding("q", "dismiss", "Cancel"),
+    ]
+
+    CSS = """
+    TextInputScreen {
+        align: center middle;
+    }
+
+    TextInputScreen > Vertical {
+        width: 92;
+        max-width: 95%;
+        height: auto;
+        max-height: 90%;
+        background: $panel;
+        padding: 1;
+    }
+
+    TextInputScreen Input {
+        margin: 0;
+    }
+
+    TextInputScreen .screen-help {
+        color: $text-muted;
+        margin: 0;
+    }
+    """
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        value: str = "",
+        placeholder: str = "",
+        password: bool = False,
+        help_text: str = "Enter submit · Esc cancel",
+    ) -> None:
+        super().__init__()
+        self.title_text = title
+        self.value = value
+        self.placeholder = placeholder
+        self.password = password
+        self.help_text = help_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(self.title_text, classes="block-title")
+            yield Static(self.help_text, classes="screen-help")
+            yield Input(
+                value=self.value,
+                placeholder=self.placeholder,
+                password=self.password,
+                id="text-input",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#text-input", Input).focus()
+
+    @on(Input.Submitted, "#text-input")
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(event.value.strip())
+
+    def action_submit(self) -> None:
+        self.dismiss(self.query_one("#text-input", Input).value.strip())
+
+    async def action_dismiss(self, result: str | None = None) -> None:
+        self.dismiss(None)
+
+
 @dataclass(frozen=True)
 class ResetConfigResult:
     api_key: str
@@ -316,150 +400,6 @@ class ResetConfigResult:
     thinking: str
     interface: str
     theme: str
-
-
-class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
-    BINDINGS = [
-        Binding("ctrl+s", "submit", "Save"),
-        Binding("escape", "dismiss", "Cancel"),
-        Binding("q", "dismiss", "Cancel"),
-    ]
-
-    CSS = """
-    ResetConfigScreen {
-        align: center middle;
-    }
-
-    ResetConfigScreen > Vertical {
-        width: 92;
-        max-width: 95%;
-        height: auto;
-        max-height: 90%;
-        background: $panel;
-        padding: 1;
-    }
-
-    ResetConfigScreen Input {
-        margin: 0;
-    }
-
-    ResetConfigScreen .screen-help {
-        color: $text-muted;
-        margin: 0;
-    }
-
-    ResetConfigScreen .screen-error {
-        color: $error;
-        margin: 0;
-        display: none;
-    }
-
-    ResetConfigScreen .config-section {
-        color: $accent;
-        text-style: bold;
-        margin-top: 1;
-    }
-    """
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        provider: str,
-        model: str,
-        base_url: str,
-        thinking: str,
-        interface: str,
-        theme: str,
-    ) -> None:
-        super().__init__()
-        self.api_key = api_key
-        self.provider = provider
-        self.model = model
-        self.base_url = base_url
-        self.thinking = thinking
-        self.interface = interface
-        self.theme = theme
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label("Reset Deepy Config", classes="block-title")
-            yield Static("Ctrl+S save · Esc cancel", classes="screen-help")
-            yield Static("", id="reset-error", classes="screen-error")
-            yield Static("Provider", classes="config-section")
-            yield Input(value=self.api_key, placeholder="API key", password=True, id="reset-api-key")
-            yield Input(value=self.provider, placeholder="Provider: deepseek|openrouter|xiaomi", id="reset-provider")
-            yield Input(value=self.model, placeholder="Model", id="reset-model")
-            yield Input(value=self.base_url, placeholder="Base URL", id="reset-base-url")
-            yield Static("Runtime", classes="config-section")
-            yield Input(value=self.thinking, placeholder="Thinking", id="reset-thinking")
-            yield Input(
-                value=f"{self.interface} {self.theme}",
-                placeholder="UI: 1 classic dark | 2 classic light | 3 modern dark | 4 modern light",
-                id="reset-ui",
-            )
-
-    def on_mount(self) -> None:
-        self.query_one("#reset-api-key", Input).focus()
-
-    def action_submit(self) -> None:
-        error, field_id = self._validation_error()
-        if error:
-            error_widget = self.query_one("#reset-error", Static)
-            error_widget.update(error)
-            error_widget.display = True
-            self.query_one(field_id, Input).focus()
-            return
-        self.dismiss(
-            ResetConfigResult(
-                api_key=self.query_one("#reset-api-key", Input).value.strip(),
-                provider=self.query_one("#reset-provider", Input).value.strip(),
-                model=self.query_one("#reset-model", Input).value.strip(),
-                base_url=self.query_one("#reset-base-url", Input).value.strip(),
-                thinking=self.query_one("#reset-thinking", Input).value.strip(),
-                interface=self._selected_ui()[0],
-                theme=self._selected_ui()[1],
-            )
-        )
-
-    async def action_dismiss(self, result: ResetConfigResult | None = None) -> None:
-        self.dismiss(None)
-
-    def _validation_error(self) -> tuple[str, str]:
-        provider = self.query_one("#reset-provider", Input).value.strip()
-        model = self.query_one("#reset-model", Input).value.strip()
-        ui_value = self.query_one("#reset-ui", Input).value.strip()
-        if not provider:
-            return "Provider is required.", "#reset-provider"
-        if provider not in {"deepseek", "openrouter", "xiaomi"}:
-            return "Provider must be deepseek, openrouter, or xiaomi.", "#reset-provider"
-        if not model:
-            return "Model is required.", "#reset-model"
-        if self._ui_choice_from_value(ui_value) is None:
-            return "UI must be 1-4, classic dark, classic light, modern dark, or modern light.", "#reset-ui"
-        return "", "#reset-provider"
-
-    def _selected_ui(self) -> tuple[str, str]:
-        return self._ui_choice_from_value(self.query_one("#reset-ui", Input).value.strip()) or ("classic", "dark")
-
-    @staticmethod
-    def _ui_choice_from_value(value: str) -> tuple[str, str] | None:
-        normalized = value.strip().lower()
-        choices = {
-            "1": ("classic", "dark"),
-            "classic dark": ("classic", "dark"),
-            "classic-dark": ("classic", "dark"),
-            "2": ("classic", "light"),
-            "classic light": ("classic", "light"),
-            "classic-light": ("classic", "light"),
-            "3": ("modern", "dark"),
-            "modern dark": ("modern", "dark"),
-            "modern-dark": ("modern", "dark"),
-            "4": ("modern", "light"),
-            "modern light": ("modern", "light"),
-            "modern-light": ("modern", "light"),
-        }
-        return choices.get(normalized)
 
 
 @dataclass(frozen=True)

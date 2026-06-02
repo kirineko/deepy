@@ -1058,7 +1058,7 @@ def test_render_tool_diff_preview_preserves_mainstream_language_highlighting():
         assert "#272822" not in spans
 
 
-def test_render_write_preview_does_not_truncate_large_writes():
+def test_render_write_preview_truncates_large_writes_like_updates():
     line_count = MAX_DIFF_LINES + 10
     body = "\n".join(f"+line {index}" for index in range(1, line_count + 1))
     output = json.dumps(
@@ -1080,8 +1080,12 @@ def test_render_write_preview_does_not_truncate_large_writes():
 
     rendered = console.export_text()
     assert "line 1" in rendered
-    assert f"line {line_count}" in rendered
-    assert "truncated" not in rendered
+    assert f"line {line_count}" not in rendered
+    assert "truncated 13 diff lines" in rendered
+    preview = tool_diff_preview(output)
+    assert preview is not None
+    assert f"line {line_count}" not in preview
+    assert "truncated 13 diff lines" in preview
 
 
 def test_render_message_renders_user_and_assistant_panels():

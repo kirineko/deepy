@@ -136,6 +136,7 @@ class PendingApproval:
     name: str
     tool_name: str
     arguments: str
+    call_id: str = ""
     agent_name: str = ""
     action_kind: str = "tool"
     server_name: str = ""

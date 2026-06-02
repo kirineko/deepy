@@ -485,6 +485,7 @@ def _pending_approval_from_interruption(
         name=str(getattr(item, "name", "") or tool_name or "tool"),
         tool_name=tool_name,
         arguments=arguments,
+        call_id=_approval_call_id(item, raw_item),
         agent_name=agent_name,
         action_kind="mcp_tool" if server_name else _approval_action_kind(tool_name),
         server_name=server_name,
@@ -547,6 +548,23 @@ def _approval_arguments(item: Any, raw_item: Any) -> str:
     arguments = getattr(raw_item, "arguments_json", None)
     if arguments is not None:
         return json_utils.dumps(arguments)
+    return ""
+
+
+def _approval_call_id(item: Any, raw_item: Any) -> str:
+    for value in (
+        getattr(item, "call_id", None),
+        getattr(raw_item, "call_id", None),
+        getattr(raw_item, "tool_call_id", None),
+        getattr(raw_item, "id", None),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(raw_item, dict):
+        for key in ("call_id", "tool_call_id", "id"):
+            value = raw_item.get(key)
+            if isinstance(value, str) and value:
+                return value
     return ""
 
 

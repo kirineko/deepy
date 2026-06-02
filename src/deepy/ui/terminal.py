@@ -2913,12 +2913,18 @@ def _handle_reset_command(
         console.print(f"No existing config at {settings.path}")
     console.print("Starting Deepy configuration setup...")
     try:
-        _run_interactive_config_setup(settings.path, previous=settings, console=console)
+        interface, theme = _run_interactive_config_setup(settings.path, previous=settings, console=console)
     except (KeyboardInterrupt, EOFError, StopIteration):
         _restore_config_after_failed_setup(settings.path, previous_text)
         console.print(f"[{palette.warning}]{_setup_cancelled_message(previous_text)}[/]")
         return current_session_id
     console.print(f"Wrote {settings.path}")
+    if interface != "classic" or theme != settings.ui.theme:
+        console.print(
+            f"[{palette.warning}]UI selection changed to "
+            f"{_format_ui_interface_label(interface)} {theme}. "
+            "Restart Deepy for the UI and theme selection to take effect.[/]"
+        )
     return current_session_id
 
 
@@ -2948,7 +2954,7 @@ def _run_interactive_config_setup(
     *,
     previous: Settings,
     console: Console,
-) -> None:
+) -> tuple[str, str]:
     provider = _prompt_for_provider_selection(
         previous.model.provider,
         console=console,
@@ -3004,6 +3010,7 @@ def _run_interactive_config_setup(
         theme=theme,
         interface=interface,
     )
+    return interface, theme
 
 
 def _prompt_theme_config_value(*, default: str, console: Console) -> str:

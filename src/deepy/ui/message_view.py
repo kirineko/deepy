@@ -211,8 +211,6 @@ def tool_diff_preview(output: str, *, max_lines: int = MAX_DIFF_LINES) -> str | 
     diff = _tool_diff_text(view)
     if not diff:
         return None
-    if view.name == "Write":
-        return diff
     return _limit_lines(diff, max_lines=max_lines)
 
 
@@ -235,11 +233,7 @@ def render_tool_diff_preview(
     raw_diff = _tool_diff_text(view)
     if not raw_diff:
         return None
-    diff = (
-        raw_diff
-        if view.name == "Write"
-        else _limit_lines(raw_diff, max_lines=max_lines)
-    )
+    diff = _limit_lines(raw_diff, max_lines=max_lines)
     return render_unified_diff_preview(
         diff,
         tool_name=view.name,

@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 import textual
+from rich.text import Text
+from textual import events
 from textual._xterm_parser import XTermParser
 from textual.command import CommandPalette
 from textual.widgets import Footer, Label, Markdown, OptionList, Static, TextArea
@@ -30,7 +32,13 @@ from deepy.status import BalanceInfo, BalanceStatus
 from deepy.tui.app import DeepyTuiApp
 from deepy.tui.commands import DeepyCommandProvider
 from deepy.tui.interaction_surfaces import TUI_INTERACTION_SURFACES, transcript_interrupting_surfaces
-from deepy.tui.screens import AuditApprovalScreen, ChoiceScreen, InfoScreen, ResetConfigScreen, SkillManagementScreen
+from deepy.tui.screens import (
+    AuditApprovalScreen,
+    ChoiceScreen,
+    InfoScreen,
+    SkillManagementScreen,
+    TextInputScreen,
+)
 from deepy.tui.state import set_session_id
 from deepy.tui.theme import (
     TUI_DARK_THEME,
@@ -96,8 +104,10 @@ def test_tui_maps_shared_ui_themes_to_curated_textual_themes() -> None:
 
 def test_tui_css_keeps_composer_and_transcript_dense() -> None:
     assert "#prompt-input" in DeepyTuiApp.CSS
-    assert "min-height: 1;" in DeepyTuiApp.CSS
-    assert "max-height: 5;" in DeepyTuiApp.CSS
+    assert "height: 4;" in DeepyTuiApp.CSS
+    assert "min-height: 4;" in DeepyTuiApp.CSS
+    assert "max-height: 4;" in DeepyTuiApp.CSS
+    assert "overflow-y: auto;" in DeepyTuiApp.CSS
     assert ".block-markdown MarkdownTable" in DeepyTuiApp.CSS
     assert "scrollbar-size-vertical: 1;" in DeepyTuiApp.CSS
 
@@ -135,6 +145,9 @@ def test_tui_visual_foundation_avoids_heavy_default_chrome() -> None:
     assert "#interaction-sheet OptionList > .option-list--option-disabled" in css
     assert "color: #e5e7eb !important;" in css
     assert "background: #414868 !important;" in css
+    assert "Screen.-light-theme #interaction-sheet" in css
+    assert "Screen.-light-theme #prompt-suggestions" in css
+    assert "background: #268bd2 !important;" in css
     assert "border-left: solid $primary" not in css
     assert "#prompt-suggestions" in css
     assert "border: solid $accent" not in css
@@ -239,6 +252,27 @@ async def _wait_for(pilot, condition: Callable[[], object], *, timeout: float = 
         if loop.time() >= deadline:
             raise AssertionError("Timed out waiting for TUI test condition") from last_error
         await pilot.pause(0.01)
+
+
+async def _choose_inline_option(app: DeepyTuiApp, pilot, title: str, *, down: int = 0) -> None:
+    await _wait_for(
+        pilot,
+        lambda: app.query(InlineChoiceBlock).first()
+        and app.query(InlineChoiceBlock).last().title_text == title,
+    )
+    for _ in range(down):
+        await pilot.press("down")
+    await pilot.press("enter")
+
+
+async def _submit_text_input(app: DeepyTuiApp, pilot, title: str, value: str) -> None:
+    await _wait_for(
+        pilot,
+        lambda: isinstance(app.screen, TextInputScreen)
+        and app.screen.title_text == title,
+    )
+    app.screen.query_one("#text-input").value = value  # type: ignore[attr-defined]
+    await pilot.press("enter")
 
 
 async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable[[], object]) -> None:
@@ -468,6 +502,7 @@ async def test_tui_applies_curated_light_textual_theme(tmp_path) -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause(0.01)
         assert app.theme == "solarized-light"
+        assert app.screen.has_class("-light-theme")
         app.exit()
 
 
@@ -497,7 +532,7 @@ async def test_tui_prompt_handles_cjk_emoji_newline_and_submission(tmp_path) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(42, 18), (100, 32)])
-async def test_tui_compact_composer_geometry_grows_for_multiline(tmp_path, size) -> None:
+async def test_tui_compact_composer_geometry_stays_fixed_for_multiline(tmp_path, size) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=size) as pilot:
@@ -509,17 +544,17 @@ async def test_tui_compact_composer_geometry_grows_for_multiline(tmp_path, size)
         suggestions = app.query_one("#prompt-suggestions", OptionList)
         actions = app.query_one("#prompt-actions")
 
-        assert panel.region.height == 2
-        assert prompt.region.height == 1
+        assert prompt.region.height == 4
         assert actions.region.height == 1
+        assert panel.region.height >= prompt.region.height + actions.region.height
         assert status.region.height == 1
         assert transcript.region.y + transcript.region.height <= panel.region.y
 
         prompt.insert("one\ntwo\nthree\nfour\nfive\nsix")
         await pilot.pause(0.05)
 
-        assert prompt.region.height == 5
-        assert panel.region.height == prompt.region.height + actions.region.height
+        assert prompt.region.height == 4
+        assert panel.region.height >= prompt.region.height + actions.region.height
         assert transcript.region.y + transcript.region.height <= panel.region.y
 
         prompt.text = "/"
@@ -757,7 +792,7 @@ def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, 
 
     assert code == 0
     assert "Deepy Session Summary" in capsys.readouterr().out
-    assert run_kwargs == [{"mouse": False}]
+    assert run_kwargs == [{"mouse": True}]
 
 
 def test_tui_runner_disables_textual_kitty_key_by_default(tmp_path, monkeypatch) -> None:
@@ -1237,7 +1272,7 @@ async def test_tui_init_command_routes_generated_prompt_without_unsupported_mess
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> None:
+async def test_tui_reset_flow_writes_config_and_reloads_settings(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     settings = Settings(path=config_path)
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
@@ -1247,16 +1282,19 @@ async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> No
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
-        await pilot.pause(0.1)
 
-        assert isinstance(app.screen, ResetConfigScreen)
-        assert not app.screen.query(Footer)
-        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-model").value = "deepseek-v4-flash"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-base-url").value = "https://example.test"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-ui").value = "modern light"  # type: ignore[attr-defined]
-        await pilot.press("ctrl+s")
-        await pilot.pause(0.2)
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        assert any(block.body == "/reset" for block in app.query(UserBlock))
+        assert app.controller.prompt_history[-1] == "/reset"
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider selected: deepseek" in rendered_info
+        assert "https://platform.deepseek.com/api_keys" in rendered_info
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://example.test")
+        await _choose_inline_option(app, pilot, "Reset: select thinking", down=2)
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.api_key == "sk-test")
 
         saved = load_settings(config_path)
         assert saved.model.api_key == "sk-test"
@@ -1269,11 +1307,39 @@ async def test_tui_reset_form_writes_config_and_reloads_settings(tmp_path) -> No
         assert app.settings.ui.interface == "modern"
         assert app.settings.ui.theme == "light"
         assert any("Wrote" in block.body for block in app.query(InfoBlock))
+        assert any("Restart Deepy" in block.body for block in app.query(InfoBlock))
         app.exit()
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_form_writes_third_party_provider_settings(tmp_path) -> None:
+async def test_tui_reset_warns_against_running_modern_ui_not_stale_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path, ui=UiConfig(interface="classic", theme="dark"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model")
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://api.deepseek.com")
+        await _choose_inline_option(app, pilot, "Reset: select thinking")
+        await _choose_inline_option(app, pilot, "Reset: select UI")
+        await _wait_for(pilot, lambda: load_settings(config_path).model.api_key == "sk-test")
+
+        saved = load_settings(config_path)
+        assert saved.ui.interface == "classic"
+        assert saved.ui.theme == "dark"
+        assert any("Restart Deepy" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_writes_third_party_provider_settings(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
 
@@ -1282,17 +1348,17 @@ async def test_tui_reset_form_writes_third_party_provider_settings(tmp_path) -> 
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
-        await pilot.pause(0.1)
 
-        assert isinstance(app.screen, ResetConfigScreen)
-        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-provider").value = "xiaomi"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-model").value = "mimo-v2.5"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-base-url").value = "https://api.xiaomimimo.com/v1"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-thinking").value = "disabled"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-ui").value = "classic light"  # type: ignore[attr-defined]
-        await pilot.press("ctrl+s")
-        await pilot.pause(0.2)
+        await _choose_inline_option(app, pilot, "Reset: select provider", down=2)
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider selected: xiaomi" in rendered_info
+        assert "https://platform.xiaomimimo.com/console/api-keys" in rendered_info
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://api.xiaomimimo.com/v1")
+        await _choose_inline_option(app, pilot, "Reset: select thinking")
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=1)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "xiaomi")
 
         saved = load_settings(config_path)
         assert saved.model.provider == "xiaomi"
@@ -1305,7 +1371,7 @@ async def test_tui_reset_form_writes_third_party_provider_settings(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_form_accepts_openrouter_custom_model_and_effort(tmp_path) -> None:
+async def test_tui_reset_flow_accepts_openrouter_custom_model_and_effort(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
 
@@ -1314,16 +1380,20 @@ async def test_tui_reset_form_accepts_openrouter_custom_model_and_effort(tmp_pat
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
-        await pilot.pause(0.1)
 
-        assert isinstance(app.screen, ResetConfigScreen)
-        app.screen.query_one("#reset-api-key").value = "sk-test"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-provider").value = "openrouter"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-model").value = "anthropic/claude-sonnet-4.5"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-thinking").value = "minimal"  # type: ignore[attr-defined]
-        app.screen.query_one("#reset-ui").value = "4"  # type: ignore[attr-defined]
-        await pilot.press("ctrl+s")
-        await pilot.pause(0.2)
+        await _choose_inline_option(app, pilot, "Reset: select provider", down=1)
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=2)
+        await _submit_text_input(
+            app,
+            pilot,
+            "Reset: custom model",
+            "anthropic/claude-sonnet-4.5",
+        )
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://openrouter.ai/api/v1")
+        await _choose_inline_option(app, pilot, "Reset: select thinking", down=6)
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "openrouter")
 
         saved = load_settings(config_path)
         assert saved.model.provider == "openrouter"
@@ -1336,7 +1406,7 @@ async def test_tui_reset_form_accepts_openrouter_custom_model_and_effort(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
+async def test_tui_reset_flow_cancellation_preserves_config(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("[model]\nname = \"deepseek-v4-pro\"\n", encoding="utf-8")
     settings = load_settings(config_path)
@@ -1347,9 +1417,13 @@ async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
-        await pilot.pause(0.1)
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Reset: select provider",
+        )
         await pilot.press("escape")
-        await pilot.pause(0.1)
+        await _wait_for(pilot, lambda: any("Reset cancelled" in block.body for block in app.query(InfoBlock)))
 
         assert config_path.read_text(encoding="utf-8") == "[model]\nname = \"deepseek-v4-pro\"\n"
         assert app.settings.model.name == "deepseek-v4-pro"
@@ -1357,7 +1431,7 @@ async def test_tui_reset_form_cancellation_preserves_config(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_form_shows_field_validation_without_saving(tmp_path) -> None:
+async def test_tui_reset_flow_cancellation_during_value_input_preserves_config(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("[ui]\ntheme = \"dark\"\n", encoding="utf-8")
     settings = load_settings(config_path)
@@ -1368,17 +1442,11 @@ async def test_tui_reset_form_shows_field_validation_without_saving(tmp_path) ->
         prompt = app.query_one("#prompt-input", PromptTextArea)
         prompt.text = "/reset"
         await pilot.press("enter")
-        await pilot.pause(0.1)
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        await _wait_for(pilot, lambda: isinstance(app.screen, TextInputScreen))
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: any("Reset cancelled" in block.body for block in app.query(InfoBlock)))
 
-        assert isinstance(app.screen, ResetConfigScreen)
-        app.screen.query_one("#reset-ui").value = "solarized"  # type: ignore[attr-defined]
-        await pilot.press("ctrl+s")
-        await pilot.pause(0.1)
-
-        assert isinstance(app.screen, ResetConfigScreen)
-        error = app.screen.query_one("#reset-error")
-        assert error.display is True
-        assert "UI must be 1-4" in str(error.content)
         assert load_settings(config_path).ui.theme == "dark"
         app.exit()
 
@@ -2199,7 +2267,10 @@ async def test_tui_approval_screen_hides_empty_preview_for_shell(tmp_path) -> No
 
         assert isinstance(app.screen, AuditApprovalScreen)
         assert "Approve shell command?" in str(app.screen.query_one("#approval-title", Label).content)
-        assert "command:" in str(app.screen.query_one("#approval-summary").content)
+        summary = str(app.screen.query_one("#approval-summary").content)
+        assert "command:" in summary
+        assert f"mkdir -p {tmp_path / 'leetcode'}" in summary
+        assert "创建 leetcode 目录" not in summary
         assert app.screen.query_one("#approval-preview").display is False
         assert not app.screen.query(Footer)
         options = app.screen.query_one("#approval-options", OptionList)
@@ -2246,6 +2317,12 @@ async def test_tui_approval_resolver_approves_and_resumes_turn_without_transcrip
 
         block = app.query_one(AuditDecisionBlock)
         assert "Approve shell command?" in str(block.query_one("#audit-decision-title").content)
+        summary = block.query_one("#audit-decision-summary")
+        assert summary.display is not False
+        summary_text = str(summary.content)
+        assert "command:" in summary_text
+        assert "pwd" in summary_text
+        assert "show cwd" not in summary_text
         assert prompt.disabled is True
 
         await pilot.press("enter")
@@ -2403,7 +2480,9 @@ async def test_tui_file_approval_renders_preflight_diff_once(tmp_path) -> None:
         await _wait_for(pilot, lambda: app.state.session_id == "s1")
 
         assert len(app.query(DiffBlock)) == 1
-        assert "app.py" in app.query_one(DiffBlock).body
+        diff_block = app.query_one(DiffBlock)
+        assert "app.py" in diff_block.body
+        assert diff_block.allow_vertical_scroll is False
         assert not app.query(ToolBlock)
         app.exit()
 
@@ -2421,7 +2500,8 @@ async def test_tui_initial_setup_guides_missing_config(tmp_path) -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause(0.2)
 
-        assert isinstance(app.screen, ResetConfigScreen)
+        assert app.query(InlineChoiceBlock).first()
+        assert app.query(InlineChoiceBlock).last().title_text == "Reset: select provider"
         assert any("Deepy needs a provider API key" in block.body for block in app.query(InfoBlock))
         app.exit()
 
@@ -2467,6 +2547,7 @@ async def test_tui_load_skill_tool_output_is_summarized(tmp_path) -> None:
         assert block.body == ""
         assert "Loaded skill: demo" in block.output_body
         assert "VERY LONG SKILL BODY" not in block.output_body
+        assert block.query_one(".tool-output", Static).display is False
         app.exit()
 
 
@@ -2543,8 +2624,418 @@ async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
         assert not app.query(".usage-line")
         assert "usage input" not in str(app.query_one("#status-left", Label).content)
         ordered = [type(block).__name__ for block in app.query(".transcript-block")]
-        assert ordered.index("DiffBlock") < ordered.index("AssistantBlock")
+        assert ordered.index("AssistantBlock") < ordered.index("DiffBlock")
         assert ordered.index("DiffBlock") < ordered.index("ToolBlock")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_call_placeholder_before_assistant_updates_in_place(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="mcp_search",
+                payload={"call_id": "mcp-1", "arguments": '{"query":"x"}'},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("ToolBlock") < ordered.index("AssistantBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assert app.query_one(AssistantBlock).markdown == "Answer starts\nAnswer continues"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_raw_tool_start_anchors_placeholder_before_active_assistant_block(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="raw_response",
+                name="response.output_item.added",
+                payload={
+                    "raw": SimpleNamespace(
+                        item=SimpleNamespace(
+                            type="function_call",
+                            call_id="mcp-1",
+                            name="mcp_search",
+                            arguments='{"query":"x"}',
+                        )
+                    )
+                },
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="mcp_search",
+                payload={"call_id": "mcp-1", "arguments": '{"query":"x"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("ToolBlock") < ordered.index("AssistantBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assert app.query_one(AssistantBlock).markdown == "Answer starts\nAnswer continues"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_late_tool_output_without_placeholder_appends_after_active_assistant_block(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("AssistantBlock") < ordered.index("ToolBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assistant_blocks = list(app.query(AssistantBlock))
+        assert [block.markdown for block in assistant_blocks] == ["Answer starts", "\nAnswer continues"]
+        ordered_blocks = list(app.query(".transcript-block"))
+        assert ordered_blocks.index(assistant_blocks[0]) < ordered.index("ToolBlock")
+        assert ordered.index("ToolBlock") < ordered_blocks.index(assistant_blocks[1])
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_shell_output_after_approved_update_stays_after_prior_content(tmp_path) -> None:
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    preflight = {
+        "ok": True,
+        "name": "Update",
+        "output": "Proposed update",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+            "preflight": True,
+        },
+        "awaitUserResponse": False,
+    }
+    actual_update = {
+        "ok": True,
+        "name": "Update",
+        "output": "Updated file",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+        },
+        "awaitUserResponse": False,
+    }
+    shell_output = tui_app.shell_tool_result_json(
+        _local_command_result("pytest", output="7 passed\n"),
+        output="7 passed\n",
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="I will update and then test."))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Update",
+                payload={
+                    "call_id": "update-1",
+                    "arguments": json.dumps(
+                        {
+                            "file_path": str(tmp_path / "app.py"),
+                            "old_string": "old",
+                            "new_string": "new",
+                        }
+                    ),
+                },
+            )
+        )
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="Update",
+                    tool_name="Update",
+                    arguments=json.dumps(
+                        {
+                            "file_path": str(tmp_path / "app.py"),
+                            "old_string": "old",
+                            "new_string": "new",
+                        }
+                    ),
+                    call_id="update-1",
+                    action_kind="text_update",
+                    preflight=preflight,
+                )
+            ]
+        )
+        if resolved[0].outcome == "approve":
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=json.dumps(actual_update),
+                    payload={"call_id": "update-1"},
+                )
+            )
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_call",
+                    name="shell",
+                    payload={
+                        "call_id": "shell-1",
+                        "arguments": json.dumps({"command": "pytest", "description": "run tests"}),
+                    },
+                )
+            )
+            shell_resolved = await kwargs["approval_resolver"](
+                [
+                    PendingApproval(
+                        index=0,
+                        name="shell",
+                        tool_name="shell",
+                        arguments=json.dumps({"command": "pytest", "description": "run tests"}),
+                        call_id="shell-1",
+                        action_kind="command",
+                    )
+                ]
+            )
+            if shell_resolved[0].outcome != "approve":
+                return RunSummary(output="done", session_id="s1", complete=True)
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=shell_output,
+                    payload={"call_id": "shell-1"},
+                )
+            )
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "update"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(AuditDecisionBlock).first())
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(AuditDecisionBlock).first()
+            and "shell" in str(app.query_one(AuditDecisionBlock).query_one("#audit-decision-title").content).lower(),
+        )
+        block = app.query_one(AuditDecisionBlock)
+        summary = block.query_one("#audit-decision-summary")
+        assert summary.display is not False
+        summary_text = str(summary.content)
+        assert "command:" in summary_text
+        assert "pytest" in summary_text
+        assert "run tests" not in summary_text
+        assert not app.query(ToolBlock)
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(LocalCommandBlock).first())
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("AssistantBlock") < ordered.index("LocalCommandBlock")
+        assert ordered.index("DiffBlock") < ordered.index("LocalCommandBlock")
+        assert "7 passed" in app.query_one(LocalCommandBlock).output_body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_yolo_tool_outputs_split_later_assistant_text_after_diff(tmp_path) -> None:
+    diff = "--- a/leetcode/two_sum.py\n+++ b/leetcode/two_sum.py\n@@ -1 +1,3 @@\n-old\n+old\n+case 6\n+case 7\n"
+    update_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Update",
+            "output": "Updated file",
+            "error": None,
+            "metadata": {
+                "path": str(tmp_path / "leetcode" / "two_sum.py"),
+                "changedFiles": [str(tmp_path / "leetcode" / "two_sum.py")],
+                "diff": diff,
+                "diff_preview": diff,
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    read_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Read",
+            "output": "print('ok')",
+            "error": None,
+            "metadata": {"path": str(tmp_path / "leetcode" / "two_sum.py")},
+            "awaitUserResponse": False,
+        }
+    )
+    shell_output = tui_app.shell_tool_result_json(
+        _local_command_result("python leetcode/two_sum.py", output="7 passed\n"),
+        output="7 passed\n",
+    )
+    table = (
+        "| # | 输入 nums | target | 期望输出 | 说明 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 6 | `[2, 5, 5, 11]` | 10 | `[1, 2]` | 重复值 |\n"
+        "| 7 | `[1, 2, 3, 4, 5]` | 9 | `[3, 4]` | 末尾 |\n"
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=update_output,
+                payload={"call_id": "update-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="当前文件已有 5 个测试用例，我再加 2 个：\n"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=read_output,
+                payload={"call_id": "read-1"},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=shell_output,
+                payload={"call_id": "shell-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="验证一下修改后的结果：\n\n" + table))
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.YOLO)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(140, 36)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "add tests"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.state.session_id == "s1")
+        await pilot.pause(0.2)
+
+        ordered_blocks = list(app.query(".transcript-block"))
+        ordered_types = [type(block).__name__ for block in ordered_blocks]
+        assistant_blocks = list(app.query(AssistantBlock))
+        assert len(assistant_blocks) == 2
+        assert assistant_blocks[0].markdown.startswith("当前文件已有")
+        assert assistant_blocks[1].markdown.startswith("验证一下")
+        assert ordered_types.index("DiffBlock") < ordered_blocks.index(assistant_blocks[0])
+        assert ordered_blocks.index(assistant_blocks[0]) < ordered_types.index("ToolBlock")
+        assert ordered_types.index("ToolBlock") < ordered_types.index("LocalCommandBlock")
+        assert ordered_types.index("LocalCommandBlock") < ordered_blocks.index(assistant_blocks[1])
+
+        transcript_blocks = [block for block in ordered_blocks if block.region.height > 0]
+        for before, after in zip(transcript_blocks, transcript_blocks[1:], strict=False):
+            assert before.region.y + before.region.height <= after.region.y
         app.exit()
 
 
@@ -3098,6 +3589,115 @@ async def test_tui_autoscrolls_when_live_block_grows(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_autoscrolls_after_assistant_markdown_table_renders(tmp_path) -> None:
+    release = asyncio.Event()
+    table = "| Case | Input | Output |\n| --- | --- | --- |\n" + "\n".join(
+        f"| {index} | `[1, {index}]` | `{index + 1}` |" for index in range(60)
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Here is the table:\n\n"))
+        await asyncio.sleep(0)
+        emit_event(DeepyStreamEvent(kind="text_delta", text=table))
+        await release.wait()
+        return RunSummary(output="", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "table"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        transcript = app.query_one("#transcript")
+        assert transcript.max_scroll_y > 0
+        assert transcript.scroll_y == transcript.max_scroll_y
+
+        release.set()
+        await pilot.pause(0.2)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_transcript_wheel_scroll_does_not_trigger_prompt_history(tmp_path) -> None:
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        transcript = app.query_one("#transcript")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        app.controller.add_prompt_history("previous prompt")
+        for index in range(80):
+            await app._append_block(InfoBlock(f"line {index}"))
+        await pilot.pause(0.1)
+
+        assert transcript.max_scroll_y > 0
+        assert transcript.scroll_y == transcript.max_scroll_y
+        assert prompt.has_focus
+        assert prompt.text == ""
+
+        scroll_target = list(app.query(InfoBlock))[-1]
+        wheel_event = events.MouseScrollUp(
+            scroll_target,
+            0,
+            0,
+            0,
+            5,
+            0,
+            False,
+            False,
+            False,
+        )
+        scroll_target.post_message(wheel_event)
+        await pilot.pause(0.1)
+
+        assert getattr(wheel_event, "_no_default_action") is True
+        assert transcript.scroll_y < transcript.max_scroll_y
+        assert prompt.text == ""
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "previous prompt")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_wheel_scroll_does_not_trigger_prompt_history(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        app.controller.add_prompt_history("previous prompt")
+        prompt.text = ""
+
+        wheel_event = events.MouseScrollUp(
+            prompt,
+            0,
+            0,
+            0,
+            5,
+            0,
+            False,
+            False,
+            False,
+        )
+        prompt.post_message(wheel_event)
+        await pilot.pause(0.1)
+
+        assert getattr(wheel_event, "_no_default_action") is True
+        assert prompt.text == ""
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "previous prompt")
+        app.exit()
+
+
+@pytest.mark.asyncio
 async def test_tui_preserves_scroll_position_and_new_output_indicator(tmp_path) -> None:
     first_batch_done = asyncio.Event()
     continue_output = asyncio.Event()
@@ -3226,10 +3826,11 @@ async def test_tui_tool_output_is_compacted(tmp_path) -> None:
         block = app.query_one(ToolBlock)
         assert body == ""
         assert "https://example.com" in block.arguments
+        assert block.title == "WebFetch ok"
         assert "line 0" in block.output_body
-        assert "line 7" in block.output_body
-        assert "line 8" not in block.output_body
-        assert "... output truncated ..." in block.output_body
+        output = block.query_one(".tool-output", Static)
+        assert output.display is False
+        assert "line 0" not in str(output.content)
         app.exit()
 
 
@@ -3413,7 +4014,7 @@ async def test_tui_help_command_opens_info_screen(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_ps_command_opens_background_task_screen(tmp_path) -> None:
+async def test_tui_ps_command_appends_foreground_background_task_block(tmp_path) -> None:
     app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
     app.background_tasks.start(
         command="worker",
@@ -3428,9 +4029,39 @@ async def test_tui_ps_command_opens_background_task_screen(tmp_path) -> None:
         await pilot.press("enter")
         await pilot.pause(0.2)
 
-        assert isinstance(app.screen, InfoScreen)
-        assert "Background Tasks" in app.screen.markdown
-        assert "worker" in app.screen.markdown
+        assert not isinstance(app.screen, InfoScreen)
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Background Tasks" in rendered_info
+        assert "1. " in rendered_info
+        assert "worker" in rendered_info
+        assert "Use /stop <id>, /stop <number>, or /stop all." in rendered_info
+        assert any(block.body == "/ps" for block in app.query(UserBlock))
+        assert app.controller.prompt_history[-1] == "/ps"
+        app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_background_task_state_does_not_render_as_user_ps_output(tmp_path) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        app.background_tasks.start(
+            command="worker",
+            argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+            cwd=tmp_path,
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "start background work"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Background Tasks" not in rendered_info
         app.background_tasks.stop_all(force_after_grace=True)
         app.exit()
 
@@ -3928,7 +4559,9 @@ async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
         assert not any("function_call_output" in block.body for block in app.query(InfoBlock))
         tool_blocks = list(app.query(ToolBlock))
         assert all(block.title != "Write ok - selection_sort.py" for block in tool_blocks)
-        assert any(block.title == "Shell ok" for block in tool_blocks)
+        shell_block = next(block for block in tool_blocks if block.title.startswith("Shell ok"))
+        assert shell_block.title == "Shell ok - python selection_sort.py"
+        assert shell_block.query_one(".tool-output", Static).display is False
         assert app.query_one(DiffBlock).body.startswith("selection_sort.py")
         app.exit()
 
@@ -4218,7 +4851,12 @@ async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> Non
 
         block = app.query_one(QuestionBlock)
         options = block.query_one("#question-options", OptionList)
-        options.highlighted = 2
+        options.focus()
+        await _wait_for(pilot, lambda: options.has_focus)
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: block.selected_values == frozenset({"Data"}))
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: block.selected_values == frozenset({"__other__"}))
         block.action_toggle_selected()
         await _wait_for(
             pilot,
@@ -4227,9 +4865,8 @@ async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> Non
                 and block.query_one("#question-custom", TextArea).has_focus
             ),
         )
-
         custom_option_text = _option_prompt_text(options.get_option_at_index(2))
-        assert custom_option_text.startswith("[x]")
+        assert block.selected_values == frozenset({"__other__"})
         assert "Custom answer" in custom_option_text
         custom = block.query_one("#question-custom", TextArea)
         assert custom.display
@@ -4375,7 +5012,6 @@ async def test_tui_tool_surfaces_show_metadata_and_side_projection(tmp_path) -> 
             "output": "boom",
             "error": "Command exited with code 2.",
             "metadata": {
-                "command": "false",
                 "cwd": str(tmp_path),
                 "exitCode": 2,
                 "durationMs": 15,
@@ -4415,6 +5051,16 @@ async def test_tui_tool_surfaces_show_metadata_and_side_projection(tmp_path) -> 
     )
 
     async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="shell",
+                payload={
+                    "call_id": "s",
+                    "arguments": json.dumps({"command": "false", "description": "explain failure"}),
+                },
+            )
+        )
         kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=shell_output, payload={"call_id": "s"}))
         kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=todo_output, payload={"call_id": "t"}))
         kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=mcp_output, payload={"call_id": "m"}))
@@ -4431,21 +5077,32 @@ async def test_tui_tool_surfaces_show_metadata_and_side_projection(tmp_path) -> 
 
         shell_block, todo_block, mcp_block = list(app.query(ToolBlock))
         assert shell_block.body == ""
-        assert "Exit code: 2" in shell_block.output_body
-        assert "Duration: 15 ms" in shell_block.output_body
-        assert "Shell: /bin/zsh" in shell_block.output_body
-        assert "Truncated: true" in shell_block.output_body
+        assert shell_block.arguments == "false"
+        assert "explain failure" not in shell_block.arguments
+        assert shell_block.title == "Shell failed - false"
+        assert shell_block.output_body == ""
+        assert shell_block.query_one(".tool-output", Static).display is False
         assert todo_block.body == ""
-        assert "Progress  [######------------]  1/3 completed (33%)" in todo_block.output_body
-        assert "Status    1 done | 1 active | 1 pending" in todo_block.output_body
-        assert "Current   " in todo_block.output_body
-        assert "[>] " in todo_block.output_body
+        assert "Progress" not in todo_block.output_body
+        assert "Status" not in todo_block.output_body
+        assert "Current" in todo_block.output_body
+        assert "[>] t2: Verify side panel" in todo_block.output_body
         assert "Verify side panel" in todo_block.output_body
         assert "Parameters" not in todo_block.output_body
+        todo_output = todo_block.query_one(".tool-output", Static)
+        assert todo_output.display is True
+        assert isinstance(todo_output.content, Text)
+        assert todo_output.content.spans
+        todo_output_text = str(todo_output.content)
+        assert "Progress" not in todo_output_text
+        assert "Status" not in todo_output_text
+        assert "Current\n  [>] t2: Verify side panel" in todo_output_text
+        assert "[ ] t3: Ship todo progress UI" in todo_output_text
         assert mcp_block.body == ""
         assert "Server: memory" in mcp_block.output_body
         assert "Tool: search" in mcp_block.output_body
         assert "State: unavailable" in mcp_block.output_body
+        assert mcp_block.query_one(".tool-output", Static).display is False
         assert all(block.body == "" for block in (shell_block, todo_block, mcp_block))
         app.exit()
 

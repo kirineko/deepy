@@ -8,7 +8,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -25,6 +25,8 @@ from deepy.config import (
     PROVIDER_CATALOG,
     Settings,
     allows_custom_model_for_provider,
+    default_base_url_for_provider,
+    default_model_for_provider,
     is_supported_model_for_provider,
     is_supported_provider,
     is_valid_thinking_mode_for_provider,
@@ -37,6 +39,8 @@ from deepy.config import (
     update_config_textual_theme,
     update_config_ui_interface,
     update_config_view_mode,
+    UI_SETUP_OPTIONS,
+    ui_setup_from_selection,
     write_config,
 )
 from deepy.input_suggestions import (
@@ -93,10 +97,10 @@ from deepy.tui.screens import (
     ChoiceScreen,
     InfoScreen,
     ResetConfigResult,
-    ResetConfigScreen,
     SkillManagementScreen,
     SkillScreenAction,
     SkillScreenEntry,
+    TextInputScreen,
 )
 from deepy.tui.state import (
     TuiController,
@@ -166,6 +170,8 @@ from deepy.utils import json as json_utils
 
 RunOnce = Callable[..., Coroutine[Any, Any, RunSummary]]
 
+_LIGHT_TEXTUAL_THEMES = {"solarized-light", "catppuccin-latte", "atom-one-light"}
+
 
 class StreamEventMessage(Message):
     def __init__(self, event: DeepyStreamEvent) -> None:
@@ -183,6 +189,30 @@ class TurnFailedMessage(Message):
     def __init__(self, error: Exception) -> None:
         self.error = error
         super().__init__()
+
+
+class TranscriptScroll(VerticalScroll):
+    _WHEEL_SCROLL_LINES = 4
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        event.prevent_default()
+        event.stop()
+        self.scroll_relative(
+            y=max(1, abs(event.delta_y)) * self._WHEEL_SCROLL_LINES,
+            animate=False,
+            force=True,
+            immediate=True,
+        )
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        event.prevent_default()
+        event.stop()
+        self.scroll_relative(
+            y=-max(1, abs(event.delta_y)) * self._WHEEL_SCROLL_LINES,
+            animate=False,
+            force=True,
+            immediate=True,
+        )
 
 
 class DeepyTuiApp(App[None]):
@@ -214,6 +244,7 @@ class DeepyTuiApp(App[None]):
         width: 1fr;
         height: 1fr;
         padding: 0 1;
+        overflow-y: auto;
         scrollbar-size-vertical: 1;
     }
 
@@ -239,12 +270,13 @@ class DeepyTuiApp(App[None]):
     }
 
     #prompt-input {
-        height: auto;
-        min-height: 1;
-        max-height: 5;
+        height: 4;
+        min-height: 4;
+        max-height: 4;
         border: none;
         padding: 0;
         background: transparent;
+        overflow-y: auto;
     }
 
     #prompt-input:focus {
@@ -275,6 +307,24 @@ class DeepyTuiApp(App[None]):
         layer: overlay;
         overlay: screen;
         background: $panel;
+    }
+
+    #prompt-suggestions > .option-list--option {
+        padding: 0 1;
+    }
+
+    #prompt-suggestions > .option-list--option-highlighted {
+        color: #ffffff !important;
+        background: #414868 !important;
+        text-style: bold !important;
+    }
+
+    #prompt-suggestions > .option-list--option-disabled {
+        color: #7f849c !important;
+    }
+
+    #prompt-suggestions > .option-list--option-hover {
+        background: #292e42 !important;
     }
 
     StatusBar {
@@ -340,6 +390,12 @@ class DeepyTuiApp(App[None]):
     .block-markdown MarkdownTable,
     .block-markdown Table {
         margin: 0;
+        padding: 0;
+    }
+
+    .block-markdown MarkdownTableCell,
+    .block-markdown TableCell {
+        padding: 0 1;
     }
 
     .user-block {
@@ -405,6 +461,15 @@ class DeepyTuiApp(App[None]):
 
     .tool-block .block-body {
         width: 1fr;
+    }
+
+    .tool-output {
+        color: $text-muted;
+        margin: 0 0 0 2;
+    }
+
+    .todo-block .tool-output {
+        color: $text;
     }
 
     .tool-details {
@@ -517,12 +582,53 @@ class DeepyTuiApp(App[None]):
         margin-top: 0;
     }
 
+    Screen.-light-theme #interaction-sheet,
+    Screen.-light-theme #prompt-suggestions {
+        background: #fdf6e3;
+        color: #073642;
+    }
+
+    Screen.-light-theme #interaction-sheet .block-title {
+        color: #586e75;
+    }
+
+    Screen.-light-theme #interaction-sheet OptionList,
+    Screen.-light-theme #prompt-suggestions {
+        color: #073642 !important;
+        background: #fdf6e3 !important;
+    }
+
+    Screen.-light-theme #interaction-sheet OptionList > .option-list--option,
+    Screen.-light-theme #prompt-suggestions > .option-list--option {
+        color: #073642 !important;
+    }
+
+    Screen.-light-theme #interaction-sheet OptionList > .option-list--option-highlighted,
+    Screen.-light-theme #interaction-sheet OptionList:focus > .option-list--option-highlighted,
+    Screen.-light-theme #prompt-suggestions > .option-list--option-highlighted {
+        color: #fdf6e3 !important;
+        background: #268bd2 !important;
+        text-style: bold !important;
+    }
+
+    Screen.-light-theme #interaction-sheet OptionList > .option-list--option-disabled,
+    Screen.-light-theme #prompt-suggestions > .option-list--option-disabled {
+        color: #93a1a1 !important;
+    }
+
+    Screen.-light-theme #interaction-sheet OptionList > .option-list--option-hover,
+    Screen.-light-theme #prompt-suggestions > .option-list--option-hover {
+        background: #eee8d5 !important;
+    }
+
+    Screen.-light-theme #interaction-sheet .screen-help,
+    Screen.-light-theme #interaction-sheet .inline-choice-options {
+        color: #586e75;
+    }
+
     .diff-block {
         background: transparent;
         margin: 0 0 1 0;
-        max-height: 70%;
-        overflow-y: auto;
-        scrollbar-size-vertical: 1;
     }
 
     .error-block {
@@ -562,6 +668,7 @@ class DeepyTuiApp(App[None]):
             supports_image_input=supports_image_input(settings)
         )
         self._assistant_block: AssistantBlock | None = None
+        self._assistant_rendered_text = ""
         self._thinking_block: ThinkingBlock | None = None
         self._tool_blocks: dict[str, ToolBlock | LocalCommandBlock] = {}
         self._retryable_tool_blocks: dict[tuple[str, str], ToolBlock] = {}
@@ -583,10 +690,12 @@ class DeepyTuiApp(App[None]):
         self._pending_inline_choice: asyncio.Future[str | None] | None = None
         self._active_interaction_block: Widget | None = None
         self._approved_preflight_diffs: set[str] = set()
+        self._suppressed_approval_tool_call_ids: set[str] = set()
+        self._completed_tool_call_ids: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-layout"):
-            yield VerticalScroll(id="transcript")
+            yield TranscriptScroll(id="transcript")
             with Vertical(id="side-panel"):
                 yield Label("Status", classes="block-title")
                 yield Static("", id="side-status")
@@ -622,6 +731,7 @@ class DeepyTuiApp(App[None]):
             self.settings.ui.theme,
             self.settings.ui.textual_theme,
         )
+        self.screen.set_class(_is_light_tui_theme(self.settings.ui.theme, self.theme), "-light-theme")
 
     def _start_initial_setup(self) -> None:
         self.run_worker(self._initial_setup_command(), exclusive=False)
@@ -670,17 +780,16 @@ class DeepyTuiApp(App[None]):
         if slash.name in {"exit", "quit"}:
             self._exit_with_summary()
             return True
+        await self._record_slash_command_invocation(text)
         if slash.name in UNSUPPORTED_TUI_COMMANDS:
             await self._append_block(ErrorBlock(UNSUPPORTED_TUI_COMMANDS[slash.name]))
             return True
         if slash.name == "init":
             request = build_agents_init_prompt(self.project_root, extra_instruction=slash.argument)
-            await self._append_block(UserBlock(text))
             self._start_model_turn(request, list(self.controller.loaded_skill_names), status="Initializing AGENTS.md")
             return True
         if is_subagent_slash_command(slash.name):
             request = build_subagent_slash_prompt(slash.name, slash.argument)
-            await self._append_block(UserBlock(text))
             self._start_model_turn(
                 request,
                 list(self.controller.loaded_skill_names),
@@ -723,11 +832,15 @@ class DeepyTuiApp(App[None]):
                     await self._append_block(ErrorBlock(f"Unsupported TUI command: /{slash.name}"))
                 return True
             request = slash.argument or f"Use the {skill.name} skill."
-            await self._append_block(UserBlock(text))
             self._start_model_turn(request, [skill.name], status=f"Using skill {skill.name}")
             return True
         await self._append_block(ErrorBlock(f"Unsupported TUI command: /{slash.name}"))
         return True
+
+    async def _record_slash_command_invocation(self, text: str) -> None:
+        self.controller.add_prompt_history(text)
+        await self._append_block(UserBlock(text))
+        self._scroll_transcript_to_end(force=True)
 
     def _start_model_turn(
         self,
@@ -741,9 +854,12 @@ class DeepyTuiApp(App[None]):
         self._pending_session_cost_start = self._capture_session_cost_start()
         self.state = set_busy(reset_turn_buffers(self.state), True, status)
         self._assistant_block = None
+        self._assistant_rendered_text = ""
         self._thinking_block = None
         self._stream_tokens = 0
         self._tool_blocks.clear()
+        self._suppressed_approval_tool_call_ids.clear()
+        self._completed_tool_call_ids.clear()
         self._update_status(status)
         self.run_model_turn(prompt, skill_names, image_attachments=image_attachments or [])
 
@@ -771,12 +887,8 @@ class DeepyTuiApp(App[None]):
             await self._append_block(InfoBlock(format_mcp_status(self.mcp_runtime.statuses)))
             return
         if name == "ps":
-            self.push_screen(
-                InfoScreen(
-                    "Deepy Modern UI Background Tasks",
-                    self._background_tasks_markdown(),
-                )
-            )
+            await self._append_block(InfoBlock(_format_tui_background_tasks_transcript(self.background_tasks.list())))
+            self._update_status("Background tasks listed")
             return
         if name == "stop":
             await self._stop_background_tasks(argument.strip())
@@ -1254,18 +1366,11 @@ class DeepyTuiApp(App[None]):
         if self.settings.path is None:
             await self._append_block(ErrorBlock("Cannot reset config: config path is unknown."))
             return
-        result = await self.push_screen_wait(
-            ResetConfigScreen(
-                api_key=self.settings.model.api_key or "",
-                provider=self.settings.model.provider,
-                model=self.settings.model.name,
-                base_url=self.settings.model.base_url,
-                thinking=self.settings.model.reasoning_mode,
-                interface=self.settings.ui.interface,
-                theme=self.settings.ui.theme,
-            )
-        )
+        previous_interface = "modern"
+        previous_theme = self.settings.ui.theme
+        result = await self._collect_reset_config()
         if result is None:
+            await self._append_block(InfoBlock("Reset cancelled. Existing config left unchanged."))
             self._update_status("Reset cancelled")
             return
         error = _reset_config_validation_error(result)
@@ -1293,7 +1398,162 @@ class DeepyTuiApp(App[None]):
         self.image_attachments.supports_image_input = supports_image_input(self.settings)
         self._apply_theme()
         await self._append_block(InfoBlock(f"Wrote {self.settings.path}"))
+        if result.interface != previous_interface or result.theme != previous_theme:
+            await self._append_block(
+                InfoBlock(
+                    "UI selection changed to "
+                    f"{_format_tui_ui_interface_label(result.interface)} {result.theme}. "
+                    "Restart Deepy for the UI and theme selection to take effect."
+                )
+            )
         self._update_status("Config reset")
+
+    async def _collect_reset_config(self) -> ResetConfigResult | None:
+        provider = await self._choose_inline(
+            "Reset: select provider",
+            [
+                Choice(item.id, item.id, item.description)
+                for item in PROVIDER_CATALOG
+            ],
+            restore_prompt_focus=False,
+        )
+        if not provider:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        provider_info = provider_info_for(provider)
+        guidance = [f"Provider selected: {provider}"]
+        if provider_info.api_key_url:
+            guidance.append(f"Create an API key at {provider_info.api_key_url}")
+        await self._append_block(InfoBlock("\n".join(guidance)))
+        api_key = await self._prompt_reset_value(
+            "Reset: API key",
+            placeholder=f"API key for {provider}",
+            password=True,
+        )
+        if api_key is None:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        model = await self._choose_reset_model(provider)
+        if model is None:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        base_default = (
+            self.settings.model.base_url
+            if self.settings.model.provider == provider
+            else default_base_url_for_provider(provider)
+        )
+        base_url = await self._prompt_reset_value(
+            "Reset: base URL",
+            value=base_default,
+            placeholder=default_base_url_for_provider(provider),
+        )
+        if base_url is None:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        thinking_default = (
+            self.settings.model.reasoning_mode
+            if (
+                self.settings.model.provider == provider
+                and is_valid_thinking_mode_for_provider(self.settings.model.reasoning_mode, provider)
+            )
+            else provider_info.default_thinking_mode
+        )
+        thinking = await self._choose_inline(
+            "Reset: select thinking",
+            [
+                Choice(value, value, _reset_choice_description(label, default=value == thinking_default))
+                for value, label in thinking_mode_choices(provider)
+            ],
+            restore_prompt_focus=False,
+        )
+        if not thinking:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        ui_selection = await self._choose_inline(
+            "Reset: select UI",
+            [
+                Choice(
+                    f"{number}. {_format_tui_ui_interface_label(interface)} {theme}",
+                    number,
+                    _reset_choice_description("Default" if interface == "classic" and theme == "dark" else ""),
+                )
+                for number, interface, theme in UI_SETUP_OPTIONS
+            ],
+            restore_prompt_focus=False,
+        )
+        if not ui_selection:
+            self.call_after_refresh(self._focus_prompt_input)
+            return None
+        interface, theme = ui_setup_from_selection(
+            ui_selection,
+            default_interface=self.settings.ui.interface,
+            default_theme=self.settings.ui.theme,
+        )
+        self.call_after_refresh(self._focus_prompt_input)
+        return ResetConfigResult(
+            api_key=api_key,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            thinking=thinking,
+            interface=interface,
+            theme=theme,
+        )
+
+    async def _choose_reset_model(self, provider: str) -> str | None:
+        provider_info = provider_info_for(provider)
+        model_default = (
+            self.settings.model.name
+            if (
+                self.settings.model.provider == provider
+                and is_supported_model_for_provider(self.settings.model.name, provider)
+            )
+            else default_model_for_provider(provider)
+        )
+        choices = [
+            Choice(model.name, model.name, _reset_choice_description(model.description, default=model.name == model_default))
+            for model in provider_info.models
+        ]
+        custom_value = "__custom_model__"
+        if allows_custom_model_for_provider(provider):
+            choices.append(
+                Choice(
+                    "Custom model",
+                    custom_value,
+                    "Paste any model name copied from the OpenRouter models page",
+                )
+            )
+        selected = await self._choose_inline(
+            "Reset: select model",
+            choices,
+            restore_prompt_focus=False,
+        )
+        if not selected:
+            return None
+        if selected != custom_value:
+            return selected
+        return await self._prompt_reset_value(
+            "Reset: custom model",
+            value=self.settings.model.name if self.settings.model.provider == provider else "",
+            placeholder="provider/model-name",
+        )
+
+    async def _prompt_reset_value(
+        self,
+        title: str,
+        *,
+        value: str = "",
+        placeholder: str = "",
+        password: bool = False,
+    ) -> str | None:
+        return await self.push_screen_wait(
+            TextInputScreen(
+                title,
+                value=value,
+                placeholder=placeholder,
+                password=password,
+            )
+        )
 
     async def _handle_local_command(self, command_input: LocalCommandInput) -> None:
         if not command_input.command:
@@ -1747,6 +2007,9 @@ class DeepyTuiApp(App[None]):
     async def _tui_approval_resolver(self, pending: list[PendingApproval]) -> list[ApprovalDecision]:
         decisions: list[ApprovalDecision] = []
         for item in pending:
+            if item.call_id:
+                self._suppressed_approval_tool_call_ids.add(item.call_id)
+            await self._detach_pending_approval_tool_block(item)
             proposed_diff = await self._append_preflight_diff(item)
             choice = await self._show_inline_audit_decision(item)
             approved = choice == "approve"
@@ -1754,6 +2017,10 @@ class DeepyTuiApp(App[None]):
                 self._approved_preflight_diffs.add(proposed_diff)
             elif proposed_diff:
                 await self._append_block(InfoBlock("Proposed change rejected."))
+            elif approved:
+                await self._append_pending_approval_tool_block(item)
+                if item.call_id:
+                    self._suppressed_approval_tool_call_ids.discard(item.call_id)
             decisions.append(
                 ApprovalDecision(
                     outcome="approve" if approved else "reject",
@@ -1763,6 +2030,39 @@ class DeepyTuiApp(App[None]):
                 )
             )
         return decisions
+
+    async def _detach_pending_approval_tool_block(self, item: PendingApproval) -> None:
+        block = self._approval_tool_block(item)
+        if block is None or not isinstance(block.parent, Widget):
+            return
+        await block.remove()
+
+    async def _append_pending_approval_tool_block(self, item: PendingApproval) -> None:
+        if not item.call_id:
+            return
+        existing = self._tool_blocks.get(item.call_id)
+        if isinstance(existing, LocalCommandBlock):
+            return
+        block = existing if isinstance(existing, ToolBlock) else None
+        if block is None:
+            block = ToolBlock.from_call(item.tool_name, item.arguments, call_id=item.call_id)
+        self._tool_blocks[item.call_id] = block
+        if block.parent is None:
+            await self._append_block(block)
+
+    def _approval_tool_block(self, item: PendingApproval) -> ToolBlock | None:
+        if item.call_id:
+            block = self._tool_blocks.get(item.call_id)
+            return block if isinstance(block, ToolBlock) else None
+        expected_arguments = ToolBlock.from_call(item.tool_name, item.arguments, call_id="").arguments
+        for block in self._tool_blocks.values():
+            if (
+                isinstance(block, ToolBlock)
+                and block.tool_name == item.tool_name
+                and block.arguments == expected_arguments
+            ):
+                return block
+        return None
 
     async def _append_preflight_diff(self, item: PendingApproval) -> str | None:
         if item.preflight is None:
@@ -1858,9 +2158,12 @@ class DeepyTuiApp(App[None]):
         self.state = set_pending_questions(self.state, [])
         self.state = set_busy(reset_turn_buffers(self.state), True, "Running")
         self._assistant_block = None
+        self._assistant_rendered_text = ""
         self._thinking_block = None
         self._stream_tokens = 0
         self._tool_blocks.clear()
+        self._suppressed_approval_tool_call_ids.clear()
+        self._completed_tool_call_ids.clear()
         self._update_status("Running")
         self.run_model_turn(continuation, list(self.controller.loaded_skill_names))
 
@@ -1889,6 +2192,8 @@ class DeepyTuiApp(App[None]):
         self._set_prompt_interaction_locked(True)
         await sheet.mount(block)
         self._focus_interaction_block(block)
+        self._scroll_transcript_to_end(force=True)
+        self.call_after_refresh(lambda: self._scroll_transcript_to_end(force=True))
 
     async def _clear_interaction_sheet(self) -> None:
         try:
@@ -1991,28 +2296,21 @@ class DeepyTuiApp(App[None]):
         if event.kind == "text_delta" and event.text:
             self._record_stream_progress(event.text)
             self.state = add_assistant_delta(self.state, event.text)
-            if self._assistant_block is None:
-                self._assistant_block = AssistantBlock(self.state.assistant_buffer, active=True)
-                await self._append_block(self._assistant_block)
-            else:
-                anchored = self._transcript_is_anchored_now()
-                self._assistant_block.set_active(True)
-                self._assistant_block.update_markdown(self.state.assistant_buffer)
-                self._scroll_transcript_to_end(force=anchored)
+            await self._append_assistant_delta(event.text)
             self._update_status(self._stream_status_text())
             return
         if event.kind == "message" and event.text:
             if not self.state.assistant_buffer:
                 self.state = add_assistant_delta(self.state, event.text)
-                if self._assistant_block is not None:
-                    anchored = self._transcript_is_anchored_now()
-                    self._assistant_block.set_active(True)
-                    self._assistant_block.update_markdown(self.state.assistant_buffer)
-                    self._scroll_transcript_to_end(force=anchored)
+                await self._append_assistant_delta(event.text)
             return
-        if event.kind == "raw_response" and event.text:
-            self._record_stream_progress(event.text)
-            self._update_status(self._stream_status_text())
+        if event.kind == "raw_response":
+            if raw_tool_call := _raw_tool_call_event(event):
+                await self._handle_stream_event(raw_tool_call)
+                return
+            if event.text:
+                self._record_stream_progress(event.text)
+                self._update_status(self._stream_status_text())
             return
         if event.kind == "reasoning_delta" and event.text:
             self._record_stream_progress(event.text)
@@ -2030,11 +2328,16 @@ class DeepyTuiApp(App[None]):
         if event.kind == "tool_call":
             self._thinking_block = None
             call_id = str(event.payload.get("call_id") or "")
+            if call_id and call_id in self._completed_tool_call_ids:
+                return
             tool_name = event.name or "tool"
             arguments = str(event.payload.get("arguments") or "")
             params = ToolBlock.from_call(tool_name, arguments, call_id=call_id).arguments
             retry_key = _recoverable_tool_key(tool_name, params)
             block = self._retryable_tool_blocks.pop(retry_key, None) if retry_key is not None else None
+            existing_block = self._tool_blocks.get(call_id) if call_id else None
+            if block is None and isinstance(existing_block, ToolBlock):
+                block = existing_block
             if block is not None:
                 block.call_id = call_id
                 block.update_from_call(tool_name, arguments)
@@ -2042,13 +2345,20 @@ class DeepyTuiApp(App[None]):
                 block = ToolBlock.from_call(tool_name, arguments, call_id=call_id)
             if call_id:
                 self._tool_blocks[call_id] = block
+            if call_id and call_id in self._suppressed_approval_tool_call_ids:
+                self._update_status(f"Tool {event.name or 'tool'} pending approval")
+                return
             if block.parent is None:
                 await self._append_block(block)
+            self._close_active_assistant_if_followed_by(block)
             self._update_status(f"Tool {event.name or 'tool'}")
             return
         if event.kind == "tool_output":
             self._thinking_block = None
             call_id = str(event.payload.get("call_id") or "")
+            if call_id:
+                self._completed_tool_call_ids.add(call_id)
+                self._suppressed_approval_tool_call_ids.discard(call_id)
             view = parse_tool_output(event.text)
             block = self._tool_blocks.get(call_id)
             if _is_local_command_tool_output(view):
@@ -2056,6 +2366,7 @@ class DeepyTuiApp(App[None]):
                 if call_id:
                     self._tool_blocks[call_id] = local_block
                 await self._replace_or_append_block(block, local_block)
+                self._close_active_assistant_if_followed_by(local_block)
                 self._update_status(view.status.title())
                 return
             diff_view = diff_view_from_tool_output(event.text, project_root=self.project_root)
@@ -2067,26 +2378,26 @@ class DeepyTuiApp(App[None]):
                         await block.remove()
                     self._update_status(view.status.title())
                     return
-                await self._replace_or_prioritize_diff_block(
-                    block,
-                    DiffBlock(
-                        diff_view,
-                        theme=self.settings.ui.theme,
-                        width=max(40, self.size.width - 6),
-                    ),
+                diff_block = DiffBlock(
+                    diff_view,
+                    theme=self.settings.ui.theme,
+                    width=max(40, self.size.width - 6),
                 )
+                await self._replace_or_prioritize_diff_block(block, diff_block)
+                self._close_active_assistant_if_followed_by(diff_block)
                 self._update_status(view.status.title())
-                return
                 return
             if block is None:
                 block = ToolBlock.from_output(view, call_id=call_id, project_root=self.project_root)
                 if call_id:
                     self._tool_blocks[call_id] = block
                 await self._append_block(block)
+                self._close_active_assistant_if_followed_by(block)
             elif isinstance(block, ToolBlock):
                 anchored = self._transcript_is_anchored_now()
                 block.update_from_output(view, project_root=self.project_root)
                 self._scroll_transcript_to_end(force=anchored)
+                self._close_active_assistant_if_followed_by(block)
             else:
                 return
             retry_key = _recoverable_tool_key(view.name, block.arguments)
@@ -2165,8 +2476,11 @@ class DeepyTuiApp(App[None]):
         transcript = self.query_one("#transcript", VerticalScroll)
         await transcript.remove_children()
         self._assistant_block = None
+        self._assistant_rendered_text = ""
         self._thinking_block = None
         self._tool_blocks.clear()
+        self._suppressed_approval_tool_call_ids.clear()
+        self._completed_tool_call_ids.clear()
         self._focused_block_index = -1
 
     async def _restore_transcript(self, session_id: str) -> None:
@@ -2220,12 +2534,36 @@ class DeepyTuiApp(App[None]):
     async def _flush_assistant_block(self) -> None:
         if not self.state.assistant_buffer:
             return
+        remaining = self.state.assistant_buffer[len(self._assistant_rendered_text) :]
+        if remaining:
+            await self._append_assistant_delta(remaining)
         if self._assistant_block is None:
-            self._assistant_block = AssistantBlock(self.state.assistant_buffer)
-            await self._append_block(self._assistant_block)
             return
         self._assistant_block.set_active(False)
-        self._assistant_block.update_markdown(self.state.assistant_buffer)
+
+    async def _append_assistant_delta(self, text: str) -> None:
+        if not text:
+            return
+        if self._assistant_block is None:
+            self._assistant_block = AssistantBlock(text, active=True)
+            await self._append_block(self._assistant_block)
+        else:
+            anchored = self._transcript_is_anchored_now()
+            self._assistant_block.set_active(True)
+            await self._assistant_block.update_markdown(self._assistant_block.markdown + text)
+            self._scroll_transcript_to_end(force=anchored)
+        self._assistant_rendered_text += text
+
+    def _close_active_assistant_if_followed_by(self, block: Widget) -> None:
+        assistant = self._assistant_block
+        if assistant is None:
+            return
+        if not isinstance(assistant.parent, Widget) or assistant.parent is not block.parent:
+            return
+        if not _widget_appears_before(assistant, block):
+            return
+        assistant.set_active(False)
+        self._assistant_block = None
         self._scroll_transcript_to_end(force=self._transcript_is_anchored_now())
 
     def _scroll_transcript_to_end(self, *, force: bool = False) -> None:
@@ -2517,6 +2855,28 @@ def _history_tool_call_event(item: dict[str, Any]) -> DeepyStreamEvent:
     )
 
 
+def _raw_tool_call_event(event: DeepyStreamEvent) -> DeepyStreamEvent | None:
+    if event.name != "response.output_item.added":
+        return None
+    raw = event.payload.get("raw")
+    item = _raw_value(raw, "item")
+    if item is None:
+        return None
+    item_type = _raw_str(item, "type")
+    if item_type not in {"function_call", "custom_tool_call", "mcp_call"}:
+        return None
+    call_id = _raw_call_id(item)
+    if not call_id:
+        return None
+    tool_name = _raw_tool_name(item)
+    arguments = _raw_tool_arguments(item)
+    return DeepyStreamEvent(
+        kind="tool_call",
+        name=tool_name,
+        payload={"call_id": call_id, "arguments": arguments},
+    )
+
+
 def _history_tool_output_event(item: dict[str, Any]) -> DeepyStreamEvent:
     return DeepyStreamEvent(
         kind="tool_output",
@@ -2607,6 +2967,50 @@ def _tool_call_arguments(item: dict[str, Any]) -> str:
     return ""
 
 
+def _raw_value(item: Any, key: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
+
+
+def _raw_str(item: Any, key: str) -> str:
+    value = _raw_value(item, key)
+    return value if isinstance(value, str) else ""
+
+
+def _raw_call_id(item: Any) -> str:
+    for key in ("call_id", "tool_call_id", "id"):
+        value = _raw_str(item, key)
+        if value:
+            return value
+    return ""
+
+
+def _raw_tool_name(item: Any) -> str:
+    for key in ("name", "tool_name"):
+        value = _raw_str(item, key)
+        if value:
+            return value
+    function = _raw_value(item, "function")
+    value = _raw_str(function, "name")
+    return value or "tool"
+
+
+def _raw_tool_arguments(item: Any) -> str:
+    arguments = _raw_value(item, "arguments")
+    if isinstance(arguments, str):
+        return arguments
+    if arguments is not None:
+        return json_utils.dumps(arguments)
+    function = _raw_value(item, "function")
+    function_arguments = _raw_value(function, "arguments")
+    if isinstance(function_arguments, str):
+        return function_arguments
+    if function_arguments is not None:
+        return json_utils.dumps(function_arguments)
+    return ""
+
+
 def _item_type(item: dict[str, Any]) -> str:
     value = item.get("type")
     return value if isinstance(value, str) else ""
@@ -2674,6 +3078,17 @@ def _model_usage_text() -> str:
 def _format_view_mode_confirmation(view_mode: str) -> str:
     reasoning_state = "reasoning shown" if view_mode == "full" else "reasoning hidden"
     return f"View: {view_mode} · {reasoning_state}"
+
+
+def _is_light_tui_theme(shared_theme: str, textual_theme: str) -> bool:
+    return shared_theme == "light" or textual_theme in _LIGHT_TEXTUAL_THEMES
+
+
+def _reset_choice_description(description: str, *, default: bool = False) -> str:
+    parts = [description] if description else []
+    if default:
+        parts.append("current default")
+    return " · ".join(parts)
 
 
 def _reset_config_validation_error(result: ResetConfigResult) -> str:
@@ -2826,6 +3241,20 @@ def _format_tui_background_task_details(task: BackgroundTaskSnapshot) -> str:
     if task.stop_requested:
         details.append("stop requested")
     return ", ".join(details)
+
+
+def _format_tui_background_tasks_transcript(tasks: Sequence[BackgroundTaskSnapshot]) -> str:
+    if not tasks:
+        return "Background Tasks\nNo background tasks."
+    lines = ["Background Tasks"]
+    for index, task in enumerate(tasks, start=1):
+        lines.append(f"{index}. {task.id} {task.status}: {task.command}")
+        details = _format_tui_background_task_details(task)
+        if details:
+            lines.append(f"   {details}")
+    lines.append("")
+    lines.append("Use /stop <id>, /stop <number>, or /stop all.")
+    return "\n".join(lines)
 
 
 def _parse_tui_background_stop_selection(

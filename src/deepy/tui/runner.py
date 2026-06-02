@@ -32,7 +32,7 @@ def run_tui(
         run_once=run_prompt_once,
         guide_missing_config=True,
     )
-    app.run(mouse=False)
+    app.run(mouse=True)
     if app.exit_summary_text:
         print(app.exit_summary_text)
     return 0

@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Label, Markdown, OptionList, Static, TextArea
@@ -18,7 +19,7 @@ from deepy.audit import PendingApproval
 from deepy.llm.multimodal import PromptImageAttachment
 from deepy.tui.diff import TuiDiffView, render_unified_diff_rich, render_unified_diff_text
 from deepy.tui.transcript import TranscriptKind, transcript_display
-from deepy.todos import normalize_todo_items, todo_counts
+from deepy.todos import normalize_todo_items
 from deepy.ui.ask_user_question import (
     AskUserQuestionItem,
     AskUserQuestionOptionEntry,
@@ -45,11 +46,13 @@ from deepy.ui.slash_commands import (
     filter_slash_commands,
     format_slash_command_completion_label,
 )
+from deepy.utils import json as json_utils
 
 
 class PromptTextArea(TextArea):
     _clear_draft_delete_deadline: float | None = None
     _CLEAR_DRAFT_DELETE_WINDOW_SECONDS = 2.0
+    _WHEEL_SCROLL_LINES = 2
     _clock = staticmethod(time.monotonic)
 
     BINDINGS = [
@@ -205,6 +208,12 @@ class PromptTextArea(TextArea):
     def action_history_next(self) -> None:
         self.post_message(self.HistoryNext())
 
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        self._consume_wheel_event(event, self._WHEEL_SCROLL_LINES)
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        self._consume_wheel_event(event, -self._WHEEL_SCROLL_LINES)
+
     def action_cursor_up(self, select: bool = False) -> None:
         panel = self.parent
         if (
@@ -231,6 +240,20 @@ class PromptTextArea(TextArea):
             self.action_history_next()
             return
         super().action_cursor_down(select)
+
+    def _consume_wheel_event(
+        self,
+        event: events.MouseScrollDown | events.MouseScrollUp,
+        y: int,
+    ) -> None:
+        event.prevent_default()
+        event.stop()
+        self.scroll_relative(
+            y=y * max(1, abs(event.delta_y)),
+            animate=False,
+            force=True,
+            immediate=True,
+        )
 
     def _clear_draft_if_pending(self) -> bool:
         deadline = self._clear_draft_delete_deadline
@@ -340,8 +363,7 @@ class AttachmentRow(Static, can_focus=True):
 
 
 class PromptPanel(Vertical):
-    _MIN_INPUT_ROWS = 1
-    _MAX_INPUT_ROWS = 5
+    _INPUT_ROWS = 4
 
     def __init__(
         self,
@@ -366,20 +388,19 @@ class PromptPanel(Vertical):
         yield OptionList(id="prompt-suggestions")
 
     def on_mount(self) -> None:
-        self._sync_prompt_height("")
+        self._sync_prompt_height()
 
     @on(TextArea.Changed, "#prompt-input")
     def on_prompt_changed(self, event: TextArea.Changed) -> None:
         if self.attachment_selection_active:
             self.attachment_selection_active = False
             self.refresh_image_status()
-        self._sync_prompt_height(event.text_area.text)
+        self._sync_prompt_height()
         self.refresh_suggestions(event.text_area.text)
 
-    def _sync_prompt_height(self, text: str) -> None:
+    def _sync_prompt_height(self) -> None:
         prompt = self.query_one("#prompt-input", PromptTextArea)
-        rows = min(self._MAX_INPUT_ROWS, max(self._MIN_INPUT_ROWS, text.count("\n") + 1))
-        prompt.styles.height = rows
+        prompt.styles.height = self._INPUT_ROWS
 
     def refresh_suggestions(self, text: str) -> None:
         suggestions = self._suggestions_for_text(text)
@@ -602,9 +623,12 @@ class StatusBar(Horizontal):
         yield Label("Idle", id="status-right")
 
     def update_status(self, status: str, context: str | None = None) -> None:
-        if context is not None:
-            self.query_one("#status-left", Label).update(context)
-        self.query_one("#status-right", Label).update(status)
+        try:
+            if context is not None:
+                self.query_one("#status-left", Label).update(context)
+            self.query_one("#status-right", Label).update(status)
+        except NoMatches:
+            return
 
 
 class TranscriptBlock(Vertical, can_focus=True):
@@ -646,7 +670,9 @@ class InfoBlock(Vertical, can_focus=True):
         self.body = text
 
     def compose(self) -> ComposeResult:
-        yield Static(self.body, classes="block-body")
+        with Horizontal(classes="role-line info-role-line"):
+            yield Label("·", classes="block-title role-marker info-marker")
+            yield Static(self.body, classes="block-body")
 
 
 class UserBlock(TranscriptBlock):
@@ -689,9 +715,9 @@ class AssistantBlock(Vertical, can_focus=True):
             yield Label(self._title_text(), classes="block-title role-marker assistant-marker")
             yield Markdown(self.markdown, classes="block-markdown")
 
-    def update_markdown(self, markdown: str) -> None:
+    async def update_markdown(self, markdown: str) -> None:
         self.markdown = markdown
-        self.query_one(Markdown).update(markdown)
+        await self.query_one(Markdown).update(markdown)
 
     def set_active(self, active: bool) -> None:
         self.active = active
@@ -736,6 +762,9 @@ class ToolBlock(TranscriptBlock):
     def from_call(cls, name: str, arguments: str, *, call_id: str) -> ToolBlock:
         display_name = _tool_title_name(name or "tool")
         params = _tool_arguments_body(name or "tool", arguments)
+        title = f"{display_name} running"
+        if name == "shell" and params:
+            title = f"{title} - {params}"
         body = (
             "Waiting for user input."
             if name == "AskUserQuestion"
@@ -744,7 +773,7 @@ class ToolBlock(TranscriptBlock):
             else "Running"
         )
         return cls(
-            f"{display_name} running",
+            title,
             body,
             call_id=call_id,
             arguments=params,
@@ -776,6 +805,8 @@ class ToolBlock(TranscriptBlock):
         self.tool_name = name or "tool"
         self.arguments = params
         self.title = f"{display_name} running"
+        if self.tool_name == "shell" and params:
+            self.title = f"{self.title} - {params}"
         self.output_body = "Running"
         self.body = ""
         self.details = ""
@@ -784,6 +815,7 @@ class ToolBlock(TranscriptBlock):
         self.recovered_from_retry = True
         self.status_state = "running"
         self.query_one(".tool-summary", Static).update(self.title)
+        self._update_visible_output()
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
         details.display = False
@@ -793,7 +825,11 @@ class ToolBlock(TranscriptBlock):
 
     def update_from_output(self, view: ToolOutputView, *, project_root: Path | None = None) -> None:
         self.tool_name = view.name
-        self.title = _tool_output_title(view, project_root=project_root)
+        self.title = _tool_output_title(
+            view,
+            project_root=project_root,
+            fallback_command=self.arguments,
+        )
         output_body = _tool_output_body(view)
         self.output_body = output_body
         self.details = _tool_output_details(view)
@@ -802,6 +838,7 @@ class ToolBlock(TranscriptBlock):
         self.status_state = "waiting" if self.waiting_for_user else view.status
         self.body = ""
         self.query_one(".tool-summary", Static).update(self.title)
+        self._update_visible_output()
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
         details.display = bool(self.details and self.expanded)
@@ -814,6 +851,13 @@ class ToolBlock(TranscriptBlock):
         with Horizontal(classes="role-line tool-role-line"):
             yield Label(self.display_model.label, classes="block-title role-marker tool-marker")
             yield Static(self.title, classes="block-body tool-summary")
+        visible_output = _tool_output_visible(self.tool_name, self.output_body)
+        output = Static(
+            _tool_output_renderable(self.tool_name, self.output_body) if visible_output else "",
+            classes="block-body tool-output",
+        )
+        output.display = visible_output
+        yield output
         detail = Static(self.details, classes="tool-details")
         detail.display = False
         yield detail
@@ -828,6 +872,12 @@ class ToolBlock(TranscriptBlock):
         self.set_class(self.status_state == "retryable", "-retryable")
         self.set_class(self.status_state == "ok", "-ok")
         self.set_class(self.status_state == "failed", "-failed")
+
+    def _update_visible_output(self) -> None:
+        output = self.query_one(".tool-output", Static)
+        visible_output = _tool_output_visible(self.tool_name, self.output_body)
+        output.update(_tool_output_renderable(self.tool_name, self.output_body) if visible_output else "")
+        output.display = visible_output
 
 
 class LocalCommandBlock(Vertical, can_focus=True):
@@ -945,6 +995,7 @@ class QuestionBlock(Vertical, can_focus=True):
         self.options = build_options(question)
         self.body = question.question
         self._refreshing_options = False
+        self._suppress_next_highlight_sync = False
         self._option_list: QuestionOptionList | None = None
         self._custom_input: QuestionTextArea | None = None
 
@@ -978,7 +1029,10 @@ class QuestionBlock(Vertical, can_focus=True):
         self.sync_single_selection_to_highlight()
 
     def sync_single_selection_to_highlight(self) -> None:
-        if self._refreshing_options or self.question.multi_select:
+        if self._refreshing_options or self.question.multi_select or self.custom_mode:
+            return
+        if self._suppress_next_highlight_sync:
+            self._suppress_next_highlight_sync = False
             return
         option = self._highlighted_option()
         if option is None:
@@ -1072,10 +1126,13 @@ class QuestionBlock(Vertical, can_focus=True):
 
     def _highlighted_option(self) -> AskUserQuestionOptionEntry | None:
         option_list = self._question_options()
+        highlighted_index = option_list.highlighted
+        if highlighted_index is not None and 0 <= highlighted_index < len(self.options):
+            return self.options[highlighted_index]
         highlighted = option_list.highlighted_option
-        if highlighted is None or highlighted.id is None:
-            return None
-        return self._option_by_value(str(highlighted.id))
+        if highlighted is not None and highlighted.id is not None:
+            return self._option_by_value(str(highlighted.id))
+        return None
 
     def _selected_single_option(self) -> AskUserQuestionOptionEntry | None:
         if self.question.multi_select or not self.selected_values:
@@ -1117,6 +1174,7 @@ class QuestionBlock(Vertical, can_focus=True):
             if target_id is not None:
                 for index, option in enumerate(self.options):
                     if option.value == target_id:
+                        self._suppress_next_highlight_sync = True
                         option_list.highlighted = index
                         break
             option_list.refresh(layout=True)
@@ -1171,7 +1229,7 @@ class AuditDecisionBlock(Vertical, can_focus=True):
     def compose(self) -> ComposeResult:
         yield Label(self.display_model.label, classes="block-title")
         yield Static(self._title, id="audit-decision-title", classes="block-body")
-        yield Static(self._summary, id="audit-decision-summary", classes="tool-details")
+        yield Static(self._summary, id="audit-decision-summary", classes="block-body audit-decision-summary")
         preview = Static(self._preview_text, id="audit-decision-preview", classes="tool-details")
         preview.display = False
         yield preview
@@ -1222,8 +1280,9 @@ class AuditDecisionBlock(Vertical, can_focus=True):
         )
         self._title = view.title
         self._summary = f"{view.target_label}: {view.target or '-'}"
-        if view.metadata:
-            self._summary += "\n" + "\n".join(f"{label}: {value}" for label, value in view.metadata)
+        metadata = _tui_approval_metadata(self.item, view.metadata)
+        if metadata:
+            self._summary += "\n" + "\n".join(f"{label}: {value}" for label, value in metadata)
         self._preview_text = view.preview or ""
 
 
@@ -1314,16 +1373,37 @@ class InlineChoiceBlock(Vertical, can_focus=True):
 
 def _inline_choice_prompt(option: InlineChoiceOption) -> Text:
     prompt = Text()
-    prompt.append(option.label, style="bold #e5e7eb")
+    prompt.append(option.label, style="bold")
     if option.description:
-        prompt.append(f"  {option.description}", style="#aab3d0")
+        prompt.append(f"  {option.description}", style="dim")
     return prompt
 
 
-def _tool_output_title(view: ToolOutputView, *, project_root: Path | None = None) -> str:
+def _tui_approval_metadata(
+    item: PendingApproval,
+    metadata: tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    tool_name = item.tool_name or item.name or ""
+    if tool_name == "shell" or item.action_kind == "command":
+        return tuple((label, value) for label, value in metadata if label != "description")
+    return metadata
+
+
+def _tool_output_title(
+    view: ToolOutputView,
+    *,
+    project_root: Path | None = None,
+    fallback_command: str = "",
+) -> str:
     detail = view.path or ""
     if view.name == "load_skill" and view.metadata:
         detail = str(view.metadata.get("name") or detail)
+    if view.name == "shell":
+        metadata = view.metadata or {}
+        command = metadata.get("command")
+        detail = command.strip() if isinstance(command, str) else detail
+        if not detail:
+            detail = fallback_command.strip()
     if detail and project_root is not None:
         detail = _relative_tool_path(detail, project_root=project_root)
     status = view.status
@@ -1350,7 +1430,22 @@ def _tool_arguments_body(name: str, arguments: str) -> str:
         return ""
     if not arguments.strip():
         return ""
+    if name == "shell":
+        command = _shell_command_argument(arguments)
+        if command:
+            return command
     return build_tool_params_snippet({"name": name, "arguments": arguments})
+
+
+def _shell_command_argument(arguments: str) -> str:
+    try:
+        args = json_utils.loads(arguments)
+    except json_utils.JSONDecodeError:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    command = args.get("command")
+    return command.strip() if isinstance(command, str) else ""
 
 
 def _tool_output_body(view: ToolOutputView) -> str:
@@ -1368,7 +1463,7 @@ def _tool_output_body(view: ToolOutputView) -> str:
             lines.append(f"Root: {root}")
         return "\n".join(lines)
     if view.name == "shell":
-        return _shell_body(view)
+        return ""
     if view.name == "read":
         return _read_body(view)
     if view.name == "todo_write":
@@ -1487,25 +1582,12 @@ def _todo_body(view: ToolOutputView) -> str:
     todos = metadata.get("todos")
     items, error = normalize_todo_items(todos)
     if error is None and items:
-        counts = todo_counts(items)
-        total = counts["total"]
-        completed = counts["completed"]
-        percent = round((completed / total) * 100) if total else 0
         current = next((item for item in items if item.status == "in_progress"), None)
         if current is None:
             current = next((item for item in items if item.status == "pending"), None)
-        lines = [
-            f"Progress  {_progress_bar(completed, total)}  {completed}/{total} completed ({percent}%)",
-            (
-                "Status    "
-                f"{counts['completed']} done | "
-                f"{counts['in_progress']} active | "
-                f"{counts['pending']} pending"
-            ),
-        ]
+        lines = []
         if current is not None:
-            lines.append(f"Current   {current.id}: {current.content}")
-        lines.append("")
+            lines.extend(["Current", f"  {_todo_marker(current.status)} {current.id}: {current.content}", ""])
         lines.append("Tasks")
         for item in items[:12]:
             marker = _todo_marker(item.status)
@@ -1514,6 +1596,38 @@ def _todo_body(view: ToolOutputView) -> str:
             lines.append("  ... todos truncated ...")
         return "\n".join(lines)
     return _compact_text(view.error or view.output or view.summary)
+
+
+def _tool_output_visible(tool_name: str, body: str) -> bool:
+    return tool_name == "todo_write" and bool(body.strip())
+
+
+def _tool_output_renderable(tool_name: str, body: str) -> str | Text:
+    if tool_name == "todo_write":
+        return _todo_text_renderable(body)
+    return body
+
+
+def _todo_text_renderable(body: str) -> Text:
+    text = Text()
+    for line_index, line in enumerate(body.splitlines()):
+        if line_index:
+            text.append("\n")
+        stripped = line.strip()
+        if stripped in {"Current", "Tasks"}:
+            text.append(line, style="bold #7aa2f7")
+            continue
+        if "[>]" in line:
+            text.append(line, style="bold #f9e2af")
+            continue
+        if "[x]" in line:
+            text.append(line, style="#a6e3a1")
+            continue
+        if "[ ]" in line:
+            text.append(line, style="#bac2de")
+            continue
+        text.append(line)
+    return text
 
 
 def _web_body(view: ToolOutputView) -> str:

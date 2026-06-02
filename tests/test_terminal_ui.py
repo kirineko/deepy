@@ -2447,6 +2447,43 @@ def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch
     assert 'theme = "light"' in text
 
 
+def test_reset_slash_command_warns_when_selected_ui_differs_from_running_ui(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "old-key"\n\n[ui]\ninterface = "classic"\ntheme = "dark"\n',
+        encoding="utf-8",
+    )
+    console = Console(record=True)
+    answers = iter(["1", "sk-reset", "1", "https://api.deepseek.com", "1", "3"])
+
+    class FakePromptSession:
+        def prompt(self, prompt, default="", is_password=False):
+            return next(answers)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+
+    next_session = _handle_slash_command(
+        SlashCommand("reset"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(
+            path=config,
+            ui=UiConfig(interface="classic", theme="dark", theme_configured=True),
+        ),
+    )
+
+    rendered = console.export_text()
+    text = config.read_text(encoding="utf-8")
+    assert next_session == "s1"
+    assert 'interface = "modern"' in text
+    assert 'theme = "dark"' in text
+    assert "UI selection changed to Modern UI dark." in rendered
+    assert "Restart Deepy" in rendered
+    assert "UI and theme" in rendered
+    assert "selection to take effect." in rendered
+
+
 def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
