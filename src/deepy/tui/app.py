@@ -224,6 +224,7 @@ class DeepyTuiApp(App[None]):
     BINDINGS = [
         Binding("ctrl+d", "confirm_quit", "Quit", priority=True),
         Binding("escape", "interrupt_or_focus_prompt", "Interrupt"),
+        Binding("ctrl+c,super+c", "copy_focused_block", "Copy", show=False),
         Binding("ctrl+o", "toggle_help_panel", "Panel"),
         Binding("shift+tab", "cycle_audit_mode", "Audit", priority=True),
         Binding("alt+up", "focus_previous_block", "Previous block"),
@@ -472,10 +473,36 @@ class DeepyTuiApp(App[None]):
         color: $text;
     }
 
+    .subagent-parameters {
+        margin: 0 0 0 2;
+        padding: 0 0 0 1;
+        border-left: solid $secondary;
+        color: $text-muted;
+    }
+
     .tool-details {
         margin: 1 0 0 0;
         color: $text-muted;
         display: none;
+    }
+
+    .subagent-block .tool-details {
+        margin: 0 0 0 2;
+        padding: 0 0 0 1;
+        border-left: solid $accent;
+        color: $text;
+    }
+
+    .subagent-block.-running .tool-details {
+        border-left: solid $accent;
+    }
+
+    .subagent-block.-ok .tool-details {
+        border-left: solid $success;
+    }
+
+    .subagent-block.-failed .tool-details {
+        border-left: solid $error;
     }
 
     .tool-block.-retryable .block-title {
@@ -2749,6 +2776,27 @@ class DeepyTuiApp(App[None]):
         prompt.prepare_clear_on_next_delete()
         prompt.focus()
 
+    def action_copy_focused_block(self) -> None:
+        block = self._focused_transcript_block()
+        if block is None:
+            self._update_status("Focus a transcript block to copy")
+            return
+        text = _transcript_block_copy_text(block).strip()
+        if not text:
+            self._update_status("Nothing to copy")
+            return
+        self.copy_to_clipboard(text)
+        self._update_status("Copied transcript block")
+
+    def _focused_transcript_block(self) -> Widget | None:
+        node = self.focused
+        while isinstance(node, Widget):
+            if node.has_class("transcript-block"):
+                return node
+            parent = node.parent
+            node = parent if isinstance(parent, Widget) else None
+        return None
+
     def action_focus_next_block(self) -> None:
         blocks = list(self.query(".transcript-block"))
         if not blocks:
@@ -2769,6 +2817,33 @@ class DeepyTuiApp(App[None]):
     def action_toggle_help_panel(self) -> None:
         panel = self.query_one("#side-panel", Vertical)
         panel.toggle_class("-visible")
+
+
+def _transcript_block_copy_text(block: Widget) -> str:
+    if isinstance(block, UserBlock):
+        return block.body
+    if isinstance(block, AssistantBlock):
+        return block.markdown
+    if isinstance(block, ThinkingBlock):
+        return block.body
+    if isinstance(block, LocalCommandBlock):
+        parts = [block.title, block.output_body]
+        if block.meta_body:
+            parts.append(block.meta_body)
+        return "\n".join(part for part in parts if part)
+    if isinstance(block, ToolBlock):
+        parts = [block.title]
+        if block.tool_name == "todo_write" and block.output_body:
+            parts.append(block.output_body)
+        if block.expanded and block.details:
+            parts.append(block.details)
+        return "\n\n".join(part for part in parts if part)
+    if isinstance(block, DiffBlock):
+        return block.body
+    if isinstance(block, InfoBlock):
+        return block.body
+    body = getattr(block, "body", "")
+    return body if isinstance(body, str) else ""
 
 
 async def _load_session_items(project_root: Path, session_id: str) -> list[dict[str, Any]]:

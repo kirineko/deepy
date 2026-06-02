@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -743,6 +744,8 @@ class ToolBlock(TranscriptBlock):
         recovered_from_retry: bool = False,
     ) -> None:
         classes = "tool-block todo-block" if tool_name == "todo_write" else transcript_display("tool").css_class
+        if _is_subagent_tool_name(tool_name):
+            classes += " subagent-block"
         if retryable:
             classes += " -retryable"
         super().__init__(label, body, classes=classes, kind="tool")
@@ -765,6 +768,7 @@ class ToolBlock(TranscriptBlock):
         title = f"{display_name} running"
         if name == "shell" and params:
             title = f"{title} - {params}"
+        details = _subagent_details(params, "") if _is_subagent_tool_name(name) else ""
         body = (
             "Waiting for user input."
             if name == "AskUserQuestion"
@@ -777,6 +781,7 @@ class ToolBlock(TranscriptBlock):
             body,
             call_id=call_id,
             arguments=params,
+            details=details,
             tool_name=name or "tool",
         )
 
@@ -809,7 +814,7 @@ class ToolBlock(TranscriptBlock):
             self.title = f"{self.title} - {params}"
         self.output_body = "Running"
         self.body = ""
-        self.details = ""
+        self.details = _subagent_details(params, "") if _is_subagent_tool_name(self.tool_name) else ""
         self.waiting_for_user = False
         self.retryable = False
         self.recovered_from_retry = True
@@ -818,7 +823,7 @@ class ToolBlock(TranscriptBlock):
         self._update_visible_output()
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
-        details.display = False
+        details.display = self._details_visible()
         self.set_class(False, "-waiting")
         self.set_class(False, "-retryable")
         self._sync_status_classes()
@@ -832,7 +837,11 @@ class ToolBlock(TranscriptBlock):
         )
         output_body = _tool_output_body(view)
         self.output_body = output_body
-        self.details = _tool_output_details(view)
+        self.details = (
+            _subagent_details(self.arguments, output_body)
+            if _is_subagent_tool_name(view.name)
+            else _tool_output_details(view)
+        )
         self.waiting_for_user = view.await_user_response
         self.retryable = view.status == "retryable"
         self.status_state = "waiting" if self.waiting_for_user else view.status
@@ -841,16 +850,20 @@ class ToolBlock(TranscriptBlock):
         self._update_visible_output()
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
-        details.display = bool(self.details and self.expanded)
+        details.display = self._details_visible()
         self.set_class(self.waiting_for_user, "-waiting")
         self.set_class(self.retryable, "-retryable")
         self._sync_status_classes()
         self.set_class(view.name == "todo_write", "todo-block")
+        self.set_class(_is_subagent_tool_name(view.name), "subagent-block")
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="role-line tool-role-line"):
             yield Label(self.display_model.label, classes="block-title role-marker tool-marker")
             yield Static(self.title, classes="block-body tool-summary")
+        params = Static(_subagent_parameters(self.arguments), classes="block-body subagent-parameters")
+        params.display = self._subagent_parameters_visible()
+        yield params
         visible_output = _tool_output_visible(self.tool_name, self.output_body)
         output = Static(
             _tool_output_renderable(self.tool_name, self.output_body) if visible_output else "",
@@ -864,7 +877,7 @@ class ToolBlock(TranscriptBlock):
 
     def action_toggle_expand(self) -> None:
         super().action_toggle_expand()
-        self.query_one(".tool-details", Static).display = False
+        self.query_one(".tool-details", Static).display = self._details_visible()
 
     def _sync_status_classes(self) -> None:
         self.set_class(self.status_state == "running", "-running")
@@ -874,10 +887,20 @@ class ToolBlock(TranscriptBlock):
         self.set_class(self.status_state == "failed", "-failed")
 
     def _update_visible_output(self) -> None:
+        with contextlib.suppress(NoMatches):
+            params = self.query_one(".subagent-parameters", Static)
+            params.update(_subagent_parameters(self.arguments))
+            params.display = self._subagent_parameters_visible()
         output = self.query_one(".tool-output", Static)
         visible_output = _tool_output_visible(self.tool_name, self.output_body)
         output.update(_tool_output_renderable(self.tool_name, self.output_body) if visible_output else "")
         output.display = visible_output
+
+    def _details_visible(self) -> bool:
+        return bool(self.details and self.expanded and _is_subagent_tool_name(self.tool_name))
+
+    def _subagent_parameters_visible(self) -> bool:
+        return bool(self.arguments and _is_subagent_tool_name(self.tool_name))
 
 
 class LocalCommandBlock(Vertical, can_focus=True):
@@ -1430,6 +1453,10 @@ def _tool_arguments_body(name: str, arguments: str) -> str:
         return ""
     if not arguments.strip():
         return ""
+    if _is_subagent_tool_name(name):
+        task = _subagent_input_argument(arguments)
+        if task:
+            return task
     if name == "shell":
         command = _shell_command_argument(arguments)
         if command:
@@ -1446,6 +1473,41 @@ def _shell_command_argument(arguments: str) -> str:
         return ""
     command = args.get("command")
     return command.strip() if isinstance(command, str) else ""
+
+
+def _is_subagent_tool_name(name: str) -> bool:
+    return name.startswith("subagent_")
+
+
+def _subagent_input_argument(arguments: str) -> str:
+    try:
+        args = json_utils.loads(arguments)
+    except json_utils.JSONDecodeError:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    value = args.get("input") or args.get("task") or args.get("prompt")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _subagent_details(task: str, report: str) -> str:
+    parts: list[str] = []
+    compact_task = _compact_text(task, max_lines=4, max_chars=500)
+    if compact_task:
+        parts.extend(["Task", _indent_block(compact_task)])
+    compact_report = _compact_text(report, max_lines=16, max_chars=1600)
+    if compact_report:
+        if parts:
+            parts.append("")
+        parts.extend(["Report", _indent_block(compact_report)])
+    return "\n".join(parts)
+
+
+def _subagent_parameters(task: str) -> str:
+    compact = _compact_text(task, max_lines=4, max_chars=700)
+    if not compact:
+        return ""
+    return "Subagent Parameters\n" + _indent_block(compact)
 
 
 def _tool_output_body(view: ToolOutputView) -> str:
@@ -1470,6 +1532,8 @@ def _tool_output_body(view: ToolOutputView) -> str:
         return _todo_body(view)
     if view.name in {"WebSearch", "WebFetch"}:
         return _web_body(view)
+    if _is_subagent_tool_name(view.name):
+        return (view.error or view.output or view.summary).strip()
     if _is_mcp_view(view):
         return _mcp_body(view)
     if view.ok is False and view.metadata:

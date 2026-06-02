@@ -833,11 +833,30 @@ def test_tui_runner_preserves_textual_kitty_key_override(tmp_path, monkeypatch) 
     assert seen_env == ["0"]
 
 
-def test_tui_does_not_intercept_native_copy_bindings() -> None:
+def test_tui_registers_transcript_copy_bindings() -> None:
     keys = {binding.key for binding in DeepyTuiApp.BINDINGS}
 
-    assert "ctrl+c" not in keys
-    assert "super+c" not in keys
+    assert "ctrl+c,super+c" in keys
+
+
+@pytest.mark.asyncio
+async def test_tui_copies_focused_transcript_block(tmp_path, monkeypatch) -> None:
+    copied: list[str] = []
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause(0.01)
+        await app._append_block(UserBlock("copy this prompt"))
+        block = app.query_one(UserBlock)
+        block.focus()
+        await pilot.pause(0.01)
+
+        app.action_copy_focused_block()
+
+        assert copied == ["copy this prompt"]
+        assert "Copied transcript block" in str(app.query_one("#status-right", Label).content)
+        app.exit()
 
 
 @pytest.mark.asyncio
@@ -3202,6 +3221,75 @@ async def test_tui_subagent_tool_block_includes_subagent_name(tmp_path) -> None:
         assert block.body == ""
         assert "Trace auth routing" in block.arguments
         assert "Found auth routing in src/app.py." in block.output_body
+        params = block.query_one(".subagent-parameters", Static)
+        assert params.display is True
+        assert "Subagent Parameters" in str(params.content)
+        assert "Trace auth routing" in str(params.content)
+        details = block.query_one(".tool-details", Static)
+        assert details.display is False
+        block.action_toggle_expand()
+        await pilot.pause(0.01)
+        assert details.display is True
+        rendered_details = block.details
+        assert "Task" in rendered_details
+        assert "Trace auth routing" in rendered_details
+        assert "Report" in rendered_details
+        assert "Found auth routing in src/app.py." in rendered_details
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_expanded_report_is_bounded(tmp_path) -> None:
+    long_report = "\n".join(f"finding {index}" for index in range(24))
+    subagent_output = json.dumps(
+        {
+            "ok": True,
+            "name": "subagent_reviewer",
+            "output": long_report,
+            "error": None,
+            "metadata": {"kind": "subagent_result", "subagent": "reviewer"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="subagent_reviewer",
+                payload={
+                    "call_id": "sub-1",
+                    "arguments": '{"input":"Review the staged change"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=subagent_output,
+                payload={"call_id": "sub-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "review"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        block.action_toggle_expand()
+        await pilot.pause(0.01)
+        rendered_details = block.details
+        assert "finding 0" in rendered_details
+        assert "finding 15" in rendered_details
+        assert "finding 16" not in rendered_details
+        assert "... output truncated ..." in rendered_details
         app.exit()
 
 
@@ -4997,6 +5085,7 @@ async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
         block = app.query_one(ToolBlock)
         assert block.details.startswith("line 0")
         assert "line 29" in block.details
+        assert block.query_one(".subagent-parameters", Static).display is False
         block.action_toggle_expand()
         await pilot.pause(0.01)
         assert block.query_one(".tool-details").display is False
