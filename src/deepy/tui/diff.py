@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.console import Group
 from rich.text import Text
@@ -37,6 +38,7 @@ def diff_view_from_tool_output(
     output: str,
     *,
     max_lines: int = MAX_RENDERED_DIFF_LINES,
+    project_root: Path | None = None,
 ) -> TuiDiffView | None:
     view = parse_tool_output(output)
     if view.ok is not True or view.name.lower() not in {"write", "update"}:
@@ -45,10 +47,13 @@ def diff_view_from_tool_output(
     if not raw:
         return None
     parsed_sections = tuple(split_diff_preview_sections(raw))
-    sections, section_truncated = _truncate_diff_sections(parsed_sections, max_lines=max_lines)
+    sections, section_truncated = _truncate_diff_sections(
+        _relativize_sections(parsed_sections, project_root=project_root),
+        max_lines=max_lines,
+    )
     preview = _aggregate_diff_sections(
         sections,
-        fallback=parse_diff_preview_view(raw, path=view.path),
+        fallback=_relativize_preview(parse_diff_preview_view(raw, path=view.path), project_root=project_root),
     )
     lines = preview.lines
     truncated = section_truncated or len(lines) > max_lines
@@ -64,6 +69,35 @@ def diff_view_from_tool_output(
         hunks=tuple(line for line in raw.splitlines() if line.startswith("@@")),
         sections=sections,
     )
+
+
+def _relativize_sections(
+    sections: tuple[DiffPreview, ...],
+    *,
+    project_root: Path | None,
+) -> tuple[DiffPreview, ...]:
+    if project_root is None:
+        return sections
+    return tuple(_relativize_preview(section, project_root=project_root) for section in sections)
+
+
+def _relativize_preview(preview: DiffPreview, *, project_root: Path | None) -> DiffPreview:
+    if project_root is None or not preview.path:
+        return preview
+    return DiffPreview(
+        path=_relative_display_path(preview.path, project_root=project_root),
+        added=preview.added,
+        removed=preview.removed,
+        lines=preview.lines,
+        syntax_path=preview.syntax_path,
+    )
+
+
+def _relative_display_path(path: str, *, project_root: Path) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(project_root.resolve()))
+    except (OSError, ValueError):
+        return path
 
 
 def render_unified_diff_text(view: TuiDiffView) -> str:

@@ -1,44 +1,43 @@
-# Deepy UI And Deepy TUI
+# Classic UI And Modern UI
 
 This page explains Deepy's two terminal interfaces and records the current
-feature alignment status.
+feature alignment and migration status.
 
 ## Interface Positioning
 
-- **Deepy UI**: the stable default interface, started with `deepy`.
-- **Deepy TUI**: the experimental Textual interface, started with `deepy tui`.
+- **Classic UI**: the Rich/prompt-toolkit terminal UI.
+- **Modern UI**: the Textual terminal UI.
 - Both interfaces share the same model runner, tools, sessions, skills, MCP,
   background tasks, and automatic compacting logic.
-- TUI is not the default entrypoint by design.
+- The default `deepy` command starts the UI saved in `ui.interface`. Missing
+  config defaults to Classic UI with the dark theme. `deepy tui` remains as a
+  compatibility command that starts Modern UI directly.
 
-## Screenshots
+## Current Visual Model
 
-Deepy TUI keeps the transcript, prompt, status line, and shortcut hints visible
-inside one Textual interface.
-
-![Deepy Textual TUI](../asset/deepy-tui.webp)
+Modern UI uses a compact terminal-agent shell: scrollback transcript,
+lightweight status line, bottom composer, and on-demand overlays. The previous
+TUI screenshots were removed from this page because they showed the older
+layout; new screenshots should be added only after the redesigned layout is
+captured from the current implementation.
 
 `/status` shows usage, context-window pressure, and DeepSeek balance on demand.
+Exiting Modern UI prints the same compact session summary as Classic UI.
 
-![Deepy TUI status panel](../asset/tui-status.webp)
+## Classic UI
 
-Exiting the TUI prints the same compact session summary as the stable UI.
-
-![Deepy TUI session summary](../asset/tui-summary.webp)
-
-## Deepy UI
-
-Deepy UI is the stable interface built with Rich and prompt-toolkit.
+Classic UI is built with Rich and prompt-toolkit.
 
 Main capabilities:
 
 - Normal chat and multi-turn agent execution.
-- Thinking, tool call, tool result, usage, and error rendering.
+- Thinking, live assistant activity, tool call, tool result, compact usage
+  footer/status, and error rendering.
 - Tool output for `shell`, `read`, `modify`, `todo_write`,
   `AskUserQuestion`, Web, MCP, and background task tools.
 - Session/context commands such as `/new`, `/resume`, `/sessions`, and
   `/compact`.
-- Management commands such as `/init`, `/reset`, `/model`, `/theme`, `/mcp`,
+- Management commands such as `/init`, `/reset`, `/model`, `/theme`, `/ui`, `/mcp`,
   `/status`, and `/skills`.
 - `/ps` for model-started background shell tasks and `/stop` for stopping one
   task or all running tasks.
@@ -59,34 +58,58 @@ Main capabilities:
   a separate review control above the final `Approve` / `Reject` decision area.
   Approval prompts are navigated with Up/Down, activated with Enter, and
   rejected with Esc.
-- First-run setup when API key/model/theme configuration is missing.
+- First-run setup when API key/model/UI configuration is missing.
 
-## Deepy TUI
+## Modern UI
 
-Deepy TUI is the experimental interface built with Textual.
+Modern UI is the Textual interface.
 
 Main capabilities:
 
 - Normal chat and multi-turn agent execution.
-- Thinking, tool call, tool result, usage, and error rendering.
-- Expandable and collapsible tool result blocks with metadata and clearer
-  visual grouping.
-- Dedicated display for `shell`, `read`, `todo_write`, Web, MCP, `load_skill`,
-  and background task tools.
+- Thinking, compact tool call/result summaries, and error rendering.
+- Tool transcript rows show status and target summaries without default
+  parameter or output bodies.
+- Successful `Write` / `Update` results with diffs render the diff directly
+  with project-relative paths and without extra tool summary rows.
+- Dedicated summaries for `shell`, `read`, `todo_write`, Web, MCP,
+  `load_skill`, and background task tools.
 - AskUserQuestion single-choice, multiple-choice, custom answer, cancel, and
   same-session continuation flows.
 - `/new`, `/resume`, `/sessions`, and `/compact`.
-- `/init`, `/reset`, `/model`, `/theme`, `/mcp`, `/status`, and `/skills`.
+- `/init`, `/reset`, `/model`, `/theme`, `/ui`, `/mcp`, `/status`, and `/skills`.
+  Frequent short choices such as theme/model pickers render inline in the
+  transcript instead of opening blocking modals.
 - `/ps` and `/stop` for background shell tasks.
 - `/status` with usage, context window, and DeepSeek balance. The balance API is
   called only when `/status` is explicitly invoked.
 - Session summary after `/exit`, `/quit`, or pressing Ctrl+D twice.
 - `!command` local command mode, rendered with the shell tool block.
 - Slash-command completion and `@file` completion.
+- Textual-native prompt input keeps CJK text, emoji, and multiline drafts in the
+  editable buffer without UI replacement tokens.
+- Prompt text, image attachments, generated input suggestions, slash
+  suggestions, and `@file` suggestions are separate composer states.
+- Image attachments are displayed outside the editable text buffer and still
+  submit as prompt image payloads. The attachment row shows the selected image
+  and keyboard hint; while the prompt input remains focused, press Down to enter
+  attachment selection, Left/Right to choose an attachment, Backspace to remove
+  it, and Up to return to normal input.
 - Prompt history.
 - Automatic compacting.
-- Bottom status with model, cwd, AGENTS, MCP count, context usage, and
-  `compact next`.
+- Bottom status with model, cwd, AGENTS, MCP count, context pressure, and cache
+  state. Per-turn token usage is kept out of the persistent footer and remains
+  available from `/status` and detail views. New output below the viewport is
+  shown with a changing `New output ↓` indicator.
+- Shared `dark` and `light` settings map to curated Textual themes:
+  `tokyo-night` and `solarized-light`. The Modern UI `/theme` picker also offers
+  several Textual-only themes such as `nord`, `catppuccin-mocha`, `gruvbox`,
+  `monokai`, `solarized-light`, and `atom-one-light`; those are saved as
+  `ui.textual_theme` so Classic UI only needs to understand `dark` and
+  `light`.
+- Audit approvals and AskUserQuestion prompts render as inline transcript
+  decisions with keyboard-first approve/reject, option, custom-answer, and
+  cancel paths.
 - Dedicated `/skills` management UI with market/installed tabs, viewing,
   installation, uninstallation, updating, and refresh.
 - Built-in skills are not shown in the TUI skill management UI.
@@ -95,9 +118,9 @@ Main capabilities:
 
 ## Feature Comparison
 
-| Feature | Deepy UI | Deepy TUI | Current status |
+| Feature | Classic UI | Modern UI | Current status |
 | --- | --- | --- | --- |
-| Default entrypoint | Yes | No | By design |
+| Default entrypoint | Configurable | Configurable | `deepy` uses `ui.interface`; missing config defaults to Classic |
 | Normal chat | Supported | Supported | Aligned |
 | Thinking display | Supported | Supported | Aligned |
 | Tool call display | Supported | Supported | Aligned |
@@ -110,6 +133,8 @@ Main capabilities:
 | `/reset` | Supported | Supported | Same capability, different interaction form |
 | `/model` | Supported | Supported | Aligned |
 | `/theme` | Supported | Supported | Aligned |
+| `/ui` | Supported | Supported | Persists default UI for the next startup |
+| Modern theme rendering | Rich palette | Textual curated theme | `dark` / `light` map to `tokyo-night` / `solarized-light`; Modern-only themes use `ui.textual_theme` |
 | `/mcp` | Supported | Supported | Aligned |
 | `/status` | Supported | Supported | Aligned; balance is queried only on explicit call |
 | `/ps` / `/stop` | Supported | Supported | Aligned; manages background shell tasks |
@@ -119,8 +144,11 @@ Main capabilities:
 | Delete user/project skill | Supported | Supported | Aligned |
 | Built-in skill management display | Hidden | Hidden | Aligned |
 | `!command` | Supported | Supported | Aligned |
-| Slash-command completion | Supported | Supported | Aligned |
-| `@file` completion | Supported | Supported | Aligned |
+| Slash-command completion | Supported | Supported | Shared command metadata |
+| `@file` completion | Supported | Supported | Aligned; short fragments search nested paths |
+| Image attachment prompt editing | Prompt label tokens | Separate attachment state | TUI avoids editable replacement tokens |
+| Image attachment deletion | Edit/remove prompt label | Prompt-local shortcuts | TUI uses Down to enter, Left/Right to choose, Backspace to delete, Up to return |
+| Audit approval | Inline terminal prompt | Inline transcript decision | TUI no longer interrupts with runtime modal |
 | Prompt history | Supported | Supported | Aligned |
 | Bottom status | Supported | Supported | Aligned |
 | Newline shortcut | `Ctrl+J` | `Ctrl+J` | Aligned |
@@ -130,7 +158,7 @@ Main capabilities:
 
 - Windows PowerShell 7: continue validating `!command`, file encoding, newline
   behavior, and tool output after releases.
-- TUI remains experimental and is not the default `deepy` interface.
+- The default `deepy` interface is configurable through `ui.interface`.
 
 There are no known core daily-feature gaps at this time.
 

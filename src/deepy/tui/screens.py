@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Label, Markdown, OptionList, Static
+from textual.widgets import Input, Label, Markdown, OptionList, Static
 from textual.widgets.option_list import Option
 
 from deepy.audit import PendingApproval
@@ -38,9 +40,8 @@ class InfoScreen(ModalScreen[None]):
         max-width: 95%;
         height: auto;
         max-height: 90%;
-        border: round $primary;
-        background: $surface;
-        padding: 1 2;
+        background: $panel;
+        padding: 1;
     }
 
     InfoScreen Markdown {
@@ -59,7 +60,6 @@ class InfoScreen(ModalScreen[None]):
         with Vertical():
             yield Label(self.title_text, classes="block-title")
             yield Markdown(self.markdown)
-            yield Footer()
 
     async def action_dismiss(self, result: None = None) -> None:
         self.dismiss(None)
@@ -84,9 +84,8 @@ class AuditApprovalScreen(ModalScreen[str]):
         max-width: 98%;
         height: auto;
         max-height: 92%;
-        border: round $warning;
-        background: $surface;
-        padding: 1 2;
+        background: $panel;
+        padding: 1;
     }
 
     AuditApprovalScreen > Vertical.-has-preview {
@@ -94,26 +93,25 @@ class AuditApprovalScreen(ModalScreen[str]):
     }
 
     AuditApprovalScreen .approval-summary {
-        margin-top: 1;
+        margin-top: 0;
     }
 
     AuditApprovalScreen .approval-preview {
         height: 1fr;
         max-height: 1fr;
-        margin-top: 1;
-        border: tall $warning;
+        margin-top: 0;
         padding: 0 1;
     }
 
     AuditApprovalScreen OptionList {
         height: 4;
         max-height: 4;
-        margin-top: 1;
+        margin-top: 0;
     }
 
     AuditApprovalScreen .screen-help {
         color: $text-muted;
-        margin: 1 0 0 0;
+        margin: 0;
     }
     """
 
@@ -261,15 +259,14 @@ class ChoiceScreen(ModalScreen[str | None]):
         max-width: 98%;
         height: auto;
         max-height: 90%;
-        border: round $primary;
-        background: $surface;
-        padding: 1 2;
+        background: $panel;
+        padding: 1;
     }
 
     ChoiceScreen OptionList {
         height: auto;
         max-height: 1fr;
-        margin-top: 1;
+        margin-top: 0;
     }
     """
 
@@ -291,7 +288,6 @@ class ChoiceScreen(ModalScreen[str | None]):
                 ],
                 id="choice-list",
             )
-            yield Footer()
 
     def on_mount(self) -> None:
         self.call_after_refresh(self._focus_choice_list)
@@ -318,6 +314,7 @@ class ResetConfigResult:
     model: str
     base_url: str
     thinking: str
+    interface: str
     theme: str
 
 
@@ -334,22 +331,33 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
     }
 
     ResetConfigScreen > Vertical {
-        width: 82;
+        width: 92;
         max-width: 95%;
         height: auto;
         max-height: 90%;
-        border: round $primary;
-        background: $surface;
-        padding: 1 2;
+        background: $panel;
+        padding: 1;
     }
 
     ResetConfigScreen Input {
-        margin: 1 0 0 0;
+        margin: 0;
     }
 
     ResetConfigScreen .screen-help {
         color: $text-muted;
-        margin: 1 0 0 0;
+        margin: 0;
+    }
+
+    ResetConfigScreen .screen-error {
+        color: $error;
+        margin: 0;
+        display: none;
+    }
+
+    ResetConfigScreen .config-section {
+        color: $accent;
+        text-style: bold;
+        margin-top: 1;
     }
     """
 
@@ -361,6 +369,7 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
         model: str,
         base_url: str,
         thinking: str,
+        interface: str,
         theme: str,
     ) -> None:
         super().__init__()
@@ -369,24 +378,38 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
         self.model = model
         self.base_url = base_url
         self.thinking = thinking
+        self.interface = interface
         self.theme = theme
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Reset Deepy Config", classes="block-title")
-            yield Static("Ctrl+S saves. Esc cancels.", classes="screen-help")
+            yield Static("Ctrl+S save · Esc cancel", classes="screen-help")
+            yield Static("", id="reset-error", classes="screen-error")
+            yield Static("Provider", classes="config-section")
             yield Input(value=self.api_key, placeholder="API key", password=True, id="reset-api-key")
             yield Input(value=self.provider, placeholder="Provider: deepseek|openrouter|xiaomi", id="reset-provider")
             yield Input(value=self.model, placeholder="Model", id="reset-model")
             yield Input(value=self.base_url, placeholder="Base URL", id="reset-base-url")
+            yield Static("Runtime", classes="config-section")
             yield Input(value=self.thinking, placeholder="Thinking", id="reset-thinking")
-            yield Input(value=self.theme, placeholder="Theme: dark|light", id="reset-theme")
-            yield Footer()
+            yield Input(
+                value=f"{self.interface} {self.theme}",
+                placeholder="UI: 1 classic dark | 2 classic light | 3 modern dark | 4 modern light",
+                id="reset-ui",
+            )
 
     def on_mount(self) -> None:
         self.query_one("#reset-api-key", Input).focus()
 
     def action_submit(self) -> None:
+        error, field_id = self._validation_error()
+        if error:
+            error_widget = self.query_one("#reset-error", Static)
+            error_widget.update(error)
+            error_widget.display = True
+            self.query_one(field_id, Input).focus()
+            return
         self.dismiss(
             ResetConfigResult(
                 api_key=self.query_one("#reset-api-key", Input).value.strip(),
@@ -394,12 +417,49 @@ class ResetConfigScreen(ModalScreen[ResetConfigResult | None]):
                 model=self.query_one("#reset-model", Input).value.strip(),
                 base_url=self.query_one("#reset-base-url", Input).value.strip(),
                 thinking=self.query_one("#reset-thinking", Input).value.strip(),
-                theme=self.query_one("#reset-theme", Input).value.strip(),
+                interface=self._selected_ui()[0],
+                theme=self._selected_ui()[1],
             )
         )
 
     async def action_dismiss(self, result: ResetConfigResult | None = None) -> None:
         self.dismiss(None)
+
+    def _validation_error(self) -> tuple[str, str]:
+        provider = self.query_one("#reset-provider", Input).value.strip()
+        model = self.query_one("#reset-model", Input).value.strip()
+        ui_value = self.query_one("#reset-ui", Input).value.strip()
+        if not provider:
+            return "Provider is required.", "#reset-provider"
+        if provider not in {"deepseek", "openrouter", "xiaomi"}:
+            return "Provider must be deepseek, openrouter, or xiaomi.", "#reset-provider"
+        if not model:
+            return "Model is required.", "#reset-model"
+        if self._ui_choice_from_value(ui_value) is None:
+            return "UI must be 1-4, classic dark, classic light, modern dark, or modern light.", "#reset-ui"
+        return "", "#reset-provider"
+
+    def _selected_ui(self) -> tuple[str, str]:
+        return self._ui_choice_from_value(self.query_one("#reset-ui", Input).value.strip()) or ("classic", "dark")
+
+    @staticmethod
+    def _ui_choice_from_value(value: str) -> tuple[str, str] | None:
+        normalized = value.strip().lower()
+        choices = {
+            "1": ("classic", "dark"),
+            "classic dark": ("classic", "dark"),
+            "classic-dark": ("classic", "dark"),
+            "2": ("classic", "light"),
+            "classic light": ("classic", "light"),
+            "classic-light": ("classic", "light"),
+            "3": ("modern", "dark"),
+            "modern dark": ("modern", "dark"),
+            "modern-dark": ("modern", "dark"),
+            "4": ("modern", "light"),
+            "modern light": ("modern", "light"),
+            "modern-light": ("modern", "light"),
+        }
+        return choices.get(normalized)
 
 
 @dataclass(frozen=True)
@@ -423,9 +483,15 @@ class SkillScreenAction:
 
 
 class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
+    class ActionRequested(Message):
+        def __init__(self, screen: SkillManagementScreen, action: SkillScreenAction) -> None:
+            self.screen = screen
+            self.action = action
+            super().__init__()
+
     BINDINGS = [
         Binding("tab", "toggle_view", "View", priority=True),
-        Binding("enter", "primary", "Use/Install"),
+        Binding("enter", "primary", "Detail"),
         Binding("v", "show_skill", "View"),
         Binding("i", "install_skill", "Install"),
         Binding("u", "uninstall_skill", "Uninstall"),
@@ -440,23 +506,28 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
     }
 
     SkillManagementScreen > Vertical {
-        width: 132;
+        width: 172;
         max-width: 98%;
-        height: 86%;
+        height: 82%;
         max-height: 94%;
-        border: round $primary;
-        background: $surface;
+        background: $panel;
         padding: 1 2;
     }
 
     SkillManagementScreen OptionList {
         height: 1fr;
-        margin-top: 1;
+        margin-top: 0;
     }
 
     SkillManagementScreen .screen-help {
         color: $text-muted;
-        margin: 1 0 0 0;
+        margin: 0;
+    }
+
+    SkillManagementScreen .screen-tabs {
+        height: 1;
+        color: $text-muted;
+        margin: 0;
     }
     """
 
@@ -467,25 +538,30 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         *,
         view: Literal["installed", "market"] = "market",
         market_error: str = "",
+        market_loading: bool = False,
     ) -> None:
         super().__init__()
         self.installed = installed
         self.market = market
         self.view: Literal["installed", "market"] = view
         self.market_error = market_error
+        self.market_loading = market_loading
+        self.loading_message = "Loading skill market..." if market_loading else ""
         self._title_label: Label | None = None
+        self._tabs_text: Static | None = None
         self._help_text: Static | None = None
         self._options: OptionList | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
             self._title_label = Label(self._title(), id="skill-title", classes="block-title")
+            self._tabs_text = Static(self._tabs(), id="skill-tabs", classes="screen-tabs")
             self._help_text = Static(self._help(), id="skill-help", classes="screen-help")
             self._options = OptionList(id="skill-options")
             yield self._title_label
+            yield self._tabs_text
             yield self._help_text
             yield self._options
-            yield Footer()
 
     def on_mount(self) -> None:
         self._refresh_options()
@@ -504,15 +580,12 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         entry = self._selected_entry()
         if entry is None:
             return
-        if self.view == "market" and not entry.installed:
-            self.dismiss(SkillScreenAction("install", entry.name, "market"))
-            return
-        self.dismiss(SkillScreenAction("use", entry.name, entry.source))
+        self._request(SkillScreenAction("show", entry.name, entry.source))
 
     def action_show_skill(self) -> None:
         entry = self._selected_entry()
         if entry is not None:
-            self.dismiss(SkillScreenAction("show", entry.name, entry.source))
+            self._request(SkillScreenAction("show", entry.name, entry.source))
 
     def action_install_skill(self) -> None:
         entry = self._selected_entry()
@@ -522,7 +595,7 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
             self.notify(f"Already installed: {entry.name}", severity="warning")
             return
         if entry.source == "market":
-            self.dismiss(SkillScreenAction("install", entry.name, entry.source))
+            self._request(SkillScreenAction("install", entry.name, entry.source))
 
     def action_uninstall_skill(self) -> None:
         entry = self._selected_entry()
@@ -531,26 +604,60 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         if not entry.removable:
             self.notify(f"Cannot uninstall built-in skill: {entry.name}", severity="warning")
             return
-        self.dismiss(SkillScreenAction("uninstall", entry.name, entry.source))
+        self._request(SkillScreenAction("uninstall", entry.name, entry.source))
 
     def action_refresh(self) -> None:
-        self.dismiss(SkillScreenAction("refresh", source=self.view))
+        self._request(SkillScreenAction("refresh", source=self.view))
 
     async def action_dismiss(self, result: SkillScreenAction | None = None) -> None:
         self.dismiss(None)
 
+    def update_installed(self, installed: list[SkillScreenEntry]) -> None:
+        self.installed = installed
+        self._refresh_options()
+
+    def set_market_loading(self, message: str = "Loading skill market...") -> None:
+        self.market_loading = True
+        self.loading_message = message
+        self.market_error = ""
+        self._refresh_options()
+
+    def update_market(self, market: list[SkillScreenEntry], *, market_error: str = "") -> None:
+        self.market = market
+        self.market_error = market_error
+        self.market_loading = False
+        self.loading_message = ""
+        self._refresh_options()
+
+    def set_operation_loading(self, message: str) -> None:
+        self.loading_message = message
+        self._refresh_options()
+
+    def clear_operation_loading(self) -> None:
+        if not self.market_loading:
+            self.loading_message = ""
+            self._refresh_options()
+
     def _refresh_options(self) -> None:
         title = self._skill_title()
+        tabs = self._skill_tabs()
         help_text = self._skill_help()
         options = self._skill_options()
         title.update(self._title())
+        tabs.update(self._tabs())
         help_text.update(self._help())
         options.clear_options()
+        if self.loading_message:
+            options.add_option(Option(_skill_status_label(self.loading_message), id="empty"))
+            options.highlighted = 0
+            self.call_after_refresh(options.refresh)
+            return
         entries = self._entries()
         if entries:
+            row_width = self._row_width()
             options.add_options(
                 [
-                    Option(_skill_option_label(entry), id=f"{entry.source}:{entry.name}")
+                    Option(_skill_option_label(entry, width=row_width), id=f"{entry.source}:{entry.name}")
                     for entry in entries
                 ]
             )
@@ -561,6 +668,15 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
         options.add_option(Option(empty, id="empty"))
         options.highlighted = 0
         self.call_after_refresh(options.refresh)
+
+    def _request(self, action: SkillScreenAction) -> None:
+        self.post_message(self.ActionRequested(self, action))
+
+    def _row_width(self) -> int:
+        width = self.size.width - 8
+        if width <= 0:
+            width = 150
+        return max(96, min(width, 168))
 
     def _entries(self) -> list[SkillScreenEntry]:
         return self.market if self.view == "market" else self.installed
@@ -588,40 +704,68 @@ class SkillManagementScreen(ModalScreen[SkillScreenAction | None]):
             raise RuntimeError("Skill help widget is not mounted.")
         return self._help_text
 
+    def _skill_tabs(self) -> Static:
+        if self._tabs_text is None:
+            raise RuntimeError("Skill tabs widget is not mounted.")
+        return self._tabs_text
+
     def _skill_options(self) -> OptionList:
         if self._options is None:
             raise RuntimeError("Skill option list is not mounted.")
         return self._options
 
     def _title(self) -> str:
-        count = len(self._entries())
-        title = "Skill Market" if self.view == "market" else "Installed Skills"
-        return f"{title} ({count})"
+        return "Skills"
+
+    def _tabs(self) -> str:
+        market = f"Market {len(self.market)}"
+        installed = f"Installed {len(self.installed)}"
+        if self.view == "market":
+            market = f"[{market}]"
+        else:
+            installed = f"[{installed}]"
+        return f"{market}  {installed}"
 
     def _help(self) -> str:
         if self.view == "market":
-            return "Tab: Installed. Enter: install/use. v detail, i install, r refresh, esc close."
-        return "Tab: Market. Enter: use. v detail, u uninstall market-installed skills, r refresh, esc close."
+            return "Tab switch view · Enter detail · v detail · i install · r refresh · Esc close"
+        return "Tab switch view · Enter detail · v detail · u uninstall · r refresh · Esc close"
 
 
-def _skill_option_label(entry: SkillScreenEntry) -> str:
-    tags: list[str] = []
+def _skill_status_label(message: str) -> Text:
+    label = Text(no_wrap=True, overflow="ellipsis")
+    label.append(message, style="#a5b4fc")
+    return label
+
+
+def _skill_option_label(entry: SkillScreenEntry, *, width: int = 150) -> Text:
+    label = Text(no_wrap=True, overflow="ellipsis")
+    label.append(entry.name, style="bold #e5e7eb")
+    tags: list[tuple[str, str]] = []
     if entry.source == "market":
-        if entry.version:
-            tags.append(entry.version)
+        tags.append(("market", "#c084fc"))
         if entry.installed:
-            tags.append("installed")
+            tags.append(("installed", "#86efac"))
     else:
-        tags.append(entry.scope)
+        scope_style = "#7dd3fc" if entry.scope == "project" else "#fbbf24"
+        tags.append((entry.scope, scope_style))
         if not entry.removable:
-            tags.append("built-in")
+            tags.append(("built-in", "#a5b4fc"))
         elif entry.managed_by_market:
-            tags.append("market")
-    suffix = f"  [{' | '.join(tags)}]" if tags else ""
-    description = _truncate_single_line(entry.description, 112)
+            tags.append(("market", "#c084fc"))
+    if tags:
+        label.append("  ")
+        for index, (tag, style) in enumerate(tags):
+            if index:
+                label.append(" ")
+            label.append(f"[{tag}]", style=style)
+    max_row_width = max(72, width)
+    description_width = max(24, max_row_width - len(label.plain) - 5)
+    description = _truncate_single_line(entry.description, description_width)
     if description:
-        return f"{entry.name}{suffix}\n  {description}"
-    return f"{entry.name}{suffix}"
+        label.append("  - ", style="#6b7280")
+        label.append(description, style="#a5b4fc")
+    return label
 
 
 def _truncate_single_line(text: str, limit: int) -> str:

@@ -27,7 +27,7 @@ dependencies = [
     "regex>=2026.5.9",
     "pyyaml>=6.0,<7",
     "rich>=14.2,<15",
-    "textual>=8.2,<9",
+    "textual>=8.2.7,<9",
     "tiktoken>=0.9,<1",
     "tomli-w>=1",
 ]

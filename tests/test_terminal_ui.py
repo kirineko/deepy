@@ -1910,8 +1910,28 @@ def test_help_slash_command_includes_model(tmp_path):
     assert "/ps" in rendered
     assert "/stop" in rendered
     assert "/input-suggestion" in rendered
+    assert "/ui" in rendered
     assert "/view [toggle|concise|full]" in rendered
     assert "/compact [focus]" in rendered
+
+
+def test_ui_slash_command_persists_modern_interface(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text("[ui]\ninterface = \"classic\"\ntheme = \"dark\"\n", encoding="utf-8")
+    console = Console(record=True)
+
+    next_session = _handle_slash_command(
+        SlashCommand("ui", "modern"),
+        console,
+        tmp_path,
+        "s1",
+        settings=Settings(path=config, ui=UiConfig(interface="classic", theme="dark")),
+    )
+
+    assert next_session == "s1"
+    assert load_settings(config).ui.interface == "modern"
+    assert load_settings(config).ui.theme == "dark"
+    assert "Saved UI: Modern UI" in console.export_text()
 
 
 def test_view_slash_command_toggles_config_and_reports_reasoning_state(tmp_path):
@@ -2862,7 +2882,7 @@ def test_terminal_approval_panel_renders_mcp_summary_without_raw_json():
     assert "arguments." not in rendered
 
 
-def test_terminal_approval_panel_renders_write_arguments_as_relative_diff(tmp_path):
+def test_terminal_approval_panel_renders_write_arguments_as_compact_summary(tmp_path):
     console = Console(record=True, width=120)
     target = tmp_path / "two_sum.py"
 
@@ -2888,14 +2908,15 @@ def test_terminal_approval_panel_renders_write_arguments_as_relative_diff(tmp_pa
     rendered = console.export_text()
     assert "Approve write? two_sum.py" in rendered
     assert "path: two_sum.py" in rendered
-    assert "[Write] two_sum.py" in rendered
-    assert "from typing import List" in rendered
-    assert "class Solution:" in rendered
+    assert "size:" in rendered
+    assert "[Write] two_sum.py" not in rendered
+    assert "from typing import List" not in rendered
+    assert "class Solution:" not in rendered
     assert "\\nclass Solution" not in rendered
     assert "arguments." not in rendered
 
 
-def test_terminal_approval_panel_renders_update_arguments_as_relative_diff(tmp_path):
+def test_terminal_approval_panel_renders_update_arguments_as_compact_summary(tmp_path):
     console = Console(record=True, width=120)
     target = tmp_path / "src" / "app.py"
 
@@ -2922,9 +2943,10 @@ def test_terminal_approval_panel_renders_update_arguments_as_relative_diff(tmp_p
     rendered = console.export_text()
     assert "Approve update? src/app.py" in rendered
     assert "path: src/app.py" in rendered
-    assert "[Update] src/app.py" in rendered
-    assert "- value = 1" in rendered
-    assert "+ value = 2" in rendered
+    assert "edits: 1" in rendered
+    assert "[Update] src/app.py" not in rendered
+    assert "- value = 1" not in rendered
+    assert "+ value = 2" not in rendered
 
 
 def test_terminal_approval_panel_falls_back_when_update_diff_context_missing(tmp_path):
@@ -2975,7 +2997,7 @@ def test_terminal_approval_panel_keeps_outside_project_path_explicit(tmp_path):
     assert "path: outside.py" not in rendered
 
 
-def test_terminal_approval_panel_truncates_and_expands_diff_without_review_line(tmp_path):
+def test_terminal_approval_panel_keeps_file_decision_compact_without_preview(tmp_path):
     console = Console(record=True, width=120)
     content = "\n".join(f"line {index}" for index in range(40)) + "\n"
     item = terminal.PendingApproval(
@@ -3005,22 +3027,34 @@ def test_terminal_approval_panel_truncates_and_expands_diff_without_review_line(
     )
     expanded = console.export_text()
 
-    assert can_expand is True
+    assert can_expand is False
     assert "review:" not in compact
     assert "line 39" not in compact
     assert "review:" not in expanded
-    assert "line 39" in expanded
+    assert "line 39" not in expanded
 
 
-def test_terminal_approval_diff_full_stays_inside_picker_panel(tmp_path, monkeypatch):
+def test_terminal_approval_preflight_diff_renders_before_compact_picker(tmp_path, monkeypatch):
     console = Console(record=True, width=120)
-    content = "\n".join(f"line {index}" for index in range(40)) + "\n"
+    diff = "--- a/long.py\n+++ b/long.py\n@@ -1 +1 @@\n-old\n+new\n"
     item = terminal.PendingApproval(
         index=0,
         name="Write",
         tool_name="Write",
-        arguments=json_utils.dumps({"path": str(tmp_path / "long.py"), "content": content}),
+        arguments=json_utils.dumps({"path": str(tmp_path / "long.py"), "content": "new\n"}),
         action_kind="text_write",
+        preflight={
+            "ok": True,
+            "name": "Write",
+            "output": "Proposed write",
+            "error": None,
+            "metadata": {
+                "path": str(tmp_path / "long.py"),
+                "diff": diff,
+                "diff_preview": diff,
+                "preflight": True,
+            },
+        },
     )
     picker_kwargs = {}
 
@@ -3042,8 +3076,11 @@ def test_terminal_approval_diff_full_stays_inside_picker_panel(tmp_path, monkeyp
     )
 
     assert approved is True
-    assert console.export_text() == ""
-    assert picker_kwargs["can_toggle_preview"] is True
+    rendered = console.export_text()
+    assert "• Proposed Change" in rendered
+    assert "[Write] long.py" in rendered
+    assert "+ new" in rendered
+    assert picker_kwargs["can_toggle_preview"] is False
     panel_text_factory = picker_kwargs["panel_text_factory"]
     compact = panel_text_factory(False)
     expanded = panel_text_factory(True)
@@ -3051,8 +3088,38 @@ def test_terminal_approval_diff_full_stays_inside_picker_panel(tmp_path, monkeyp
     expanded_plain = terminal._ANSI_ESCAPE_RE.sub("", expanded)
     assert compact.count("Approve write? long.py") == 1
     assert expanded.count("Approve write? long.py") == 1
-    assert "line 39" not in compact_plain
-    assert "line 39" in expanded_plain
+    assert "+ new" not in compact_plain
+    assert "+ new" not in expanded_plain
+
+
+def test_print_stream_event_suppresses_preflight_diff_after_approval(tmp_path):
+    console = Console(record=True, width=120)
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    output = {
+        "ok": True,
+        "name": "Update",
+        "output": "Updated file",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "diff": diff,
+            "diff_preview": diff,
+        },
+        "awaitUserResponse": False,
+    }
+    approved_preflight_diffs = {diff}
+
+    _print_stream_event(
+        console,
+        DeepyStreamEvent(kind="tool_output", text=json_utils.dumps(output)),
+        project_root=str(tmp_path),
+        approved_preflight_diffs=approved_preflight_diffs,
+    )
+
+    rendered = console.export_text()
+    assert "[Update]" in rendered
+    assert "+ new" not in rendered
+    assert approved_preflight_diffs == set()
 
 
 def test_run_once_with_status_routes_approval_picker_to_main_thread(tmp_path, monkeypatch):

@@ -130,24 +130,35 @@ for direct local commands.
 
 ![Deepy web research workflow](asset/websearch.webp)
 
-## Stable UI And Experimental TUI
+## Classic UI And Modern UI
 
-The default `deepy` command starts the stable Rich/prompt-toolkit terminal UI.
-The opt-in Textual interface is available with:
+Deepy has two peer terminal interfaces. Classic UI is the Rich/prompt-toolkit
+terminal UI, and Modern UI is the Textual terminal UI. The default `deepy`
+command starts the UI saved in `ui.interface`; missing config defaults to
+Classic UI with the dark theme. The compatibility command below still starts
+Modern UI directly:
 
 ```bash
 deepy tui
 ```
 
-The TUI has a scrollable transcript, live thinking blocks, richer tool output
-blocks, slash-command and `@file` suggestions, status/help screens, and a
-Deepy-owned diff view. It remains experimental and may change between releases.
-
-![Deepy Textual TUI](asset/deepy-tui.webp)
+Modern UI has a compact scrollable transcript, lightweight status line,
+Textual-native composer, live assistant/tool activity states, compact tool
+summary rows, slash-command and `@file` suggestions, inline audit/model/theme
+choices, status/help screens, and a Deepy-owned diff view. Use `/ui` in either
+interface to change the default UI for the next `deepy` startup.
 
 `/status` shows session/project usage, context-window pressure, and DeepSeek
-balance in one panel. Exiting the TUI prints the same compact session summary
-as the stable terminal UI.
+balance in one panel. Exiting Modern UI prints the same compact session summary
+as Classic UI. Prompt text, image attachments, generated input
+suggestions, slash suggestions, and file suggestions are separate composer
+states, so UI-only attachment labels are not written into the editable prompt
+buffer. Attached images appear in an attachment row with prompt-local keyboard
+shortcuts: press Down to enter attachment selection, Left/Right to choose,
+Backspace to remove, and Up to return to normal input. The shared `dark` /
+`light` setting maps to curated
+Textual themes in Modern UI, with `dark` defaulting to `tokyo-night`; Modern UI can
+also save a Textual-only `ui.textual_theme` override from `/theme`.
 
 See [docs/deepy-ui-and-tui.md](docs/deepy-ui-and-tui.md) for the full feature
 comparison and current limitations.
@@ -231,7 +242,7 @@ MCP inheritance, and troubleshooting.
 | Tutorial videos | [docs/tutorial-videos.md](docs/tutorial-videos.md) | [docs/tutorial-videos.zh-CN.md](docs/tutorial-videos.zh-CN.md) |
 | MCP setup and troubleshooting | [docs/mcp.md](docs/mcp.md) | [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md) |
 | Subagents and custom subagents | [docs/subagents.md](docs/subagents.md) | [docs/subagents.zh-CN.md](docs/subagents.zh-CN.md) |
-| Stable UI versus experimental TUI | [docs/deepy-ui-and-tui.md](docs/deepy-ui-and-tui.md) | [docs/deepy-ui-and-tui.zh-CN.md](docs/deepy-ui-and-tui.zh-CN.md) |
+| Classic UI and Modern UI | [docs/deepy-ui-and-tui.md](docs/deepy-ui-and-tui.md) | [docs/deepy-ui-and-tui.zh-CN.md](docs/deepy-ui-and-tui.zh-CN.md) |
 
 ## Command Reference
 
@@ -269,6 +280,7 @@ Inside the interactive terminal:
 /<name> [request]       Invoke a Skill directly
 /init                   Create or update project AGENTS.md
 /theme                  Show or change terminal UI theme
+/ui                     Show or change Classic/Modern UI
 /ps                     Show managed background shell tasks
 /stop                   Choose background shell tasks to stop
 ```
@@ -299,6 +311,7 @@ compact_preserve_recent_messages = 2
 mode = "yolo" # normal, auto, or yolo
 
 [ui]
+interface = "classic" # classic or modern
 theme = "dark" # dark or light
 ```
 

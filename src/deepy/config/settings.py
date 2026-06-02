@@ -19,6 +19,7 @@ DEFAULT_RESERVED_CONTEXT_TOKENS = 50_000
 DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES = 2
 DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 DEFAULT_UI_THEME = "dark"
+DEFAULT_UI_INTERFACE = "classic"
 DEFAULT_MCP_ENABLED = True
 DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -50,6 +51,14 @@ THINKING_MODES = set(DEEPSEEK_REASONING_MODES) | set(SWITCH_ONLY_THINKING_MODES)
 PROVIDERS = {"deepseek", "openrouter", "xiaomi"}
 UI_THEMES = {"dark", "light"}
 UI_THEME_OPTIONS = (("1", "dark"), ("2", "light"))
+UI_INTERFACES = {"classic", "modern"}
+UI_INTERFACE_OPTIONS = (("1", "classic"), ("2", "modern"))
+UI_SETUP_OPTIONS = (
+    ("1", "classic", "dark"),
+    ("2", "classic", "light"),
+    ("3", "modern", "dark"),
+    ("4", "modern", "light"),
+)
 UI_VIEW_MODES = {"concise", "full"}
 
 
@@ -330,6 +339,10 @@ def _as_str(value: Any, default: str = "") -> str:
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
+def _as_optional_str(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _as_string_tuple(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
@@ -567,13 +580,19 @@ class McpConfig:
 @dataclass(frozen=True)
 class UiConfig:
     theme: str = DEFAULT_UI_THEME
+    interface: str = DEFAULT_UI_INTERFACE
     theme_configured: bool = False
+    textual_theme: str | None = None
     input_suggestions_enabled: bool = DEFAULT_INPUT_SUGGESTIONS_ENABLED
     view_mode: str = DEFAULT_UI_VIEW_MODE
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
         theme = raw.get("theme")
+        interface = _as_str(raw.get("interface"), DEFAULT_UI_INTERFACE)
+        if interface not in UI_INTERFACES:
+            interface = DEFAULT_UI_INTERFACE
+        textual_theme = _as_optional_str(raw.get("textual_theme"))
         input_suggestions_enabled = _as_bool(
             raw.get("input_suggestions_enabled"),
             DEFAULT_INPUT_SUGGESTIONS_ENABLED,
@@ -584,18 +603,27 @@ class UiConfig:
         if isinstance(theme, str) and theme.strip() == "auto":
             return cls(
                 theme=DEFAULT_UI_THEME,
+                interface=interface,
                 theme_configured=True,
+                textual_theme=textual_theme,
                 input_suggestions_enabled=input_suggestions_enabled,
                 view_mode=view_mode,
             )
         if isinstance(theme, str) and theme.strip() in UI_THEMES:
             return cls(
                 theme=theme.strip(),
+                interface=interface,
                 theme_configured=True,
+                textual_theme=textual_theme,
                 input_suggestions_enabled=input_suggestions_enabled,
                 view_mode=view_mode,
             )
-        return cls(input_suggestions_enabled=input_suggestions_enabled, view_mode=view_mode)
+        return cls(
+            textual_theme=textual_theme,
+            interface=interface,
+            input_suggestions_enabled=input_suggestions_enabled,
+            view_mode=view_mode,
+        )
 
 
 @dataclass(frozen=True)
@@ -672,6 +700,10 @@ def is_valid_ui_theme(value: str) -> bool:
     return value in UI_THEMES
 
 
+def is_valid_ui_interface(value: str) -> bool:
+    return value in UI_INTERFACES
+
+
 def is_valid_ui_view_mode(value: str) -> bool:
     return value in UI_VIEW_MODES
 
@@ -716,6 +748,52 @@ def ui_theme_from_selection(value: str, *, default: str = DEFAULT_UI_THEME) -> s
     return default if is_valid_ui_theme(default) else DEFAULT_UI_THEME
 
 
+def ui_interface_number(interface: str) -> str:
+    for number, value in UI_INTERFACE_OPTIONS:
+        if value == interface:
+            return number
+    return "1"
+
+
+def ui_interface_from_selection(value: str, *, default: str = DEFAULT_UI_INTERFACE) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        return default if is_valid_ui_interface(default) else DEFAULT_UI_INTERFACE
+    if normalized in UI_INTERFACES:
+        return normalized
+    by_number = dict(UI_INTERFACE_OPTIONS)
+    selected = by_number.get(normalized)
+    if selected is not None:
+        return selected
+    return default if is_valid_ui_interface(default) else DEFAULT_UI_INTERFACE
+
+
+def ui_setup_number(interface: str, theme: str) -> str:
+    for number, option_interface, option_theme in UI_SETUP_OPTIONS:
+        if option_interface == interface and option_theme == theme:
+            return number
+    return "1"
+
+
+def ui_setup_from_selection(
+    value: str,
+    *,
+    default_interface: str = DEFAULT_UI_INTERFACE,
+    default_theme: str = DEFAULT_UI_THEME,
+) -> tuple[str, str]:
+    normalized = value.strip().lower()
+    fallback = (
+        default_interface if is_valid_ui_interface(default_interface) else DEFAULT_UI_INTERFACE,
+        default_theme if is_valid_ui_theme(default_theme) else DEFAULT_UI_THEME,
+    )
+    if not normalized:
+        return fallback
+    for number, option_interface, option_theme in UI_SETUP_OPTIONS:
+        if normalized in {number, f"{option_interface}-{option_theme}", f"{option_interface} {option_theme}"}:
+            return option_interface, option_theme
+    return fallback
+
+
 def write_config(
     config_path: Path,
     *,
@@ -724,10 +802,13 @@ def write_config(
     model: str,
     base_url: str | None = None,
     theme: str,
+    interface: str = DEFAULT_UI_INTERFACE,
     thinking_mode: str | None = None,
 ) -> None:
     if not is_valid_ui_theme(theme):
         raise ValueError("UI theme must be one of: dark, light.")
+    if not is_valid_ui_interface(interface):
+        raise ValueError("UI interface must be one of: classic, modern.")
     if not is_supported_provider(provider):
         raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
     provider_info = provider_info_for(provider)
@@ -791,6 +872,7 @@ def write_config(
             },
         },
         "ui": {
+            "interface": interface,
             "theme": theme,
             "input_suggestions_enabled": DEFAULT_INPUT_SUGGESTIONS_ENABLED,
             "view_mode": DEFAULT_UI_VIEW_MODE,
@@ -866,6 +948,54 @@ def update_config_theme(config_path: Path, theme: str) -> None:
     ui = raw.get("ui")
     ui_map = dict(ui) if isinstance(ui, Mapping) else {}
     ui_map["theme"] = theme
+    ui_map.pop("textual_theme", None)
+    raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_ui_interface(config_path: Path, interface: str) -> None:
+    if not is_valid_ui_interface(interface):
+        raise ValueError("UI interface must be one of: classic, modern.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["interface"] = interface
+    raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_ui_choice(config_path: Path, *, interface: str, theme: str) -> None:
+    if not is_valid_ui_interface(interface):
+        raise ValueError("UI interface must be one of: classic, modern.")
+    if not is_valid_ui_theme(theme):
+        raise ValueError("UI theme must be one of: dark, light.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["interface"] = interface
+    ui_map["theme"] = theme
+    ui_map.pop("textual_theme", None)
+    raw["ui"] = ui_map
+    _write_private_toml(path, raw)
+
+
+def update_config_textual_theme(config_path: Path, textual_theme: str) -> None:
+    theme = textual_theme.strip()
+    if not theme:
+        raise ValueError("Textual theme must not be empty.")
+    path = config_path.expanduser()
+    if path.suffix == ".json":
+        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+    raw = _read_toml_mapping(path)
+    ui = raw.get("ui")
+    ui_map = dict(ui) if isinstance(ui, Mapping) else {}
+    ui_map["textual_theme"] = theme
     raw["ui"] = ui_map
     _write_private_toml(path, raw)
 

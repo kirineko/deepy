@@ -263,6 +263,7 @@ def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, m
     assert "old-key" not in text
     assert 'provider = "deepseek"' in text
     assert 'api_key = "sk-reset"' in text
+    assert 'interface = "classic"' in text
     assert 'theme = "light"' in text
 
 
@@ -367,10 +368,10 @@ def test_tui_requires_tty(monkeypatch, capsys):
     code = main(["tui"])
 
     assert code == 1
-    assert "experimental TUI requires a TTY" in capsys.readouterr().err
+    assert "Modern UI requires a TTY" in capsys.readouterr().err
 
 
-def test_tui_dispatches_to_experimental_runner(tmp_path, monkeypatch):
+def test_tui_dispatches_to_modern_runner(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text('[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     calls: list[object] = []
@@ -390,6 +391,48 @@ def test_tui_dispatches_to_experimental_runner(tmp_path, monkeypatch):
     settings, project_root = calls[0]
     assert settings.model.api_key == "sk-test"
     assert project_root == tmp_path
+
+
+def test_default_command_dispatches_to_configured_modern_ui(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[model]\napi_key = "sk-test"\n\n[ui]\ninterface = "modern"\ntheme = "dark"\n',
+        encoding="utf-8",
+    )
+    calls: list[object] = []
+
+    def fake_run_tui(settings, *, project_root):
+        calls.append((settings, project_root))
+        return 24
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("deepy.tui.run_tui", fake_run_tui)
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--config", str(config)])
+
+    assert code == 24
+    settings, project_root = calls[0]
+    assert settings.ui.interface == "modern"
+    assert project_root == tmp_path
+
+
+def test_default_command_dispatches_to_classic_ui_by_default(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    config.write_text('[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    calls: list[object] = []
+
+    def fake_run_interactive(settings):
+        calls.append(settings)
+        return 25
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("deepy.cli.run_interactive", fake_run_interactive)
+
+    code = main(["--config", str(config)])
+
+    assert code == 25
+    assert calls[0].ui.interface == "classic"
 
 
 def test_skills_list_prints_project_skills(tmp_path, capsys, monkeypatch):

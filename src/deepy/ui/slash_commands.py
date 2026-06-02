@@ -15,26 +15,31 @@ class SlashCommandItem:
     label: str
     description: str
     skill: SkillInfo | None = None
+    category: str = "Commands"
+    aliases: tuple[str, ...] = ()
+    stable: bool = True
+    textual: bool = True
 
 
-BUILTIN_SLASH_COMMANDS = (
-    SlashCommandItem("compact", "compact", "/compact", "Compact the active conversation context"),
-    SlashCommandItem("exit", "exit", "/exit", "Quit Deepy"),
-    SlashCommandItem("help", "help", "/help", "Show help"),
-    SlashCommandItem("init", "init", "/init", "Create or update project AGENTS.md"),
-    SlashCommandItem("input-suggestion", "input-suggestion", "/input-suggestion", "Toggle input suggestions"),
-    SlashCommandItem("mcp", "mcp", "/mcp", "Show MCP server status and tools"),
-    SlashCommandItem("model", "model", "/model", "Select model and thinking strength"),
-    SlashCommandItem("new", "new", "/new", "Start a fresh conversation"),
-    SlashCommandItem("ps", "ps", "/ps", "Show background tasks"),
-    SlashCommandItem("reset", "reset", "/reset", "Delete config and run setup again"),
-    SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue"),
-    SlashCommandItem("sessions", "sessions", "/sessions", "List project sessions"),
-    SlashCommandItem("skills", "skills", "/skills", "Manage skills"),
-    SlashCommandItem("status", "status", "/status", "Show status, usage, and DeepSeek balance"),
-    SlashCommandItem("stop", "stop", "/stop", "Choose background tasks to stop"),
-    SlashCommandItem("theme", "theme", "/theme", "Show or change UI theme"),
-    SlashCommandItem("view", "view", "/view", "Hide or show reasoning transcript text"),
+BUILTIN_SLASH_COMMANDS: tuple[SlashCommandItem, ...] = (
+    SlashCommandItem("compact", "compact", "/compact", "Compact the active conversation context", category="Session"),
+    SlashCommandItem("exit", "exit", "/exit", "Quit Deepy", category="System", aliases=("quit",)),
+    SlashCommandItem("help", "help", "/help", "Show commands, keybindings, and TUI state", category="Help"),
+    SlashCommandItem("init", "init", "/init", "Create or update project AGENTS.md", category="System"),
+    SlashCommandItem("input-suggestion", "input-suggestion", "/input-suggestion", "Toggle input suggestions", category="Settings"),
+    SlashCommandItem("mcp", "mcp", "/mcp", "Show MCP status", category="Tools"),
+    SlashCommandItem("model", "model", "/model", "Select model and thinking strength", category="Settings"),
+    SlashCommandItem("new", "new", "/new", "Start a fresh conversation", category="Session"),
+    SlashCommandItem("ps", "ps", "/ps", "Show background tasks", category="Tools"),
+    SlashCommandItem("reset", "reset", "/reset", "Delete config and run setup again", category="System"),
+    SlashCommandItem("resume", "resume", "/resume", "Pick a previous conversation to continue", category="Session"),
+    SlashCommandItem("sessions", "sessions", "/sessions", "List project sessions", category="Session"),
+    SlashCommandItem("skills", "skills", "/skills", "Manage skills", category="Skills"),
+    SlashCommandItem("status", "status", "/status", "Show project, session, MCP, and settings status", category="Help"),
+    SlashCommandItem("stop", "stop", "/stop", "Choose background tasks to stop", category="Tools"),
+    SlashCommandItem("theme", "theme", "/theme", "Show or change UI theme", category="Settings"),
+    SlashCommandItem("ui", "ui", "/ui", "Show or change Classic/Modern UI", category="Settings"),
+    SlashCommandItem("view", "view", "/view", "Hide or show reasoning transcript text", category="Settings"),
 )
 SUBAGENT_SLASH_COMMANDS = tuple(
     SlashCommandItem(
@@ -42,11 +47,16 @@ SUBAGENT_SLASH_COMMANDS = tuple(
         definition.name,
         f"/{definition.name}",
         definition.description,
+        category="Subagents",
     )
     for definition in sorted(built_in_subagents(), key=lambda item: item.name)
 )
-BUILTIN_SLASH_COMMAND_NAMES = frozenset(item.name for item in BUILTIN_SLASH_COMMANDS)
-SUBAGENT_SLASH_COMMAND_NAMES = frozenset(item.name for item in SUBAGENT_SLASH_COMMANDS)
+BUILTIN_SLASH_COMMAND_NAMES = frozenset(
+    name for item in BUILTIN_SLASH_COMMANDS for name in (item.name, *item.aliases)
+)
+SUBAGENT_SLASH_COMMAND_NAMES = frozenset(
+    name for item in SUBAGENT_SLASH_COMMANDS for name in (item.name, *item.aliases)
+)
 COMMON_WORKFLOW_COMMAND_ORDER = {
     "help": 0,
     "new": 1,
@@ -63,10 +73,11 @@ COMMON_WORKFLOW_COMMAND_ORDER = {
 LOW_FREQUENCY_COMMAND_ORDER = {
     "init": 0,
     "theme": 1,
-    "input-suggestion": 2,
-    "ps": 3,
-    "stop": 4,
-    "reset": 5,
+    "ui": 2,
+    "input-suggestion": 3,
+    "ps": 4,
+    "stop": 5,
+    "reset": 6,
 }
 SKILL_SCOPE_PRIORITY = {
     "project": 0,
@@ -92,6 +103,7 @@ def build_slash_commands(
             name=skill.name,
             label=f"/{skill.name}",
             description=skill.description or "(no description)",
+            category="Skills",
             skill=replace(skill, is_loaded=skill.is_loaded or skill.name.lower() in loaded),
         )
         for skill in sorted(skills, key=lambda item: item.name.lower())
@@ -124,7 +136,7 @@ def slash_command_match(item: SlashCommandItem, query: str) -> SlashCommandMatch
     label = item.label[1:].lower()
     description = item.description.lower()
     legacy_skill_name = f"skill:{name}" if item.kind == "skill" else ""
-    values = [name, label]
+    values = [name, label, *(alias.lower() for alias in item.aliases)]
     if legacy_skill_name:
         values.append(legacy_skill_name)
     if any(value == normalized for value in values):
@@ -185,7 +197,9 @@ def find_exact_slash_command(
     matches = [
         item
         for item in items
-        if item.name == query or (item.kind == "skill" and f"skill:{item.name}" == query)
+        if item.name == query
+        or query in item.aliases
+        or (item.kind == "skill" and f"skill:{item.name}" == query)
     ]
     builtin = next((item for item in matches if item.kind != "skill"), None)
     return builtin or (matches[0] if matches else None)
@@ -214,6 +228,42 @@ def is_builtin_slash_command(name: str) -> bool:
 
 def is_subagent_slash_command(name: str) -> bool:
     return name in SUBAGENT_SLASH_COMMAND_NAMES
+
+
+def builtin_command_by_name(name: str) -> SlashCommandItem | None:
+    normalized = name.lower().lstrip("/")
+    return next(
+        (
+            item
+            for item in BUILTIN_SLASH_COMMANDS
+            if item.name == normalized or normalized in item.aliases
+        ),
+        None,
+    )
+
+
+def textual_builtin_commands() -> list[SlashCommandItem]:
+    return [item for item in BUILTIN_SLASH_COMMANDS if item.textual]
+
+
+def categorized_command_markdown(
+    commands: list[SlashCommandItem] | tuple[SlashCommandItem, ...],
+    *,
+    title: str = "Deepy Commands",
+) -> str:
+    lines: list[str] = [f"# {title}", ""]
+    current_category = ""
+    for command in commands:
+        if command.category != current_category:
+            current_category = command.category
+            lines.extend(["", f"## {current_category}"])
+        alias_text = (
+            f" _(alias: {', '.join('/' + alias for alias in command.aliases)})_"
+            if command.aliases
+            else ""
+        )
+        lines.append(f"- **{command.label}** - {command.description}{alias_text}")
+    return "\n".join(lines).strip()
 
 
 def build_subagent_slash_prompt(name: str, argument: str) -> str:

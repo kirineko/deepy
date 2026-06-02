@@ -240,6 +240,7 @@ async def run_prompt_once(
             decisions = await _approval_decisions(
                 interruptions,
                 approval_resolver=approval_resolver,
+                runtime=runtime,
             )
             for interruption, decision in zip(interruptions, decisions, strict=False):
                 if decision.outcome == "approve":
@@ -434,8 +435,12 @@ async def _approval_decisions(
         list[ApprovalDecision] | Awaitable[list[ApprovalDecision]],
     ]
     | None,
+    runtime: ToolRuntime | None = None,
 ) -> list[ApprovalDecision]:
-    pending = [_pending_approval_from_interruption(index, item) for index, item in enumerate(interruptions)]
+    pending = [
+        _pending_approval_from_interruption(index, item, runtime=runtime)
+        for index, item in enumerate(interruptions)
+    ]
     if approval_resolver is None:
         return [
             ApprovalDecision(
@@ -462,13 +467,19 @@ async def _approval_decisions(
     return decisions[: len(pending)]
 
 
-def _pending_approval_from_interruption(index: int, item: Any) -> PendingApproval:
+def _pending_approval_from_interruption(
+    index: int,
+    item: Any,
+    *,
+    runtime: ToolRuntime | None = None,
+) -> PendingApproval:
     raw_item = getattr(item, "raw_item", None)
     tool_name = _approval_tool_name(item, raw_item)
     arguments = _approval_arguments(item, raw_item)
     agent = getattr(item, "agent", None)
     agent_name = str(getattr(agent, "name", "") or "")
     server_name = _approval_server_name(raw_item, tool_name)
+    preflight = _approval_preflight(runtime, tool_name, arguments)
     return PendingApproval(
         index=index,
         name=str(getattr(item, "name", "") or tool_name or "tool"),
@@ -477,7 +488,28 @@ def _pending_approval_from_interruption(index: int, item: Any) -> PendingApprova
         agent_name=agent_name,
         action_kind="mcp_tool" if server_name else _approval_action_kind(tool_name),
         server_name=server_name,
+        preflight=preflight,
     )
+
+
+def _approval_preflight(
+    runtime: ToolRuntime | None,
+    tool_name: str,
+    arguments: str,
+) -> dict[str, Any] | None:
+    if runtime is None or tool_name not in {"Write", "Update"}:
+        return None
+    try:
+        result = runtime.preflight_file_mutation(tool_name, arguments)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "name": tool_name,
+            "output": "",
+            "error": f"Preflight failed: {exc}",
+            "metadata": {"preflight": True},
+        }
+    return dict(result)
 
 
 def _approval_tool_name(item: Any, raw_item: Any) -> str:

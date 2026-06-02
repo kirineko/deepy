@@ -49,6 +49,7 @@ class StatusReport:
     context_window_tokens: int
     compact_threshold_tokens: int
     reserved_context_tokens: int
+    ui_interface: str
     input_suggestions_enabled: bool
     view_mode: str
     audit_mode: str
@@ -95,6 +96,7 @@ def build_status_report(
         context_window_tokens=settings.context.window_tokens,
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
         reserved_context_tokens=settings.context.reserved_context_tokens,
+        ui_interface=settings.ui.interface,
         input_suggestions_enabled=settings.ui.input_suggestions_enabled,
         view_mode=settings.ui.view_mode,
         audit_mode=settings.audit.mode.value,
@@ -127,6 +129,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Context: {report.context_window_tokens} tokens",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
             f"Reserved context: {report.reserved_context_tokens} tokens",
+            f"UI: {report.ui_interface}",
             f"Input suggestions: {'enabled' if report.input_suggestions_enabled else 'disabled'}",
             f"View mode: {report.view_mode}",
             f"Audit mode: {report.audit_mode}",
@@ -157,6 +160,7 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "context_window_tokens": report.context_window_tokens,
         "compact_threshold_tokens": report.compact_threshold_tokens,
         "reserved_context_tokens": report.reserved_context_tokens,
+        "ui_interface": report.ui_interface,
         "input_suggestions_enabled": report.input_suggestions_enabled,
         "view_mode": report.view_mode,
         "audit_mode": report.audit_mode,

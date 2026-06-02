@@ -38,6 +38,7 @@ def test_build_slash_commands_orders_builtins_subagents_then_skills():
         "status",
         "stop",
         "theme",
+        "ui",
         "view",
     ]
     assert [item.name for item in items if item.kind == "subagent"] == [

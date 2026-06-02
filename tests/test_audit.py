@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 import pytest
+from rich.console import Console
 
 from deepy.audit import (
     ApprovalDecision,
@@ -18,7 +19,7 @@ from deepy.llm.runner import run_prompt_once
 from deepy.llm.provider import ProviderBundle
 from deepy.tools import ToolRuntime
 from deepy.tools.agents import build_function_tools
-from deepy.ui.audit_approval_panel import build_approval_view
+from deepy.ui.audit_approval_panel import build_approval_view, render_approval_panel
 from deepy.utils import json as json_utils
 
 
@@ -64,6 +65,37 @@ def test_test_shell_approval_view_uses_test_command_title():
 
     assert view.title == "Approve test command?"
     assert view.target == "cargo run"
+
+
+def test_update_approval_panel_omits_argument_summary_for_concise_audit_prompt(tmp_path):
+    view = build_approval_view(
+        PendingApproval(
+            index=0,
+            name="Update",
+            tool_name="Update",
+            arguments=json_utils.dumps(
+                {
+                    "path": "leetcode/two_sum.py",
+                    "old": "print(s.twoSum([-1, -2, -3, -4, -5], -8))",
+                    "new": "",
+                }
+            ),
+            action_kind="text_write",
+        ),
+        project_root=tmp_path,
+    )
+    console = Console(record=True, width=100, color_system=None)
+
+    console.print(render_approval_panel(view))
+    rendered = console.export_text()
+
+    assert view.target == "leetcode/two_sum.py"
+    assert view.metadata == (("edits", "1"),)
+    assert "path: leetcode/two_sum.py" in rendered
+    assert "edits: 1" in rendered
+    assert "summary:" not in rendered
+    assert "old:" not in rendered
+    assert "print(s.twoSum" not in rendered
 
 
 @pytest.mark.asyncio
@@ -228,3 +260,75 @@ async def test_run_prompt_once_approves_sdk_interruption(monkeypatch, tmp_path):
     assert state.approved == [("shell", True)]
     assert state.rejected == []
     assert calls[1] is state
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_adds_file_mutation_preflight_to_pending_approval(monkeypatch, tmp_path):
+    from agents import ModelSettings
+
+    captured: list[PendingApproval] = []
+
+    class FakeInterruption:
+        name = "Write"
+        arguments = '{"path":"app.py","content":"print(1)\\n"}'
+        raw_item = {"name": "Write", "arguments": arguments}
+        agent = type("Agent", (), {"name": "Deepy"})()
+
+    class FakeState:
+        def approve(self, interruption, *, always_approve=False):
+            return None
+
+        def reject(self, interruption, *, always_reject=False, rejection_message=None):
+            return None
+
+    state = FakeState()
+
+    class InterruptedStream:
+        final_output = None
+        is_complete = False
+        interruptions = [FakeInterruption()]
+
+        async def stream_events(self):
+            if False:
+                yield None
+
+        def to_state(self):
+            return state
+
+    class CompleteStream:
+        final_output = "done"
+        is_complete = True
+        interruptions = []
+
+        async def stream_events(self):
+            if False:
+                yield None
+
+    calls = []
+
+    class FakeRunner:
+        @staticmethod
+        def run_streamed(agent, input, max_turns, run_config, session):
+            calls.append(input)
+            return InterruptedStream() if len(calls) == 1 else CompleteStream()
+
+    def approval_resolver(pending: list[PendingApproval]) -> list[ApprovalDecision]:
+        captured.extend(pending)
+        assert not (tmp_path / "app.py").exists()
+        return [ApprovalDecision("approve")]
+
+    monkeypatch.setattr("agents.Runner", FakeRunner)
+
+    await run_prompt_once(
+        "write app",
+        project_root=tmp_path,
+        settings=Settings(),
+        provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
+        approval_resolver=approval_resolver,
+    )
+
+    assert captured
+    assert captured[0].preflight is not None
+    assert captured[0].preflight["ok"] is True
+    assert "print(1)" in str(captured[0].preflight["metadata"]["diff"])
+    assert not (tmp_path / "app.py").exists()

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -14,8 +14,10 @@ from textual.reactive import reactive
 from textual.widgets import Label, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from deepy.audit import PendingApproval
 from deepy.llm.multimodal import PromptImageAttachment
 from deepy.tui.diff import TuiDiffView, render_unified_diff_rich, render_unified_diff_text
+from deepy.tui.transcript import TranscriptKind, transcript_display
 from deepy.todos import normalize_todo_items, todo_counts
 from deepy.ui.ask_user_question import (
     AskUserQuestionItem,
@@ -24,18 +26,20 @@ from deepy.ui.ask_user_question import (
     build_answer_for_question,
     build_options,
 )
+from deepy.ui.audit_approval_panel import build_approval_view
 from deepy.ui.file_mentions import (
     FileMentionDiscovery,
     extract_file_mention_fragment,
     rank_file_mention_candidates,
 )
-from deepy.ui.image_input import ImageAttachmentController, image_attachment_input_text
+from deepy.ui.image_input import ImageAttachmentController
 from deepy.ui.message_view import (
     ToolOutputView,
     build_tool_params_snippet,
     format_tool_failure_detail,
     format_tool_display_name,
 )
+from deepy.ui.styles import DARK_PALETTE, UiPalette
 from deepy.ui.slash_commands import (
     SlashCommandItem,
     filter_slash_commands,
@@ -43,77 +47,7 @@ from deepy.ui.slash_commands import (
 )
 
 
-_KITTY_TEXT_SEQUENCE_RE = re.compile(r"(?:\x1b)?\[([0-9:;]+)u")
-
-
-def decode_kitty_text_sequences(text: str) -> str:
-    """Decode Kitty keyboard-protocol text sequences leaked as plain input."""
-
-    def replace(match: re.Match[str]) -> str:
-        payload = match.group(1)
-        fields = payload.split(";")
-        if len(fields) < 3:
-            return match.group(0)
-        encoded_text = ";".join(fields[2:])
-        if not encoded_text:
-            return match.group(0)
-        values: list[int] = []
-        for item in re.split(r"[:;]", encoded_text):
-            if not item.isdecimal():
-                return match.group(0)
-            value = int(item)
-            if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
-                return match.group(0)
-            if value < 0x20 or 0x7F <= value <= 0x9F:
-                return match.group(0)
-            values.append(value)
-        return "".join(chr(value) for value in values)
-
-    return _KITTY_TEXT_SEQUENCE_RE.sub(replace, text)
-
-
-def _end_cursor_location(text: str) -> tuple[int, int]:
-    lines = text.splitlines() or [""]
-    if text.endswith("\n"):
-        return (len(lines), 0)
-    return (len(lines) - 1, len(lines[-1]))
-
-
-def _cursor_location_for_offset(text: str, offset: int) -> tuple[int, int]:
-    before = text[: max(0, min(offset, len(text)))]
-    lines = before.split("\n")
-    return (len(lines) - 1, len(lines[-1]))
-
-
-def _text_around_cursor(text_area: TextArea) -> tuple[str, str]:
-    row, column = text_area.cursor_location
-    lines = text_area.text.split("\n")
-    offset = 0
-    for line in lines[:row]:
-        offset += len(line) + 1
-    offset += min(column, len(lines[row]) if row < len(lines) else 0)
-    return text_area.text[:offset], text_area.text[offset:]
-
-
-class _KeyboardProtocolTextMixin:
-    _normalizing_keyboard_protocol_text = False
-
-    def _normalize_keyboard_protocol_text(self) -> bool:
-        if self._normalizing_keyboard_protocol_text:
-            return False
-        normalized = decode_kitty_text_sequences(self.text)
-        if normalized == self.text:
-            return False
-        self._normalizing_keyboard_protocol_text = True
-        try:
-            self.text = normalized
-            cast(TextArea, self).move_cursor(_end_cursor_location(normalized))
-        finally:
-            self._normalizing_keyboard_protocol_text = False
-        return True
-
-
-class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
+class PromptTextArea(TextArea):
     _clear_draft_delete_deadline: float | None = None
     _CLEAR_DRAFT_DELETE_WINDOW_SECONDS = 2.0
     _clock = staticmethod(time.monotonic)
@@ -122,10 +56,27 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
         Binding("tab", "accept_suggestion", "Accept suggestion", priority=True, show=False),
-        Binding("ctrl+v", "paste_image", "Paste image", priority=True, show=False),
+        Binding("ctrl+v,super+v", "paste_image", "Paste", priority=True, show=False),
         Binding("ctrl+up", "history_previous", "History previous", priority=True, show=False),
         Binding("ctrl+down", "history_next", "History next", priority=True, show=False),
     ]
+
+    def __init__(
+        self,
+        *,
+        id: str | None = None,
+        name: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(
+            soft_wrap=True,
+            compact=True,
+            id=id,
+            name=name,
+            classes=classes,
+            disabled=disabled,
+        )
 
     class Submitted(Message):
         def __init__(
@@ -152,11 +103,9 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
             super().__init__()
 
     @on(TextArea.Changed)
-    def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
-        if self._clear_draft_delete_deadline is not None and not self._normalizing_keyboard_protocol_text:
+    def on_prompt_text_changed(self, event: TextArea.Changed) -> None:
+        if self._clear_draft_delete_deadline is not None:
             self._clear_draft_delete_deadline = None
-        if self._normalize_keyboard_protocol_text():
-            event.stop()
 
     def prepare_clear_on_next_delete(self) -> None:
         self._clear_draft_delete_deadline = (
@@ -164,6 +113,9 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         )
 
     def action_delete_left(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel) and panel.remove_selected_image_attachment():
+            return
         if self._clear_draft_if_pending():
             return
         if self._delete_image_label("backward"):
@@ -213,11 +165,39 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         if callable(paste):
             paste()
 
+    def action_previous_attachment(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel):
+            panel.move_image_attachment_selection(-1)
+
+    def action_next_attachment(self) -> None:
+        panel = self.parent
+        if isinstance(panel, PromptPanel):
+            panel.move_image_attachment_selection(1)
+
     def action_cursor_right(self, select: bool = False) -> None:
         panel = self.parent
+        if (
+            not select
+            and isinstance(panel, PromptPanel)
+            and panel.attachment_selection_active
+            and panel.move_image_attachment_selection(1)
+        ):
+            return
         if not select and isinstance(panel, PromptPanel) and panel.accept_input_suggestion():
             return
         super().action_cursor_right(select)
+
+    def action_cursor_left(self, select: bool = False) -> None:
+        panel = self.parent
+        if (
+            not select
+            and isinstance(panel, PromptPanel)
+            and panel.attachment_selection_active
+            and panel.move_image_attachment_selection(-1)
+        ):
+            return
+        super().action_cursor_left(select)
 
     def action_history_previous(self) -> None:
         self.post_message(self.HistoryPrevious())
@@ -227,6 +207,13 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
 
     def action_cursor_up(self, select: bool = False) -> None:
         panel = self.parent
+        if (
+            not select
+            and isinstance(panel, PromptPanel)
+            and panel.attachment_selection_active
+            and panel.exit_image_attachment_selection()
+        ):
+            return
         if not select and isinstance(panel, PromptPanel) and panel.move_suggestion(-1):
             return
         if not select and self.cursor_at_first_line:
@@ -237,6 +224,8 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
     def action_cursor_down(self, select: bool = False) -> None:
         panel = self.parent
         if not select and isinstance(panel, PromptPanel) and panel.move_suggestion(1):
+            return
+        if not select and isinstance(panel, PromptPanel) and panel.enter_or_move_image_attachment_selection():
             return
         if not select and self.cursor_at_last_line:
             self.action_history_next()
@@ -256,24 +245,11 @@ class PromptTextArea(_KeyboardProtocolTextMixin, TextArea):
         return True
 
     def _delete_image_label(self, direction: str) -> bool:
-        panel = self.parent
-        if not isinstance(panel, PromptPanel) or panel.image_attachments is None:
-            return False
-        before, _after = _text_around_cursor(self)
-        edit = panel.image_attachments.delete_label_near_cursor(
-            self.text,
-            len(before),
-            direction="backward" if direction == "backward" else "forward",
-        )
-        if edit is None:
-            return False
-        self.text = edit.text
-        self.move_cursor(_cursor_location_for_offset(edit.text, edit.cursor_position))
-        panel.refresh_image_status()
-        return True
+        del direction
+        return False
 
 
-class QuestionTextArea(_KeyboardProtocolTextMixin, TextArea):
+class QuestionTextArea(TextArea):
     BINDINGS = [
         Binding("enter", "submit", "Submit", priority=True),
         Binding("ctrl+j", "newline", "Newline", priority=True),
@@ -281,11 +257,6 @@ class QuestionTextArea(_KeyboardProtocolTextMixin, TextArea):
 
     class Submitted(Message):
         pass
-
-    @on(TextArea.Changed)
-    def on_keyboard_protocol_text_changed(self, event: TextArea.Changed) -> None:
-        if self._normalize_keyboard_protocol_text():
-            event.stop()
 
     def action_submit(self) -> None:
         self.post_message(self.Submitted())
@@ -309,7 +280,69 @@ class QuestionOptionList(OptionList):
             parent.sync_single_selection_to_highlight()
 
 
+class AttachmentRow(Static, can_focus=True):
+    BINDINGS = [
+        Binding("left", "previous_attachment", "Previous", show=False),
+        Binding("right", "next_attachment", "Next", show=False),
+        Binding("backspace", "remove_selected", "Remove", show=False),
+        Binding("delete", "remove_selected", "Remove", show=False),
+    ]
+
+    class Removed(Message):
+        def __init__(self, index: int) -> None:
+            self.index = index
+            super().__init__()
+
+    def __init__(self, *, id: str | None = None) -> None:
+        super().__init__("", id=id)
+        self.labels: list[str] = []
+        self.selected_index = 0
+        self.selection_active = False
+        self.display = False
+
+    def set_labels(self, labels: list[str], *, selection_active: bool = False) -> None:
+        self.labels = list(labels)
+        self.selection_active = selection_active
+        if not self.labels:
+            self.selected_index = 0
+            self.selection_active = False
+            self.update("")
+            self.display = False
+            return
+        self.selected_index = min(self.selected_index, len(self.labels) - 1)
+        self.display = True
+        self.update(self._render_labels())
+
+    def action_previous_attachment(self) -> None:
+        if not self.labels:
+            return
+        self.selection_active = True
+        self.selected_index = (self.selected_index - 1) % len(self.labels)
+        self.update(self._render_labels())
+
+    def action_next_attachment(self) -> None:
+        if not self.labels:
+            return
+        self.selection_active = True
+        self.selected_index = (self.selected_index + 1) % len(self.labels)
+        self.update(self._render_labels())
+
+    def action_remove_selected(self) -> None:
+        if not self.labels:
+            return
+        self.post_message(self.Removed(self.selected_index))
+
+    def _render_labels(self) -> str:
+        parts = []
+        for index, label in enumerate(self.labels):
+            parts.append(f"▸{label}" if self.selection_active and index == self.selected_index else label)
+        return "Attachments  " + "  ".join(parts) + "  · ↓ enter · ←/→ select · ↑ input · Backspace remove"
+
+
 class PromptPanel(Vertical):
+    _MIN_INPUT_ROWS = 1
+    _MAX_INPUT_ROWS = 5
+
     def __init__(
         self,
         slash_commands: list[SlashCommandItem],
@@ -324,21 +357,29 @@ class PromptPanel(Vertical):
         self.suggestions: list[str] = []
         self.input_suggestion: str | None = None
         self.image_attachments = image_attachments
+        self.attachment_selection_active = False
 
     def compose(self) -> ComposeResult:
-        yield Label("Prompt", id="prompt-title")
         yield PromptTextArea(id="prompt-input")
-        yield Label("", id="prompt-images")
-        yield Label("", id="prompt-ghost")
+        yield AttachmentRow(id="prompt-images")
+        yield Static("Enter send · Ctrl+J newline · Tab accept · Esc interrupt", id="prompt-actions")
         yield OptionList(id="prompt-suggestions")
+
+    def on_mount(self) -> None:
+        self._sync_prompt_height("")
 
     @on(TextArea.Changed, "#prompt-input")
     def on_prompt_changed(self, event: TextArea.Changed) -> None:
-        if self.image_attachments is not None:
-            changed = self.image_attachments.sync_to_prompt_text(event.text_area.text)
-            if changed:
-                self.refresh_image_status()
+        if self.attachment_selection_active:
+            self.attachment_selection_active = False
+            self.refresh_image_status()
+        self._sync_prompt_height(event.text_area.text)
         self.refresh_suggestions(event.text_area.text)
+
+    def _sync_prompt_height(self, text: str) -> None:
+        prompt = self.query_one("#prompt-input", PromptTextArea)
+        rows = min(self._MAX_INPUT_ROWS, max(self._MIN_INPUT_ROWS, text.count("\n") + 1))
+        prompt.styles.height = rows
 
     def refresh_suggestions(self, text: str) -> None:
         suggestions = self._suggestions_for_text(text)
@@ -390,15 +431,7 @@ class PromptPanel(Vertical):
         result = self.image_attachments.paste_image_from_clipboard()
         if result.handled:
             if result.attachment is not None:
-                prompt = self.query_one("#prompt-input", PromptTextArea)
-                before, after = _text_around_cursor(prompt)
-                prompt.insert(
-                    image_attachment_input_text(
-                        result.attachment,
-                        text_before_cursor=before,
-                        text_after_cursor=after,
-                    )
-                )
+                pass
             elif result.notice:
                 self.post_message(PromptTextArea.ImagePasteNotice(result.notice))
             self.refresh_image_status()
@@ -407,15 +440,85 @@ class PromptPanel(Vertical):
     def collect_image_prompt(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
         if self.image_attachments is None:
             return text, []
-        cleaned_text, attachments = self.image_attachments.collect_from_prompt_text(text)
+        attachments = self.image_attachments.collect_and_reset()
         self.refresh_image_status()
-        return cleaned_text, attachments
+        return text, attachments
+
+    @on(AttachmentRow.Removed)
+    def on_attachment_removed(self, event: AttachmentRow.Removed) -> None:
+        event.stop()
+        self.remove_image_attachment(event.index)
+
+    def remove_last_image_attachment(self) -> bool:
+        if self.image_attachments is None or not self.image_attachments.attachments:
+            return False
+        return self.remove_image_attachment(len(self.image_attachments.attachments) - 1)
+
+    def remove_selected_or_last_image_attachment(self) -> bool:
+        if self.image_attachments is None or not self.image_attachments.attachments:
+            return False
+        row = self.query_one("#prompt-images", AttachmentRow)
+        index = row.selected_index if row.labels else len(self.image_attachments.attachments) - 1
+        return self.remove_image_attachment(index)
+
+    def remove_selected_image_attachment(self) -> bool:
+        if (
+            not self.attachment_selection_active
+            or self.image_attachments is None
+            or not self.image_attachments.attachments
+        ):
+            return False
+        row = self.query_one("#prompt-images", AttachmentRow)
+        return self.remove_image_attachment(row.selected_index)
+
+    def enter_or_move_image_attachment_selection(self) -> bool:
+        row = self.query_one("#prompt-images", AttachmentRow)
+        if not row.labels:
+            return False
+        if not self.attachment_selection_active:
+            self.attachment_selection_active = True
+            row.selected_index = 0
+            row.set_labels(row.labels, selection_active=True)
+            return True
+        return self.move_image_attachment_selection(1)
+
+    def exit_image_attachment_selection(self) -> bool:
+        if not self.attachment_selection_active:
+            return False
+        self.attachment_selection_active = False
+        self.refresh_image_status()
+        return True
+
+    def move_image_attachment_selection(self, delta: int) -> bool:
+        row = self.query_one("#prompt-images", AttachmentRow)
+        if not row.labels:
+            return False
+        self.attachment_selection_active = True
+        if delta < 0:
+            row.action_previous_attachment()
+        else:
+            row.action_next_attachment()
+        return True
+
+    def remove_image_attachment(self, index: int) -> bool:
+        if self.image_attachments is None or not self.image_attachments.attachments:
+            return False
+        if index < 0 or index >= len(self.image_attachments.attachments):
+            return False
+        self.image_attachments.attachments.pop(index)
+        if not self.image_attachments.attachments:
+            self.attachment_selection_active = False
+        self.refresh_image_status()
+        return True
 
     def refresh_image_status(self) -> None:
-        label = self.query_one("#prompt-images", Label)
-        status = self.image_attachments.display_status if self.image_attachments is not None else ""
-        label.update(status)
-        label.display = bool(status)
+        row = self.query_one("#prompt-images", AttachmentRow)
+        labels = (
+            [attachment.display_label for attachment in self.image_attachments.attachments]
+            if self.image_attachments is not None
+            else []
+        )
+        row.set_labels(labels, selection_active=self.attachment_selection_active)
 
     def accept_input_suggestion(self) -> bool:
         if not self.input_suggestion:
@@ -427,6 +530,7 @@ class PromptPanel(Vertical):
         if prompt.text:
             return False
         prompt.text = self.input_suggestion
+        prompt.suggestion = ""
         prompt.move_cursor((0, len(prompt.text)))
         self._refresh_input_suggestion_display()
         return True
@@ -482,7 +586,6 @@ class PromptPanel(Vertical):
         return text[: mention.start - 1] + value + suffix
 
     def _refresh_input_suggestion_display(self) -> None:
-        ghost = self.query_one("#prompt-ghost", Label)
         prompt = self.query_one("#prompt-input", PromptTextArea)
         option_list = self.query_one("#prompt-suggestions", OptionList)
         visible = bool(
@@ -490,13 +593,12 @@ class PromptPanel(Vertical):
             and not prompt.text
             and not (option_list.display and option_list.option_count > 0)
         )
-        ghost.display = visible
-        ghost.update(self.input_suggestion or "")
+        prompt.suggestion = self.input_suggestion if visible else ""
 
 
 class StatusBar(Horizontal):
     def compose(self) -> ComposeResult:
-        yield Label("Deepy TUI experimental", id="status-left")
+        yield Label("Deepy Modern UI", id="status-left")
         yield Label("Idle", id="status-right")
 
     def update_status(self, status: str, context: str | None = None) -> None:
@@ -512,9 +614,17 @@ class TranscriptBlock(Vertical, can_focus=True):
 
     expanded = reactive(False)
 
-    def __init__(self, title: str, body: str = "", *, classes: str | None = None) -> None:
-        super().__init__(classes=f"transcript-block {classes or ''}".strip())
-        self.title = title
+    def __init__(
+        self,
+        title: str,
+        body: str = "",
+        *,
+        classes: str | None = None,
+        kind: TranscriptKind = "info",
+    ) -> None:
+        self.display_model = transcript_display(kind)
+        super().__init__(classes=f"transcript-block {classes or self.display_model.css_class}".strip())
+        self.title = title or self.display_model.label
         self.body = body
 
     def compose(self) -> ComposeResult:
@@ -531,6 +641,7 @@ class TranscriptBlock(Vertical, can_focus=True):
 
 class InfoBlock(Vertical, can_focus=True):
     def __init__(self, text: str) -> None:
+        self.display_model = transcript_display("info")
         super().__init__(classes="transcript-block info-block")
         self.body = text
 
@@ -540,12 +651,24 @@ class InfoBlock(Vertical, can_focus=True):
 
 class UserBlock(TranscriptBlock):
     def __init__(self, text: str) -> None:
-        super().__init__("You", text, classes="user-block")
+        display = transcript_display("user")
+        super().__init__(display.label, text, classes=display.css_class, kind="user")
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="role-line user-role-line"):
+            yield Label(self.title, classes="block-title role-marker user-marker")
+            yield Static(self.body, classes="block-body")
 
 
 class ThinkingBlock(TranscriptBlock):
     def __init__(self, text: str = "") -> None:
-        super().__init__("Thinking", text, classes="thinking-block")
+        display = transcript_display("reasoning")
+        super().__init__(display.label, text, classes=display.css_class, kind="reasoning")
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="role-line thinking-role-line"):
+            yield Label(self.display_model.label, classes="block-title role-marker thinking-marker")
+            yield Static(self.body, classes="block-body thinking-body")
 
     def update_text(self, text: str) -> None:
         self.body = text
@@ -553,17 +676,30 @@ class ThinkingBlock(TranscriptBlock):
 
 
 class AssistantBlock(Vertical, can_focus=True):
-    def __init__(self, markdown: str = "") -> None:
+    def __init__(self, markdown: str = "", *, active: bool = False) -> None:
+        self.display_model = transcript_display("assistant")
         super().__init__(classes="transcript-block assistant-block")
         self.markdown = markdown
+        self.active = active
+        if active:
+            self.add_class("-active")
 
     def compose(self) -> ComposeResult:
-        yield Label("Deepy", classes="block-title")
-        yield Markdown(self.markdown, classes="block-markdown")
+        with Horizontal(classes="role-line assistant-role-line"):
+            yield Label(self._title_text(), classes="block-title role-marker assistant-marker")
+            yield Markdown(self.markdown, classes="block-markdown")
 
     def update_markdown(self, markdown: str) -> None:
         self.markdown = markdown
         self.query_one(Markdown).update(markdown)
+
+    def set_active(self, active: bool) -> None:
+        self.active = active
+        self.set_class(active, "-active")
+        self.query_one(".block-title", Label).update(self._title_text())
+
+    def _title_text(self) -> str:
+        return self.display_model.label
 
 
 class ToolBlock(TranscriptBlock):
@@ -580,17 +716,21 @@ class ToolBlock(TranscriptBlock):
         retryable: bool = False,
         recovered_from_retry: bool = False,
     ) -> None:
-        classes = "tool-block todo-block" if tool_name == "todo_write" else "tool-block"
+        classes = "tool-block todo-block" if tool_name == "todo_write" else transcript_display("tool").css_class
         if retryable:
             classes += " -retryable"
-        super().__init__(label, body, classes=classes)
+        super().__init__(label, body, classes=classes, kind="tool")
         self.call_id = call_id
         self.arguments = arguments.strip()
         self.details = details.strip()
+        self.output_body = body.strip()
+        self.body = ""
         self.waiting_for_user = waiting_for_user
         self.tool_name = tool_name
         self.retryable = retryable
         self.recovered_from_retry = recovered_from_retry
+        self.status_state = "retryable" if retryable else "waiting" if waiting_for_user else "running"
+        self._sync_status_classes()
 
     @classmethod
     def from_call(cls, name: str, arguments: str, *, call_id: str) -> ToolBlock:
@@ -612,10 +752,16 @@ class ToolBlock(TranscriptBlock):
         )
 
     @classmethod
-    def from_output(cls, view: ToolOutputView, *, call_id: str = "") -> ToolBlock:
+    def from_output(
+        cls,
+        view: ToolOutputView,
+        *,
+        call_id: str = "",
+        project_root: Path | None = None,
+    ) -> ToolBlock:
         body = _tool_output_body(view)
         return cls(
-            _tool_output_title(view),
+            _tool_output_title(view, project_root=project_root),
             body,
             call_id=call_id,
             details=_tool_output_details(view),
@@ -630,51 +776,81 @@ class ToolBlock(TranscriptBlock):
         self.tool_name = name or "tool"
         self.arguments = params
         self.title = f"{display_name} running"
-        self.body = f"Recovered after argument retry.\n\nParameters\n  {params}" if params else "Running"
+        self.output_body = "Running"
+        self.body = ""
         self.details = ""
         self.waiting_for_user = False
         self.retryable = False
         self.recovered_from_retry = True
-        self.query_one(".block-title", Label).update(self.title)
-        self.query_one(".block-body", Static).update(self.body)
+        self.status_state = "running"
+        self.query_one(".tool-summary", Static).update(self.title)
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
         details.display = False
         self.set_class(False, "-waiting")
         self.set_class(False, "-retryable")
+        self._sync_status_classes()
 
-    def update_from_output(self, view: ToolOutputView) -> None:
+    def update_from_output(self, view: ToolOutputView, *, project_root: Path | None = None) -> None:
         self.tool_name = view.name
-        self.title = _tool_output_title(view)
+        self.title = _tool_output_title(view, project_root=project_root)
         output_body = _tool_output_body(view)
+        self.output_body = output_body
         self.details = _tool_output_details(view)
         self.waiting_for_user = view.await_user_response
         self.retryable = view.status == "retryable"
-        recovered_prefix = "Recovered after argument retry.\n\n" if self.recovered_from_retry and view.ok is True else ""
-        self.body = (
-            f"{recovered_prefix}Parameters\n  {self.arguments}\n\nOutput\n{_indent_block(output_body)}"
-            if self.arguments and output_body and view.name != "todo_write"
-            else f"{recovered_prefix}{output_body}"
-        )
-        self.query_one(".block-title", Label).update(self.title)
-        self.query_one(".block-body", Static).update(self.body)
+        self.status_state = "waiting" if self.waiting_for_user else view.status
+        self.body = ""
+        self.query_one(".tool-summary", Static).update(self.title)
         details = self.query_one(".tool-details", Static)
         details.update(self.details)
         details.display = bool(self.details and self.expanded)
         self.set_class(self.waiting_for_user, "-waiting")
         self.set_class(self.retryable, "-retryable")
+        self._sync_status_classes()
         self.set_class(view.name == "todo_write", "todo-block")
 
     def compose(self) -> ComposeResult:
-        yield Label(self.title, classes="block-title")
-        yield Static(self.body, classes="block-body")
+        with Horizontal(classes="role-line tool-role-line"):
+            yield Label(self.display_model.label, classes="block-title role-marker tool-marker")
+            yield Static(self.title, classes="block-body tool-summary")
         detail = Static(self.details, classes="tool-details")
         detail.display = False
         yield detail
 
     def action_toggle_expand(self) -> None:
         super().action_toggle_expand()
-        self.query_one(".tool-details", Static).display = bool(self.expanded and self.details)
+        self.query_one(".tool-details", Static).display = False
+
+    def _sync_status_classes(self) -> None:
+        self.set_class(self.status_state == "running", "-running")
+        self.set_class(self.status_state == "waiting", "-waiting")
+        self.set_class(self.status_state == "retryable", "-retryable")
+        self.set_class(self.status_state == "ok", "-ok")
+        self.set_class(self.status_state == "failed", "-failed")
+
+
+class LocalCommandBlock(Vertical, can_focus=True):
+    def __init__(self, view: ToolOutputView, *, call_id: str = "") -> None:
+        self.display_model = transcript_display("tool")
+        super().__init__(classes="transcript-block tool-block local-command-block")
+        self.call_id = call_id
+        self.view = view
+        self.title = _local_command_title(view)
+        self.output_body = _local_command_output_body(view)
+        self.meta_body = _local_command_meta_body(view)
+        self.set_class(view.ok is True, "-ok")
+        self.set_class(view.ok is False, "-failed")
+
+    @classmethod
+    def from_output(cls, view: ToolOutputView, *, call_id: str = "") -> LocalCommandBlock:
+        return cls(view, call_id=call_id)
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.output_body, classes="block-body local-command-output")
+        meta = Static(self.meta_body, classes="tool-details local-command-meta")
+        meta.display = bool(self.meta_body)
+        yield meta
 
 
 class DiffBlock(Vertical, can_focus=True):
@@ -685,6 +861,7 @@ class DiffBlock(Vertical, can_focus=True):
     ]
 
     def __init__(self, diff: TuiDiffView, *, theme: str = "dark", width: int | None = None) -> None:
+        self.display_model = transcript_display("diff")
         super().__init__(classes="transcript-block diff-block")
         self.diff = diff
         self.body = render_unified_diff_text(diff)
@@ -693,7 +870,9 @@ class DiffBlock(Vertical, can_focus=True):
         self.folded = False
 
     def compose(self) -> ComposeResult:
-        yield Label("Diff", classes="block-title")
+        title = Label(self.display_model.label, classes="block-title")
+        title.display = False
+        yield title
         yield Static(self.renderable, classes="block-body")
 
     def action_next_hunk(self) -> None:
@@ -728,11 +907,13 @@ class DiffBlock(Vertical, can_focus=True):
 
 class ErrorBlock(TranscriptBlock):
     def __init__(self, error: str) -> None:
-        super().__init__("Error", error, classes="error-block")
+        display = transcript_display("error")
+        super().__init__(display.label, error, classes=display.css_class, kind="error")
 
 
 class UsageLine(Static, can_focus=False):
     def __init__(self, text: str) -> None:
+        self.display_model = transcript_display("usage")
         self.line = f"Usage  {text}"
         super().__init__(self.line, classes="usage-line")
         self.body = text
@@ -758,7 +939,8 @@ class QuestionBlock(Vertical, can_focus=True):
         pass
 
     def __init__(self, question: AskUserQuestionItem) -> None:
-        super().__init__(classes="transcript-block question-block")
+        self.display_model = transcript_display("decision")
+        super().__init__(classes="interaction-block question-block")
         self.question = question
         self.options = build_options(question)
         self.body = question.question
@@ -767,7 +949,7 @@ class QuestionBlock(Vertical, can_focus=True):
         self._custom_input: QuestionTextArea | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("Question", classes="block-title")
+        yield Label(self.display_model.label, classes="block-title")
         yield Static(self.question.question, classes="block-body")
         self._option_list = QuestionOptionList(
             *[
@@ -860,6 +1042,8 @@ class QuestionBlock(Vertical, can_focus=True):
         self.selected_values = frozenset(values)
         self.custom_mode = OTHER_VALUE in values
         self._refresh_options()
+        if self.custom_mode:
+            self._focus_custom()
 
     def action_submit(self) -> None:
         if self.question.multi_select:
@@ -904,7 +1088,7 @@ class QuestionBlock(Vertical, can_focus=True):
     def _focus_custom(self) -> None:
         custom = self._question_custom()
         custom.display = True
-        custom.focus()
+        self.call_after_refresh(custom.focus)
 
     def _refresh_options(self) -> None:
         option_list = self._question_options()
@@ -935,6 +1119,7 @@ class QuestionBlock(Vertical, can_focus=True):
                     if option.value == target_id:
                         option_list.highlighted = index
                         break
+            option_list.refresh(layout=True)
         finally:
             self._refreshing_options = False
         self._question_custom().display = self.custom_mode
@@ -950,13 +1135,207 @@ class QuestionBlock(Vertical, can_focus=True):
         return self._custom_input
 
 
-def _tool_output_title(view: ToolOutputView) -> str:
+class AuditDecisionBlock(Vertical, can_focus=True):
+    BINDINGS = [
+        Binding("enter", "submit", "Submit"),
+        Binding("escape", "reject", "Reject"),
+        Binding("space", "toggle_preview", "Preview", show=False),
+    ]
+
+    class Decided(Message):
+        def __init__(self, outcome: str) -> None:
+            self.outcome = outcome
+            super().__init__()
+
+    def __init__(
+        self,
+        item: PendingApproval,
+        *,
+        project_root: str | Path | None = None,
+        palette: UiPalette | None = None,
+        width: int | None = None,
+    ) -> None:
+        self.display_model = transcript_display("decision")
+        super().__init__(classes="interaction-block question-block audit-decision-block")
+        self.item = item
+        self.project_root = project_root
+        self.palette = palette or DARK_PALETTE
+        self.width = width
+        self.expanded = False
+        self.completed_outcome: str | None = None
+        self._title = ""
+        self._summary = ""
+        self._preview_text = ""
+        self._refresh_view_data()
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.display_model.label, classes="block-title")
+        yield Static(self._title, id="audit-decision-title", classes="block-body")
+        yield Static(self._summary, id="audit-decision-summary", classes="tool-details")
+        preview = Static(self._preview_text, id="audit-decision-preview", classes="tool-details")
+        preview.display = False
+        yield preview
+        yield OptionList(
+            Option("Approve", id="approve"),
+            Option("Reject", id="reject"),
+            id="audit-decision-options",
+        )
+
+    def on_mount(self) -> None:
+        options = self.query_one("#audit-decision-options", OptionList)
+        options.highlighted = 0
+        options.focus()
+
+    @on(OptionList.OptionSelected, "#audit-decision-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self._complete(str(event.option_id or "reject"))
+
+    def action_submit(self) -> None:
+        options = self.query_one("#audit-decision-options", OptionList)
+        index = options.highlighted if options.highlighted is not None else 0
+        self._complete(str(options.get_option_at_index(index).id or "reject"))
+
+    def action_reject(self) -> None:
+        self._complete("reject")
+
+    def action_toggle_preview(self) -> None:
+        if not self._preview_text:
+            return
+        self.expanded = not self.expanded
+        self.query_one("#audit-decision-preview", Static).display = self.expanded
+
+    def _complete(self, outcome: str) -> None:
+        if self.completed_outcome is not None:
+            return
+        self.completed_outcome = "approve" if outcome == "approve" else "reject"
+        self.query_one("#audit-decision-options", OptionList).display = False
+        self.post_message(self.Decided(self.completed_outcome))
+
+    def _refresh_view_data(self) -> None:
+        view = build_approval_view(
+            self.item,
+            palette=self.palette,
+            project_root=self.project_root,
+            expanded=True,
+            width=self.width,
+        )
+        self._title = view.title
+        self._summary = f"{view.target_label}: {view.target or '-'}"
+        if view.metadata:
+            self._summary += "\n" + "\n".join(f"{label}: {value}" for label, value in view.metadata)
+        self._preview_text = view.preview or ""
+
+
+@dataclass(frozen=True)
+class InlineChoiceOption:
+    label: str
+    value: str
+    description: str = ""
+
+
+class InlineChoiceBlock(Vertical, can_focus=True):
+    BINDINGS = [
+        Binding("enter", "submit", "Submit"),
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "previous_choice", "Previous", show=False),
+        Binding("down", "next_choice", "Next", show=False),
+    ]
+
+    class Chosen(Message):
+        def __init__(self, value: str | None) -> None:
+            self.value = value
+            super().__init__()
+
+    def __init__(self, title: str, options: list[InlineChoiceOption]) -> None:
+        self.display_model = transcript_display("decision")
+        super().__init__(classes="interaction-block question-block inline-choice-block")
+        self.title_text = title
+        self.options = list(options)
+        self.completed_value: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.title_text, classes="block-title")
+        yield OptionList(
+            *[
+                Option(
+                    _inline_choice_prompt(option),
+                    id=option.value,
+                )
+                for option in self.options
+            ],
+            id="inline-choice-options",
+            classes="inline-choice-options",
+        )
+        yield Static("Enter select · ↑/↓ move · Esc cancel", classes="screen-help")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#inline-choice-options", OptionList)
+        options.highlighted = 0 if self.options else None
+        options.focus()
+
+    @on(OptionList.OptionSelected, "#inline-choice-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self._complete(str(event.option_id) if event.option_id is not None else None)
+
+    def action_submit(self) -> None:
+        options = self.query_one("#inline-choice-options", OptionList)
+        if options.option_count == 0:
+            self._complete(None)
+            return
+        index = options.highlighted if options.highlighted is not None else 0
+        self._complete(str(options.get_option_at_index(index).id or ""))
+
+    def action_cancel(self) -> None:
+        self._complete(None)
+
+    def action_previous_choice(self) -> None:
+        self._move_choice(-1)
+
+    def action_next_choice(self) -> None:
+        self._move_choice(1)
+
+    def _move_choice(self, delta: int) -> None:
+        options = self.query_one("#inline-choice-options", OptionList)
+        if options.option_count == 0:
+            return
+        current = options.highlighted if options.highlighted is not None else 0
+        options.highlighted = (current + delta) % options.option_count
+        options.scroll_to_highlight()
+
+    def _complete(self, value: str | None) -> None:
+        if self.completed_value is not None:
+            return
+        self.completed_value = value
+        self.query_one("#inline-choice-options", OptionList).display = False
+        self.post_message(self.Chosen(value))
+
+
+def _inline_choice_prompt(option: InlineChoiceOption) -> Text:
+    prompt = Text()
+    prompt.append(option.label, style="bold #e5e7eb")
+    if option.description:
+        prompt.append(f"  {option.description}", style="#aab3d0")
+    return prompt
+
+
+def _tool_output_title(view: ToolOutputView, *, project_root: Path | None = None) -> str:
     detail = view.path or ""
     if view.name == "load_skill" and view.metadata:
         detail = str(view.metadata.get("name") or detail)
+    if detail and project_root is not None:
+        detail = _relative_tool_path(detail, project_root=project_root)
     status = view.status
     name = _tool_title_name(view.name)
     return f"{name} {status}" + (f" - {detail}" if detail else "")
+
+
+def _relative_tool_path(path: str, *, project_root: Path) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(project_root.resolve()))
+    except (OSError, ValueError):
+        return path
 
 
 def _tool_title_name(name: str) -> str:
@@ -1047,6 +1426,45 @@ def _shell_body(view: ToolOutputView) -> str:
     if output:
         lines.extend(["", output])
     return "\n".join(str(line) for line in lines)
+
+
+def _local_command_title(view: ToolOutputView) -> str:
+    metadata = view.metadata or {}
+    command = str(metadata.get("command") or "").strip()
+    status = view.status
+    title = f"Shell {status}"
+    return f"{title} - {command}" if command else title
+
+
+def _local_command_output_body(view: ToolOutputView) -> str:
+    text = (view.output or "").strip()
+    if not text and view.error:
+        text = str(view.error).strip()
+    if not text:
+        return "(no output)"
+    return _compact_text(text, max_lines=80)
+
+
+def _local_command_meta_body(view: ToolOutputView) -> str:
+    if view.ok is True:
+        return ""
+    metadata = view.metadata or {}
+    parts: list[str] = []
+    exit_code = metadata.get("exit_code", metadata.get("exitCode"))
+    if exit_code not in {None, 0}:
+        parts.append(f"exit {exit_code}")
+    duration = metadata.get("duration_ms", metadata.get("durationMs"))
+    if duration is not None:
+        parts.append(f"{duration} ms")
+    cwd = metadata.get("cwd")
+    if cwd:
+        parts.append(str(cwd))
+    shell_kind = metadata.get("shellKind") or metadata.get("shell_kind")
+    if shell_kind:
+        parts.append(str(shell_kind))
+    if metadata.get("displayOutputTruncated") or metadata.get("captureTruncated"):
+        parts.append("truncated")
+    return " · ".join(parts)
 
 
 def _read_body(view: ToolOutputView) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,13 +13,14 @@ def run_tui(
     *,
     project_root: Path | None = None,
 ) -> int:
-    """Run the experimental Textual TUI."""
+    """Run the Modern Textual UI."""
+    os.environ.setdefault("TEXTUAL_DISABLE_KITTY_KEY", "1")
     try:
         from deepy.tui.app import DeepyTuiApp
     except Exception as exc:
         print(
-            "Deepy experimental TUI could not start. "
-            "Run `deepy` for the stable terminal UI. "
+            "Deepy Modern UI could not start. "
+            "Run `deepy` with Classic UI or `deepy config setup` to update UI settings. "
             f"Reason: {exc}",
             file=sys.stderr,
         )
@@ -30,7 +32,7 @@ def run_tui(
         run_once=run_prompt_once,
         guide_missing_config=True,
     )
-    app.run()
+    app.run(mouse=False)
     if app.exit_summary_text:
         print(app.exit_summary_text)
     return 0

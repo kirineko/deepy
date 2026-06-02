@@ -545,6 +545,7 @@ def _command_error(exit_code: int | None, *, timed_out: bool, interrupted: bool)
 
 def _shell_metadata(result: LocalCommandResult) -> dict[str, Any]:
     return {
+        "command": result.command,
         "cwd": str(result.cwd),
         "shellPath": result.shell_path,
         "shellKind": result.shell_kind,

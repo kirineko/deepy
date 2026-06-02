@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +9,11 @@ from rich.panel import Panel
 from rich.text import Text
 
 from deepy.audit import PendingApproval
-from deepy.ui.message_view import render_unified_diff_preview
 from deepy.ui.styles import DARK_PALETTE, UiPalette
 from deepy.ui.welcome import format_home_relative_path
 from deepy.utils import json as json_utils
 
 
-COMPACT_APPROVAL_DIFF_LINES = 24
 MAX_METADATA_VALUE_CHARS = 140
 
 
@@ -175,17 +172,6 @@ def _write_approval_view(
     path = _string_arg(args, "path") or "(missing path)"
     display_path = format_approval_path(path, project_root=project_root) if path else path
     content = _string_arg(args, "content") or ""
-    diff = _unified_diff("", content, from_path="/dev/null", to_path=display_path)
-    can_expand = _diff_line_count(diff) > COMPACT_APPROVAL_DIFF_LINES
-    preview = render_unified_diff_preview(
-        diff,
-        tool_name="Write",
-        path=display_path,
-        max_lines=None if expanded else COMPACT_APPROVAL_DIFF_LINES,
-        palette=palette,
-        width=width,
-        project_root=str(project_root) if project_root is not None else None,
-    )
     metadata = _metadata_items(
         (
             ("size", f"{len(content)} chars"),
@@ -197,9 +183,6 @@ def _write_approval_view(
         target_label="path",
         target=display_path,
         metadata=metadata,
-        preview=preview,
-        can_expand=can_expand,
-        expanded=expanded,
     )
 
 
@@ -214,40 +197,11 @@ def _update_approval_view(
     edits = _update_edits(args)
     display_paths = _update_display_paths(edits, project_root=project_root)
     target = display_paths[0] if len(display_paths) == 1 else f"{len(display_paths)} files"
-    if edits and all(edit.old is not None and edit.new is not None for edit in edits):
-        diff = "\n".join(
-            _unified_diff(
-                edit.old or "",
-                edit.new or "",
-                from_path=f"a/{format_approval_path(edit.display_path, project_root=project_root)}",
-                to_path=f"b/{format_approval_path(edit.display_path, project_root=project_root)}",
-            )
-            for edit in edits
-        )
-        can_expand = _diff_line_count(diff) > COMPACT_APPROVAL_DIFF_LINES
-        preview = render_unified_diff_preview(
-            diff,
-            tool_name="Update",
-            path=target,
-            max_lines=None if expanded else COMPACT_APPROVAL_DIFF_LINES,
-            palette=palette,
-            width=width,
-            project_root=str(project_root) if project_root is not None else None,
-        )
-        return ApprovalPanelView(
-            title=f"Approve update? {target}",
-            target_label="path",
-            target=target,
-            metadata=(("edits", str(len(edits))),),
-            preview=preview,
-            can_expand=can_expand,
-            expanded=expanded,
-        )
-
+    has_diff_context = any(edit.old is not None or edit.new is not None for edit in edits)
     metadata = _metadata_items(
         (
             ("edits", str(len(edits)) if edits else None),
-            ("summary", _bounded_json(args) if args else None),
+            ("summary", _update_argument_summary(args) if not has_diff_context else None),
         )
     )
     return ApprovalPanelView(
@@ -256,6 +210,15 @@ def _update_approval_view(
         target=target,
         metadata=metadata,
     )
+
+
+def _update_argument_summary(args: dict[str, Any] | None) -> str | None:
+    if not args:
+        return None
+    keys = [key for key in ("replace_all", "expected_replacements", "edits") if key in args]
+    if not keys:
+        return None
+    return ", ".join(keys)
 
 
 def _fallback_approval_view(item: PendingApproval, args: dict[str, Any] | None) -> ApprovalPanelView:
@@ -353,21 +316,6 @@ def _json_object_arguments(arguments: str) -> dict[str, Any] | None:
     except json_utils.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _unified_diff(old: str, new: str, *, from_path: str, to_path: str) -> str:
-    return "".join(
-        unified_diff(
-            old.splitlines(keepends=True),
-            new.splitlines(keepends=True),
-            fromfile=from_path,
-            tofile=to_path,
-        )
-    )
-
-
-def _diff_line_count(diff: str) -> int:
-    return len(diff.splitlines())
 
 
 def _metadata_items(items: tuple[tuple[str, str | None], ...]) -> tuple[tuple[str, str], ...]:

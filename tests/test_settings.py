@@ -15,9 +15,14 @@ from deepy.config import (
     settings_to_toml_dict,
     update_config_model_settings,
     update_config_input_suggestions_enabled,
+    update_config_textual_theme,
     update_config_theme,
+    update_config_ui_choice,
+    update_config_ui_interface,
     update_config_view_mode,
     provider_info_for,
+    ui_interface_from_selection,
+    ui_setup_from_selection,
     ui_theme_from_selection,
     write_config,
 )
@@ -445,6 +450,29 @@ def test_legacy_auto_ui_theme_loads_as_configured_dark(tmp_path):
     assert settings.ui.theme_configured is True
 
 
+def test_loads_tui_specific_textual_theme(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\ntextual_theme = "tokyo-night"\n', encoding="utf-8")
+
+    settings = load_settings(config, env={})
+
+    assert settings.ui.theme == "dark"
+    assert settings.ui.textual_theme == "tokyo-night"
+
+
+def test_loads_ui_interface_values(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ninterface = "modern"\ntheme = "light"\n', encoding="utf-8")
+    invalid = tmp_path / "invalid.toml"
+    invalid.write_text('[ui]\ninterface = "future"\n', encoding="utf-8")
+
+    settings = load_settings(config, env={})
+    invalid_settings = load_settings(invalid, env={})
+
+    assert settings.ui.interface == "modern"
+    assert invalid_settings.ui.interface == "classic"
+
+
 def test_ui_theme_selection_accepts_numbers_and_names():
     assert ui_theme_from_selection("1", default="light") == "dark"
     assert ui_theme_from_selection("2", default="dark") == "light"
@@ -454,10 +482,26 @@ def test_ui_theme_selection_accepts_numbers_and_names():
     assert ui_theme_from_selection("solarized", default="dark") == "dark"
 
 
+def test_ui_interface_and_setup_selection_accept_numbers_and_names():
+    assert ui_interface_from_selection("1", default="modern") == "classic"
+    assert ui_interface_from_selection("2", default="classic") == "modern"
+    assert ui_interface_from_selection("modern", default="classic") == "modern"
+    assert ui_interface_from_selection("", default="modern") == "modern"
+    assert ui_setup_from_selection("1") == ("classic", "dark")
+    assert ui_setup_from_selection("2") == ("classic", "light")
+    assert ui_setup_from_selection("3") == ("modern", "dark")
+    assert ui_setup_from_selection("4") == ("modern", "light")
+    assert ui_setup_from_selection("modern light") == ("modern", "light")
+
+
 def test_update_config_theme_preserves_existing_values_and_permissions(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "sk-test"\n\n[tools.web_search]\nsearxng_url = "https://search.example"\n',
+        (
+            '[model]\napi_key = "sk-test"\n\n'
+            '[ui]\ntextual_theme = "tokyo-night"\n\n'
+            '[tools.web_search]\nsearxng_url = "https://search.example"\n'
+        ),
         encoding="utf-8",
     )
 
@@ -469,6 +513,52 @@ def test_update_config_theme_preserves_existing_values_and_permissions(tmp_path)
     assert 'searxng_url = "https://search.example"' in text
     assert '[ui]' in text
     assert 'theme = "light"' in text
+    assert "textual_theme" not in text
+
+
+def test_update_config_ui_choice_preserves_existing_values_and_permissions(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        (
+            '[model]\napi_key = "sk-test"\n\n'
+            '[ui]\ninterface = "classic"\ntheme = "dark"\ntextual_theme = "tokyo-night"\n\n'
+            '[tools.web_search]\nsearxng_url = "https://search.example"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    update_config_ui_choice(config, interface="modern", theme="light")
+
+    text = config.read_text(encoding="utf-8")
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'api_key = "sk-test"' in text
+    assert 'searxng_url = "https://search.example"' in text
+    assert 'interface = "modern"' in text
+    assert 'theme = "light"' in text
+    assert "textual_theme" not in text
+
+
+def test_update_config_ui_interface_preserves_theme(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "light"\n', encoding="utf-8")
+
+    update_config_ui_interface(config, "modern")
+
+    text = config.read_text(encoding="utf-8")
+    assert 'interface = "modern"' in text
+    assert 'theme = "light"' in text
+
+
+def test_update_config_textual_theme_preserves_shared_theme(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+
+    update_config_textual_theme(config, "tokyo-night")
+
+    text = config.read_text(encoding="utf-8")
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'theme = "dark"' in text
+    assert 'textual_theme = "tokyo-night"' in text
 
 
 def test_update_config_input_suggestions_preserves_existing_values_and_permissions(tmp_path):
@@ -552,6 +642,7 @@ def test_write_config_uses_provider_default_base_urls_and_switch_thinking(tmp_pa
 
     text = config.read_text(encoding="utf-8")
     assert 'provider = "xiaomi"' in text
+    assert 'interface = "classic"' in text
     assert 'name = "mimo-v2.5"' in text
     assert f'base_url = "{DEFAULT_XIAOMI_BASE_URL}"' in text
     assert 'thinking = false' in text

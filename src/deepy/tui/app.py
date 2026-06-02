@@ -15,10 +15,11 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import var
+from textual.widget import Widget
 from textual.widget import MountError
-from textual.widgets import Footer, Header, Label, Static
+from textual.widgets import Label, Static
 
-from deepy.audit import ApprovalDecision, AuditModeState, PendingApproval
+from deepy.audit import ApprovalDecision, AuditModeState, AuditPolicy, PendingApproval
 from deepy.background_tasks import BackgroundTaskManager, BackgroundTaskSnapshot
 from deepy.config import (
     PROVIDER_CATALOG,
@@ -33,6 +34,8 @@ from deepy.config import (
     update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
+    update_config_textual_theme,
+    update_config_ui_interface,
     update_config_view_mode,
     write_config,
 )
@@ -50,7 +53,7 @@ from deepy.llm.multimodal import (
     supports_image_input,
 )
 from deepy.llm.runner import RunSummary
-from deepy.mcp import load_mcp_config
+from deepy.mcp import DeepyMcpRuntime, format_mcp_status, load_mcp_config
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepySession, SessionEntry, list_session_entries
@@ -86,8 +89,6 @@ from deepy.tui.commands import (
 )
 from deepy.tui.diff import diff_view_from_tool_output
 from deepy.tui.screens import (
-    AUDIT_APPROVAL_APPROVE,
-    AuditApprovalScreen,
     Choice,
     ChoiceScreen,
     InfoScreen,
@@ -111,17 +112,26 @@ from deepy.tui.state import (
     set_status,
     set_usage,
 )
+from deepy.tui.theme import (
+    TUI_TEXTUAL_THEME_OPTIONS,
+    is_supported_textual_theme,
+    textual_theme_for_ui_theme,
+    textual_theme_option,
+)
 from deepy.tui.widgets import (
+    AuditDecisionBlock,
     AssistantBlock,
     DiffBlock,
     ErrorBlock,
     InfoBlock,
+    InlineChoiceBlock,
+    InlineChoiceOption,
+    LocalCommandBlock,
     PromptPanel,
     PromptTextArea,
     StatusBar,
     ThinkingBlock,
     ToolBlock,
-    UsageLine,
     UserBlock,
     QuestionBlock,
 )
@@ -178,8 +188,8 @@ class TurnFailedMessage(Message):
 class DeepyTuiApp(App[None]):
     """Experimental Textual UI for Deepy."""
 
-    TITLE = "Deepy TUI"
-    SUB_TITLE = "experimental"
+    TITLE = "Deepy Modern UI"
+    SUB_TITLE = "Textual"
     COMMANDS = {DeepyCommandProvider}
     BINDINGS = [
         Binding("ctrl+d", "confirm_quit", "Quit", priority=True),
@@ -207,11 +217,15 @@ class DeepyTuiApp(App[None]):
         scrollbar-size-vertical: 1;
     }
 
+    #transcript * {
+        link-style: none;
+    }
+
     #side-panel {
         width: 30;
         display: none;
-        border-left: solid $primary;
-        padding: 1;
+        background: $panel;
+        padding: 0 1;
     }
 
     #side-panel.-visible {
@@ -219,34 +233,22 @@ class DeepyTuiApp(App[None]):
     }
 
     PromptPanel {
-        dock: bottom;
         height: auto;
-        padding: 0 1 1 1;
-        border-top: solid $primary;
-        background: $panel;
-    }
-
-    #prompt-title {
-        color: $text-muted;
-        height: 1;
+        padding: 0 1;
+        background: $boost;
     }
 
     #prompt-input {
         height: auto;
-        max-height: 8;
-        border: tall transparent;
+        min-height: 1;
+        max-height: 5;
+        border: none;
+        padding: 0;
         background: transparent;
     }
 
     #prompt-input:focus {
-        border: tall $accent;
-    }
-
-    #prompt-ghost {
-        height: 1;
-        margin: 0 1 0 1;
-        color: $text-muted;
-        text-style: italic;
+        border: none;
     }
 
     #prompt-images {
@@ -256,11 +258,23 @@ class DeepyTuiApp(App[None]):
         display: none;
     }
 
+    #prompt-actions {
+        height: 1;
+        color: $text-muted;
+        display: block;
+    }
+
     #prompt-suggestions {
         height: auto;
-        max-height: 8;
+        max-height: 6;
+        position: absolute;
+        offset: 0 -6;
+        width: 100%;
         display: none;
-        border: round $accent;
+        padding: 0 1;
+        layer: overlay;
+        overlay: screen;
+        background: $panel;
     }
 
     StatusBar {
@@ -281,64 +295,116 @@ class DeepyTuiApp(App[None]):
 
     .transcript-block {
         height: auto;
-        margin: 1 0;
+        margin: 0 0 0 0;
         padding: 0 1;
-        border-left: solid $primary;
+        border-left: none;
     }
 
     .transcript-block:focus {
         background: $boost;
-        border-left: solid $accent;
     }
 
     .block-title {
-        color: $accent;
-        text-style: bold;
+        color: $text-muted;
+        text-style: none;
         height: 1;
+    }
+
+    .role-line {
+        height: auto;
+        margin: 0;
+        padding: 0;
+    }
+
+    .role-marker {
+        width: 2;
+        min-width: 2;
+        height: 1;
+        text-style: bold;
     }
 
     .block-body, .block-markdown, .tool-details, #side-status, #prompt-input {
         text-style: none;
     }
 
+    .block-markdown {
+        padding: 0;
+        margin: 0;
+        width: 1fr;
+    }
+
+    .block-markdown MarkdownBlock {
+        margin: 0;
+    }
+
+    .block-markdown MarkdownTable,
+    .block-markdown Table {
+        margin: 0;
+    }
+
     .user-block {
-        border-left: solid #38bdf8;
+        color: $text;
     }
 
     .user-block .block-title {
-        color: #7dd3fc;
+        color: $accent;
+        text-style: bold;
+    }
+
+    .user-block .block-body {
+        width: 1fr;
     }
 
     .info-block {
         color: $text-muted;
-        border-left: solid #64748b;
-        margin: 0 0 1 0;
+        margin: 0;
     }
 
     .assistant-block {
-        border-left: solid $success;
+        color: $text;
+        margin: 0 0 1 0;
+    }
+
+    .assistant-block Markdown,
+    .assistant-block .block-markdown {
+        color: $text;
     }
 
     .assistant-block .block-title {
-        color: $success;
+        color: $secondary;
+        text-style: bold;
+    }
+
+    .assistant-block.-active .block-title {
+        color: $accent;
     }
 
     .thinking-block {
-        border-left: solid $warning;
         color: $text-muted;
+        margin: 0;
     }
 
     .thinking-block .block-title {
         color: $warning;
+        text-style: bold;
     }
 
-    .tool-block {
-        border-left: solid $accent;
-        background: $boost;
+    .thinking-block .block-body {
+        color: $text-muted;
+        width: 1fr;
     }
 
     .tool-block .block-title {
+        color: $success;
+        text-style: bold;
+    }
+
+    .tool-block.-running .block-title {
         color: $accent;
+    }
+
+    .tool-block .block-body {
+        width: 1fr;
     }
 
     .tool-details {
@@ -347,20 +413,16 @@ class DeepyTuiApp(App[None]):
         display: none;
     }
 
-    .tool-block.-waiting {
-        border-left: solid $warning;
-    }
-
-    .tool-block.-retryable {
-        border-left: solid $warning;
-    }
-
     .tool-block.-retryable .block-title {
         color: $warning;
     }
 
-    .todo-block {
-        border-left: solid $success;
+    .tool-block.-ok .block-title {
+        color: $success;
+    }
+
+    .tool-block.-failed .block-title {
+        color: $error;
     }
 
     .todo-block .block-title {
@@ -368,8 +430,8 @@ class DeepyTuiApp(App[None]):
     }
 
     .question-block {
-        border-left: solid $warning;
         background: $boost;
+        padding: 0 1;
     }
 
     .question-block OptionList {
@@ -384,19 +446,95 @@ class DeepyTuiApp(App[None]):
         border: tall $accent;
     }
 
+    #interaction-sheet {
+        height: auto;
+        max-height: 16;
+        display: none;
+        background: $panel;
+        border-top: solid $primary;
+        padding: 1 2;
+    }
+
+    #interaction-sheet .interaction-block {
+        height: auto;
+        max-height: 14;
+        background: transparent;
+        padding: 0;
+    }
+
+    #interaction-sheet .block-title {
+        color: $accent;
+        text-style: bold;
+    }
+
+    #interaction-sheet OptionList {
+        height: auto;
+        min-height: 3;
+        max-height: 10;
+        margin-top: 1;
+        color: #e5e7eb !important;
+        background: transparent !important;
+        border: none !important;
+        padding: 0;
+    }
+
+    #interaction-sheet OptionList > .option-list--option {
+        color: #e5e7eb !important;
+        padding: 0 1;
+    }
+
+    #interaction-sheet OptionList > .option-list--option-highlighted {
+        color: #ffffff !important;
+        background: #414868 !important;
+        text-style: bold !important;
+    }
+
+    #interaction-sheet OptionList:focus > .option-list--option-highlighted {
+        color: #ffffff !important;
+        background: #7aa2f7 40% !important;
+        text-style: bold !important;
+    }
+
+    #interaction-sheet OptionList > .option-list--option-disabled {
+        color: #7f849c !important;
+    }
+
+    #interaction-sheet OptionList > .option-list--option-hover {
+        background: #292e42 !important;
+    }
+
+    #interaction-sheet .inline-choice-options {
+        height: auto;
+        min-height: 3;
+        max-height: 10;
+        margin-top: 1;
+        color: #e5e7eb;
+        background: transparent;
+    }
+
+    #interaction-sheet .screen-help {
+        color: $text-muted;
+        margin-top: 0;
+    }
+
     .diff-block {
-        border-left: solid $success;
+        background: transparent;
+        margin: 0 0 1 0;
+        max-height: 70%;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
     }
 
     .error-block {
-        border-left: solid $error;
+        background: transparent;
     }
 
     .usage-line {
         height: 1;
-        margin: 0 0 1 1;
-        padding: 0;
+        margin: 0;
+        padding: 0 1;
         color: $text-muted;
+        display: none;
     }
     """
 
@@ -425,7 +563,7 @@ class DeepyTuiApp(App[None]):
         )
         self._assistant_block: AssistantBlock | None = None
         self._thinking_block: ThinkingBlock | None = None
-        self._tool_blocks: dict[str, ToolBlock] = {}
+        self._tool_blocks: dict[str, ToolBlock | LocalCommandBlock] = {}
         self._retryable_tool_blocks: dict[tuple[str, str], ToolBlock] = {}
         self._focused_block_index = -1
         self._pending_question_answers: OrderedDict[str, str] = OrderedDict()
@@ -434,16 +572,25 @@ class DeepyTuiApp(App[None]):
         self._stream_tokens = 0
         self._local_command_sequence = 0
         self.background_tasks = BackgroundTaskManager()
+        self.mcp_runtime = DeepyMcpRuntime(
+            settings,
+            project_root=project_root,
+            audit_policy=AuditPolicy(lambda: self.audit_state.mode, settings.audit),
+        )
         self.exit_summary_text: str | None = None
         self._pending_session_cost_start: dict[str, Any] | None = None
+        self._pending_audit_decision: asyncio.Future[str] | None = None
+        self._pending_inline_choice: asyncio.Future[str | None] | None = None
+        self._active_interaction_block: Widget | None = None
+        self._approved_preflight_diffs: set[str] = set()
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         with Horizontal(id="main-layout"):
             yield VerticalScroll(id="transcript")
             with Vertical(id="side-panel"):
                 yield Label("Status", classes="block-title")
                 yield Static("", id="side-status")
+        yield Vertical(id="interaction-sheet")
         yield StatusBar(id="status-bar")
         yield PromptPanel(
             build_slash_commands(discover_skills(self.project_root)),
@@ -451,13 +598,12 @@ class DeepyTuiApp(App[None]):
             image_attachments=self.image_attachments,
             id="prompt-panel",
         )
-        yield Footer()
 
     async def on_mount(self) -> None:
         self._apply_theme()
         await self.query_one("#transcript", VerticalScroll).mount(
             InfoBlock(
-                "Experimental Textual TUI. Press Ctrl+O for status, Enter to send, "
+                "Deepy Modern UI. Press Ctrl+O for status, Enter to send, "
                 "Ctrl+J for newline, Ctrl+D twice to exit."
             )
         )
@@ -466,9 +612,16 @@ class DeepyTuiApp(App[None]):
         self._update_status("Idle")
         if self.guide_missing_config and not self.settings.model.api_key:
             self.call_after_refresh(self._start_initial_setup)
+        self.run_worker(self._connect_mcp_runtime(), name="mcp-startup", exclusive=False)
+
+    async def _connect_mcp_runtime(self) -> None:
+        await self.mcp_runtime.connect()
 
     def _apply_theme(self) -> None:
-        self.theme = "textual-light" if self.settings.ui.theme == "light" else "textual-dark"
+        self.theme = textual_theme_for_ui_theme(
+            self.settings.ui.theme,
+            self.settings.ui.textual_theme,
+        )
 
     def _start_initial_setup(self) -> None:
         self.run_worker(self._initial_setup_command(), exclusive=False)
@@ -480,6 +633,9 @@ class DeepyTuiApp(App[None]):
     @on(PromptTextArea.Submitted)
     async def on_prompt_submitted(self, event: PromptTextArea.Submitted) -> None:
         event.stop()
+        if self._active_interaction_block is not None:
+            self._refocus_active_interaction()
+            return
         self._clear_input_suggestion()
         if self.state.busy:
             self.notify("Deepy is still working.", severity="warning")
@@ -540,6 +696,7 @@ class DeepyTuiApp(App[None]):
             "resume",
             "compact",
             "theme",
+            "ui",
             "model",
             "view",
             "input-suggestion",
@@ -595,7 +752,7 @@ class DeepyTuiApp(App[None]):
 
     async def _run_tui_command(self, name: str, argument: str = "") -> None:
         if name == "help":
-            self.push_screen(InfoScreen("Deepy TUI Help", self._help_markdown()))
+            self.push_screen(InfoScreen("Deepy Modern UI Help", self._help_markdown()))
             return
         if name == "status":
             balance = (
@@ -605,18 +762,18 @@ class DeepyTuiApp(App[None]):
             )
             self.push_screen(
                 InfoScreen(
-                    "Deepy TUI Status",
+                    "Deepy Modern UI Status",
                     self._status_markdown(balance=balance),
                 )
             )
             return
         if name == "mcp":
-            self.push_screen(InfoScreen("Deepy TUI MCP", self._mcp_markdown()))
+            await self._append_block(InfoBlock(format_mcp_status(self.mcp_runtime.statuses)))
             return
         if name == "ps":
             self.push_screen(
                 InfoScreen(
-                    "Deepy TUI Background Tasks",
+                    "Deepy Modern UI Background Tasks",
                     self._background_tasks_markdown(),
                 )
             )
@@ -638,6 +795,9 @@ class DeepyTuiApp(App[None]):
             return
         if name == "theme":
             await self._theme_command(argument.strip())
+            return
+        if name == "ui":
+            await self._ui_command(argument.strip())
             return
         if name == "model":
             await self._model_command(argument.strip())
@@ -684,38 +844,48 @@ class DeepyTuiApp(App[None]):
             current_session_id=self.state.session_id,
             balance=balance,
         )
+        session_cache = _format_tui_cache_status(_tui_session_entry(self.project_root, self.state.session_id))
+        mcp_status = "enabled" if report.mcp.get("enabled") else "disabled"
         lines = [
             "# Status",
             "",
-            f"- Project: `{report.project_root}`",
+            "## Model",
             f"- Provider: `{report.provider}`",
             f"- Model: `{report.model}`",
             f"- Thinking: `{report.reasoning_mode}`",
-            f"- Session: `{self.state.session_id or 'new'}`",
-            f"- Theme: `{self.settings.ui.theme}`",
-            f"- View: `{self.settings.ui.view_mode}`",
+            "",
+            "## Runtime",
+            f"- UI: `{self.settings.ui.interface}`",
             f"- Audit: `{_format_tui_audit_mode(self.audit_state, self.settings)}`",
+            f"- View: `{self.settings.ui.view_mode}`",
             f"- Input suggestions: `{'enabled' if self.settings.ui.input_suggestions_enabled else 'disabled'}`",
-            f"- Loaded skills: `{', '.join(self.controller.loaded_skill_names) or 'none'}`",
+            (
+                f"- Theme: `{self.settings.ui.theme}` -> "
+                f"`{textual_theme_for_ui_theme(self.settings.ui.theme, self.settings.ui.textual_theme)}`"
+            ),
+            "",
+            "## Project",
+            f"- Root: `{report.project_root}`",
+            f"- Config: `{self.settings.path or 'unknown'}`",
             f"- Sessions: `{report.session_count}`",
             f"- Skills: `{report.skill_count}`",
-            f"- MCP: `{'enabled' if report.mcp.get('enabled') else 'disabled'}`",
-            f"- Config: `{self.settings.path or 'unknown'}`",
+            "",
+            "## Session",
+            f"- Active: `{self.state.session_id or 'new'}`",
+            f"- Loaded skills: `{', '.join(self.controller.loaded_skill_names) or 'none'}`",
             f"- Session usage: `{format_usage_line(report.active_session_usage) if report.active_session_usage else 'unknown'}`",
-            f"- Session cache: `{_format_tui_cache_status(_tui_session_entry(self.project_root, self.state.session_id))}`",
+            f"- Session cache: `{session_cache}`",
             f"- Project usage: `{format_usage_line(report.project_usage) if report.project_usage else 'unknown'}`",
+            "",
+            "## MCP",
+            f"- State: `{mcp_status}`",
         ]
         if balance is not None:
-            lines.append(f"- Balance: `{format_balance_status(balance)}`")
+            lines.extend(["", "## Balance", f"- Account: `{format_balance_status(balance)}`"])
         if include_runtime:
-            lines.extend(["", "## Runtime", "```text", format_status_report(report), "```"])
-        return "\n".join(lines)
-
-    def _mcp_markdown(self) -> str:
-        report = build_status_report(self.project_root, self.settings)
-        lines = ["# MCP Status", ""]
-        for key, value in report.mcp.items():
-            lines.append(f"- {key}: `{value}`")
+            runtime = format_status_report(report)
+            if runtime:
+                lines.extend(["", "## Details", "```text", runtime, "```"])
         return "\n".join(lines)
 
     def _background_tasks_markdown(self) -> str:
@@ -825,7 +995,7 @@ class DeepyTuiApp(App[None]):
             await self._append_block(InfoBlock("No sessions found for this project."))
             return None
         choices = [await self._session_choice(entry) for entry in entries]
-        return await self.push_screen_wait(ChoiceScreen(title, choices))
+        return await self._choose_inline(title, choices)
 
     async def _session_choice(self, entry: SessionEntry) -> Choice:
         items = await _load_session_items(self.project_root, entry.id)
@@ -874,33 +1044,67 @@ class DeepyTuiApp(App[None]):
     async def _theme_command(self, argument: str) -> None:
         theme = argument
         if not theme:
-            theme = await self.push_screen_wait(
-                ChoiceScreen(
-                    "Select theme",
-                    [
-                        Choice("dark", "dark", "Use Textual dark theme"),
-                        Choice("light", "light", "Use Textual light theme"),
-                    ],
-                )
+            theme = await self._choose_inline(
+                "Select theme",
+                [
+                    Choice(option.label, option.name, option.description)
+                    for option in TUI_TEXTUAL_THEME_OPTIONS
+                ],
             ) or ""
         if not theme:
             self._update_status("Theme unchanged")
             return
-        if not is_valid_ui_theme(theme):
-            await self._append_block(ErrorBlock("Usage: /theme dark|light"))
+        theme_option = textual_theme_option(theme)
+        if not is_valid_ui_theme(theme) and not is_supported_textual_theme(theme):
+            choices = ", ".join(option.name for option in TUI_TEXTUAL_THEME_OPTIONS)
+            await self._append_block(ErrorBlock(f"Usage: /theme <theme>\nChoices: {choices}"))
             return
         if self.settings.path is None:
             await self._append_block(ErrorBlock("Cannot persist theme: config path is unknown."))
             return
-        update_config_theme(self.settings.path, theme)
+        if theme_option is not None and theme_option.shared_theme is not None:
+            update_config_theme(self.settings.path, theme_option.shared_theme)
+            saved_message = f"Saved UI theme: {theme_option.shared_theme}"
+        elif is_valid_ui_theme(theme):
+            update_config_theme(self.settings.path, theme)
+            saved_message = f"Saved UI theme: {theme}"
+        else:
+            update_config_textual_theme(self.settings.path, theme)
+            saved_message = f"Saved TUI theme: {theme}"
         self.settings = load_settings(self.settings.path)
         self.controller.settings = self.settings
         self.input_suggestions.set_enabled(self.settings.ui.input_suggestions_enabled)
         self.image_attachments.supports_image_input = supports_image_input(self.settings)
         self._clear_input_suggestion()
         self._apply_theme()
-        await self._append_block(InfoBlock(f"Saved UI theme: {theme}"))
-        self._update_status(f"Theme {theme}")
+        await self._append_block(InfoBlock(saved_message))
+        self._update_status(f"Theme {self.theme}")
+
+    async def _ui_command(self, argument: str) -> None:
+        interface = argument.strip().lower()
+        if not interface:
+            selected = await self._choose_inline(
+                "Select UI",
+                [
+                    Choice("classic", "classic", "Rich/prompt-toolkit terminal UI"),
+                    Choice("modern", "modern", "Textual terminal UI"),
+                ],
+            )
+            interface = selected or ""
+        if not interface:
+            self._update_status("UI unchanged")
+            return
+        if interface not in {"classic", "modern"}:
+            await self._append_block(ErrorBlock("Usage: /ui classic|modern"))
+            return
+        if self.settings.path is None:
+            await self._append_block(ErrorBlock("Cannot persist UI: config path is unknown."))
+            return
+        update_config_ui_interface(self.settings.path, interface)
+        self.settings = load_settings(self.settings.path)
+        self.controller.settings = self.settings
+        await self._append_block(InfoBlock(f"Saved UI: {_format_tui_ui_interface_label(interface)}"))
+        self._update_status("Restart Deepy to enter the selected UI")
 
     async def _model_command(self, argument: str) -> None:
         try:
@@ -909,38 +1113,38 @@ class DeepyTuiApp(App[None]):
             model: str | None = None
             reasoning: str | None = None
             if not parts:
-                provider = await self.push_screen_wait(
-                    ChoiceScreen(
-                        "Select provider",
-                        [
-                            Choice(item.id, item.id, item.description)
-                            for item in PROVIDER_CATALOG
-                        ],
-                    )
+                provider = await self._choose_inline(
+                    "Select provider",
+                    [
+                        Choice(item.id, item.id, item.description)
+                        for item in PROVIDER_CATALOG
+                    ],
+                    restore_prompt_focus=False,
                 )
                 if not provider:
                     self._update_status("Model unchanged")
+                    self.query_one("#prompt-input", PromptTextArea).focus()
                     return
-                model = await self.push_screen_wait(
-                    ChoiceScreen(
-                        "Select model",
-                        [
-                            Choice(item.name, item.name, item.description)
-                            for item in provider_info_for(provider).models
-                        ],
-                    )
+                model = await self._choose_inline(
+                    "Select model",
+                    [
+                        Choice(item.name, item.name, item.description)
+                        for item in provider_info_for(provider).models
+                    ],
+                    restore_prompt_focus=False,
                 )
                 if not model:
                     self._update_status("Model unchanged")
+                    self.query_one("#prompt-input", PromptTextArea).focus()
                     return
-                reasoning = await self.push_screen_wait(
-                    ChoiceScreen(
-                        "Select thinking",
-                        [Choice(value, value, label) for value, label in thinking_mode_choices(provider)],
-                    )
+                reasoning = await self._choose_inline(
+                    "Select thinking",
+                    [Choice(value, value, label) for value, label in thinking_mode_choices(provider)],
+                    restore_prompt_focus=False,
                 )
                 if not reasoning:
                     self._update_status("Model unchanged")
+                    self.query_one("#prompt-input", PromptTextArea).focus()
                     return
             elif parts[0] == "list" and len(parts) == 1:
                 await self._append_block(InfoBlock(_model_list_text()))
@@ -990,6 +1194,7 @@ class DeepyTuiApp(App[None]):
                     f"- thinking: {self.settings.model.reasoning_mode}"
                 )
             )
+            self.query_one("#prompt-input", PromptTextArea).focus()
             if self.settings.model.provider != previous_provider:
                 await self._append_block(
                     InfoBlock(provider_api_key_reconfiguration_message(self.settings.model.provider))
@@ -1056,6 +1261,7 @@ class DeepyTuiApp(App[None]):
                 model=self.settings.model.name,
                 base_url=self.settings.model.base_url,
                 thinking=self.settings.model.reasoning_mode,
+                interface=self.settings.ui.interface,
                 theme=self.settings.ui.theme,
             )
         )
@@ -1077,6 +1283,7 @@ class DeepyTuiApp(App[None]):
                 base_url=result.base_url,
                 thinking_mode=result.thinking,
                 theme=result.theme,
+                interface=result.interface,
             )
         except Exception as exc:
             await self._append_block(ErrorBlock(f"Config reset failed: {exc}"))
@@ -1121,7 +1328,9 @@ class DeepyTuiApp(App[None]):
                 if self.state.session_id
                 else DeepySession.create(self.project_root)
             )
-            await session.add_items(build_synthetic_shell_transcript_items(command_input.raw_text, result))
+            await session.add_items(
+                build_synthetic_shell_transcript_items(command_input.raw_text, result, call_id=call_id)
+            )
             self.state = set_session_id(self.state, session.session_id)
             self.state = set_busy(reset_turn_buffers(self.state), False, "Idle")
             self._update_status("Idle")
@@ -1182,32 +1391,30 @@ class DeepyTuiApp(App[None]):
         return False
 
     async def _open_skill_management(self) -> None:
-        view = "market"
-        while True:
-            installed_entries = _installed_skill_entries(self.project_root)
-            market_entries, market_error = await self._load_market_entries()
-            action = await self.push_screen_wait(
-                SkillManagementScreen(
-                    installed_entries,
-                    market_entries,
-                    view=view,
-                    market_error=market_error,
-                )
-            )
-            if action is None:
-                self._update_status("Skills closed")
-                return
-            view = action.source
-            if action.action == "refresh":
-                continue
-            handled = await self._handle_skill_screen_action(action, market_entries)
-            if not handled:
-                return
+        screen = SkillManagementScreen(
+            _installed_skill_entries(self.project_root),
+            [],
+            view="market",
+            market_loading=True,
+        )
+        self.push_screen(screen)
+        self.run_worker(self._refresh_skill_management_market(screen), name="skill-market-refresh")
+
+    @on(SkillManagementScreen.ActionRequested)
+    async def on_skill_management_action(self, event: SkillManagementScreen.ActionRequested) -> None:
+        event.stop()
+        action = event.action
+        screen = event.screen
+        if action.action == "refresh":
+            screen.set_market_loading("Refreshing skill market...")
+            self.run_worker(self._refresh_skill_management_market(screen), name="skill-market-refresh")
+            return
+        self.run_worker(self._handle_skill_screen_action(action, screen), name="skill-management-action")
 
     async def _handle_skill_screen_action(
         self,
         action: SkillScreenAction,
-        market_entries: list[SkillScreenEntry],
+        screen: SkillManagementScreen,
     ) -> bool:
         if action.action == "use":
             skill = find_skill(self.project_root, action.name)
@@ -1222,7 +1429,7 @@ class DeepyTuiApp(App[None]):
             return True
         if action.action == "show":
             if action.source == "market" and find_skill(self.project_root, action.name) is None:
-                entry = next((item for item in market_entries if item.name == action.name), None)
+                entry = next((item for item in screen.market if item.name == action.name), None)
                 if entry is not None:
                     await self.push_screen_wait(
                         InfoScreen(f"Market Skill: {entry.name}", _market_detail_markdown(entry))
@@ -1235,15 +1442,23 @@ class DeepyTuiApp(App[None]):
             await self.push_screen_wait(InfoScreen(f"Skill: {skill.name}", _skill_detail_markdown(skill)))
             return True
         if action.action == "install":
-            await self._skills_install(action.name)
+            await self._skills_install_from_screen(action.name, screen=screen)
             return True
         if action.action == "uninstall":
-            await self._skills_uninstall(action.name)
+            await self._skills_uninstall_from_screen(action.name, screen=screen)
             return True
         if action.action == "update":
             await self._skills_update(action.name)
             return True
         return False
+
+    async def _refresh_skill_management_market(self, screen: SkillManagementScreen) -> None:
+        market_entries, market_error = await self._load_market_entries()
+        try:
+            screen.update_installed(_installed_skill_entries(self.project_root))
+            screen.update_market(market_entries, market_error=market_error)
+        except RuntimeError:
+            return
 
     async def _load_market_entries(self) -> tuple[list[SkillScreenEntry], str]:
         try:
@@ -1298,6 +1513,45 @@ class DeepyTuiApp(App[None]):
         await self._append_block(InfoBlock(f"Installed skill: {record.name} ({record.scope}) -> {record.install_path}"))
         self._update_status(f"Installed {record.name}")
 
+    async def _skills_install_from_screen(self, name: str, *, screen: SkillManagementScreen) -> None:
+        if not name:
+            self._update_status("Select a skill to install")
+            return
+        scope = await self.push_screen_wait(
+            ChoiceScreen(
+                "Install skill",
+                [
+                    Choice("user", "user", "Install into ~/.agents/skills"),
+                    Choice("project", "project", "Install into this project's .agents/skills"),
+                ],
+            )
+        )
+        install_scope: Literal["user", "project"]
+        if scope == "user":
+            install_scope = "user"
+        elif scope == "project":
+            install_scope = "project"
+        else:
+            self._update_status("Install cancelled")
+            return
+        screen.set_operation_loading(f"Installing {name}...")
+        try:
+            record = await asyncio.to_thread(
+                install_market_skill,
+                name,
+                scope=install_scope,
+                project_root=self.project_root,
+            )
+        except Exception as exc:
+            self._update_status(f"Skill install failed: {exc}")
+            screen.clear_operation_loading()
+            return
+        self._refresh_prompt_commands()
+        self._update_status(f"Installed {record.name} ({record.scope})")
+        screen.update_installed(_installed_skill_entries(self.project_root))
+        screen.set_market_loading("Refreshing skill market...")
+        self.run_worker(self._refresh_skill_management_market(screen), name="skill-market-refresh")
+
     async def _skills_uninstall(self, name: str) -> None:
         if not name:
             await self._append_block(ErrorBlock("Usage: /skills uninstall NAME"))
@@ -1331,6 +1585,40 @@ class DeepyTuiApp(App[None]):
         self._refresh_prompt_commands()
         await self._append_block(InfoBlock(f"Uninstalled skill: {removed}"))
         self._update_status(f"Uninstalled {removed}")
+
+    async def _skills_uninstall_from_screen(self, name: str, *, screen: SkillManagementScreen) -> None:
+        if not name:
+            self._update_status("Select a skill to uninstall")
+            return
+        skill = find_skill(self.project_root, name)
+        if skill is not None and skill.scope == "builtin":
+            self._update_status(f"Built-in skill cannot be uninstalled: {skill.name}")
+            return
+        record = next((item for item in list_installed_skills() if item.name.lower() == name.lower()), None)
+        screen.set_operation_loading(f"Uninstalling {name}...")
+        if record is None and skill is not None and skill.scope in {"project", "user"}:
+            try:
+                await asyncio.to_thread(_remove_local_skill_directory, skill.path.parent)
+            except Exception as exc:
+                self._update_status(f"Skill remove failed: {exc}")
+                screen.clear_operation_loading()
+                return
+            removed_name = skill.name
+        else:
+            try:
+                removed_name = await asyncio.to_thread(uninstall_market_skill, name)
+            except Exception as exc:
+                self._update_status(f"Skill uninstall failed: {exc}")
+                screen.clear_operation_loading()
+                return
+        self.controller.loaded_skill_names = [
+            skill_name for skill_name in self.controller.loaded_skill_names if skill_name.lower() != name.lower()
+        ]
+        self._refresh_prompt_commands()
+        self._update_status(f"Uninstalled {removed_name}")
+        screen.update_installed(_installed_skill_entries(self.project_root))
+        screen.set_market_loading("Refreshing skill market...")
+        self.run_worker(self._refresh_skill_management_market(screen), name="skill-market-refresh")
 
     async def _skills_installed(self) -> None:
         records = await asyncio.to_thread(list_installed_skills)
@@ -1377,6 +1665,9 @@ class DeepyTuiApp(App[None]):
     @on(PromptTextArea.HistoryPrevious)
     def on_history_previous(self, event: PromptTextArea.HistoryPrevious) -> None:
         event.stop()
+        if self._active_interaction_block is not None:
+            self._refocus_active_interaction()
+            return
         prompt = self.query_one("#prompt-input", PromptTextArea)
         previous = self.controller.previous_prompt(prompt.text)
         if previous is None:
@@ -1387,6 +1678,9 @@ class DeepyTuiApp(App[None]):
     @on(PromptTextArea.HistoryNext)
     def on_history_next(self, event: PromptTextArea.HistoryNext) -> None:
         event.stop()
+        if self._active_interaction_block is not None:
+            self._refocus_active_interaction()
+            return
         prompt = self.query_one("#prompt-input", PromptTextArea)
         next_prompt = self.controller.next_prompt()
         if next_prompt is None:
@@ -1411,6 +1705,7 @@ class DeepyTuiApp(App[None]):
                 session_id=self.state.session_id,
                 skill_names=skill_names,
                 background_tasks=self.background_tasks,
+                mcp_runtime=self.mcp_runtime,
                 audit_mode=self.audit_state,
                 approval_resolver=self._tui_approval_resolver,
                 image_attachments=image_attachments or [],
@@ -1438,7 +1733,6 @@ class DeepyTuiApp(App[None]):
         self.state = reset_turn_buffers(self.state)
         if summary.pending_questions:
             await self._show_pending_question(summary.pending_questions)
-        await self._append_block(UsageLine(format_usage_line(summary.usage)))
         self._update_status("Idle")
         self.run_worker(self._prepare_input_suggestion(summary), exclusive=False)
 
@@ -1453,14 +1747,13 @@ class DeepyTuiApp(App[None]):
     async def _tui_approval_resolver(self, pending: list[PendingApproval]) -> list[ApprovalDecision]:
         decisions: list[ApprovalDecision] = []
         for item in pending:
-            choice = await self.push_screen_wait(
-                AuditApprovalScreen(
-                    item,
-                    project_root=self.project_root,
-                    width=max(40, self.size.width - 6),
-                )
-            )
-            approved = choice == AUDIT_APPROVAL_APPROVE
+            proposed_diff = await self._append_preflight_diff(item)
+            choice = await self._show_inline_audit_decision(item)
+            approved = choice == "approve"
+            if proposed_diff and approved:
+                self._approved_preflight_diffs.add(proposed_diff)
+            elif proposed_diff:
+                await self._append_block(InfoBlock("Proposed change rejected."))
             decisions.append(
                 ApprovalDecision(
                     outcome="approve" if approved else "reject",
@@ -1471,15 +1764,95 @@ class DeepyTuiApp(App[None]):
             )
         return decisions
 
+    async def _append_preflight_diff(self, item: PendingApproval) -> str | None:
+        if item.preflight is None:
+            return None
+        output = json_utils.dumps(item.preflight)
+        diff_text = _tool_output_diff_text(output)
+        diff_view = diff_view_from_tool_output(output, project_root=self.project_root)
+        if diff_text is None or diff_view is None:
+            return None
+        await self._append_block(
+            DiffBlock(
+                diff_view,
+                theme=self.settings.ui.theme,
+                width=max(40, self.size.width - 6),
+            )
+        )
+        return diff_text
+
+    async def _show_inline_audit_decision(self, item: PendingApproval) -> str:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        self._pending_audit_decision = future
+        block = AuditDecisionBlock(
+            item,
+            project_root=self.project_root,
+            width=max(40, self.size.width - 6),
+        )
+        await self._show_interaction_block(block)
+        try:
+            return await future
+        finally:
+            if self._pending_audit_decision is future:
+                self._pending_audit_decision = None
+            await self._clear_interaction_sheet()
+            self.call_after_refresh(self.query_one("#prompt-input", PromptTextArea).focus)
+
+    @on(AuditDecisionBlock.Decided)
+    def on_audit_decision(self, message: AuditDecisionBlock.Decided) -> None:
+        message.stop()
+        future = self._pending_audit_decision
+        if future is not None and not future.done():
+            future.set_result(message.outcome)
+
+    async def _choose_inline(
+        self,
+        title: str,
+        choices: list[Choice],
+        *,
+        restore_prompt_focus: bool = True,
+    ) -> str | None:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str | None] = loop.create_future()
+        self._pending_inline_choice = future
+        block = InlineChoiceBlock(
+            title,
+            [
+                InlineChoiceOption(choice.label, choice.value, choice.description)
+                for choice in choices
+            ],
+        )
+        await self._show_interaction_block(block)
+        try:
+            return await future
+        finally:
+            if self._pending_inline_choice is future:
+                self._pending_inline_choice = None
+            await self._clear_interaction_sheet()
+            if restore_prompt_focus:
+                try:
+                    prompt = self.query_one("#prompt-input", PromptTextArea)
+                except NoMatches:
+                    return
+                self.call_after_refresh(prompt.focus)
+
+    @on(InlineChoiceBlock.Chosen)
+    def on_inline_choice(self, message: InlineChoiceBlock.Chosen) -> None:
+        message.stop()
+        future = self._pending_inline_choice
+        if future is not None and not future.done():
+            future.set_result(message.value)
+
     @on(QuestionBlock.Answered)
     async def on_question_answered(self, message: QuestionBlock.Answered) -> None:
         message.stop()
         self._pending_question_answers[message.question] = message.answer
-        await self._append_block(UserBlock(f"{message.question}\n{message.answer}"))
         questions = normalize_questions(self.state.pending_questions)
         if len(self._pending_question_answers) < len(questions):
-            await self._append_block(QuestionBlock(questions[len(self._pending_question_answers)]))
+            await self._show_interaction_block(QuestionBlock(questions[len(self._pending_question_answers)]))
             return
+        await self._clear_interaction_sheet()
         continuation = format_ask_user_question_answers(self._pending_question_answers)
         self._pending_question_answers.clear()
         self.state = set_pending_questions(self.state, [])
@@ -1494,6 +1867,7 @@ class DeepyTuiApp(App[None]):
     @on(QuestionBlock.Cancelled)
     async def on_question_cancelled(self, message: QuestionBlock.Cancelled) -> None:
         message.stop()
+        await self._clear_interaction_sheet()
         self._pending_question_answers.clear()
         self.state = set_pending_questions(self.state, [])
         await self._append_block(UserBlock(format_ask_user_question_decline()))
@@ -1502,10 +1876,74 @@ class DeepyTuiApp(App[None]):
     async def _show_pending_question(self, pending_questions: list[dict[str, Any]]) -> None:
         questions = normalize_questions(pending_questions)
         if not questions:
-            await self._append_block(UserBlock(f"Questions pending: {len(pending_questions)}"))
+            self._update_status(f"Questions pending: {len(pending_questions)}")
             return
         self._pending_question_answers.clear()
-        await self._append_block(QuestionBlock(questions[0]))
+        await self._show_interaction_block(QuestionBlock(questions[0]))
+
+    async def _show_interaction_block(self, block: Widget) -> None:
+        sheet = self.query_one("#interaction-sheet", Vertical)
+        await sheet.remove_children()
+        sheet.display = True
+        self._active_interaction_block = block
+        self._set_prompt_interaction_locked(True)
+        await sheet.mount(block)
+        self._focus_interaction_block(block)
+
+    async def _clear_interaction_sheet(self) -> None:
+        try:
+            sheet = self.query_one("#interaction-sheet", Vertical)
+        except NoMatches:
+            return
+        await sheet.remove_children()
+        sheet.display = False
+        self._active_interaction_block = None
+        self._set_prompt_interaction_locked(False)
+
+    def _set_prompt_interaction_locked(self, locked: bool) -> None:
+        try:
+            prompt = self.query_one("#prompt-input", PromptTextArea)
+        except NoMatches:
+            return
+        prompt.disabled = locked
+
+    def _refocus_active_interaction(self) -> None:
+        block = self._active_interaction_block
+        if block is not None:
+            self._focus_interaction_block(block)
+
+    def _focus_interaction_block(self, block: Widget) -> None:
+        def focus_target() -> None:
+            for selector in (
+                "#question-custom",
+                "#inline-choice-options",
+                "#audit-decision-options",
+                "#question-options",
+            ):
+                try:
+                    target = block.query_one(selector)
+                except NoMatches:
+                    continue
+                if target.display is False:
+                    continue
+                target.focus()
+                return
+            block.focus()
+
+        self.call_after_refresh(focus_target)
+
+    def _cancel_active_interaction(self) -> bool:
+        block = self._active_interaction_block
+        if isinstance(block, AuditDecisionBlock):
+            block.action_reject()
+            return True
+        if isinstance(block, QuestionBlock):
+            block.action_cancel()
+            return True
+        if isinstance(block, InlineChoiceBlock):
+            block.action_cancel()
+            return True
+        return False
 
     async def _prepare_input_suggestion(self, summary: RunSummary) -> None:
         self._clear_input_suggestion()
@@ -1553,8 +1991,12 @@ class DeepyTuiApp(App[None]):
         if event.kind == "text_delta" and event.text:
             self._record_stream_progress(event.text)
             self.state = add_assistant_delta(self.state, event.text)
-            if self._assistant_block is not None:
+            if self._assistant_block is None:
+                self._assistant_block = AssistantBlock(self.state.assistant_buffer, active=True)
+                await self._append_block(self._assistant_block)
+            else:
                 anchored = self._transcript_is_anchored_now()
+                self._assistant_block.set_active(True)
                 self._assistant_block.update_markdown(self.state.assistant_buffer)
                 self._scroll_transcript_to_end(force=anchored)
             self._update_status(self._stream_status_text())
@@ -1564,6 +2006,7 @@ class DeepyTuiApp(App[None]):
                 self.state = add_assistant_delta(self.state, event.text)
                 if self._assistant_block is not None:
                     anchored = self._transcript_is_anchored_now()
+                    self._assistant_block.set_active(True)
                     self._assistant_block.update_markdown(self.state.assistant_buffer)
                     self._scroll_transcript_to_end(force=anchored)
             return
@@ -1608,32 +2051,52 @@ class DeepyTuiApp(App[None]):
             call_id = str(event.payload.get("call_id") or "")
             view = parse_tool_output(event.text)
             block = self._tool_blocks.get(call_id)
+            if _is_local_command_tool_output(view):
+                local_block = LocalCommandBlock.from_output(view, call_id=call_id)
+                if call_id:
+                    self._tool_blocks[call_id] = local_block
+                await self._replace_or_append_block(block, local_block)
+                self._update_status(view.status.title())
+                return
+            diff_view = diff_view_from_tool_output(event.text, project_root=self.project_root)
+            if diff_view is not None:
+                diff_text = _tool_output_diff_text(event.text)
+                if diff_text is not None and diff_text in self._approved_preflight_diffs:
+                    self._approved_preflight_diffs.discard(diff_text)
+                    if block is not None and block.parent is not None:
+                        await block.remove()
+                    self._update_status(view.status.title())
+                    return
+                await self._replace_or_prioritize_diff_block(
+                    block,
+                    DiffBlock(
+                        diff_view,
+                        theme=self.settings.ui.theme,
+                        width=max(40, self.size.width - 6),
+                    ),
+                )
+                self._update_status(view.status.title())
+                return
+                return
             if block is None:
-                block = ToolBlock.from_output(view, call_id=call_id)
+                block = ToolBlock.from_output(view, call_id=call_id, project_root=self.project_root)
                 if call_id:
                     self._tool_blocks[call_id] = block
                 await self._append_block(block)
-            else:
+            elif isinstance(block, ToolBlock):
                 anchored = self._transcript_is_anchored_now()
-                block.update_from_output(view)
+                block.update_from_output(view, project_root=self.project_root)
                 self._scroll_transcript_to_end(force=anchored)
+            else:
+                return
             retry_key = _recoverable_tool_key(view.name, block.arguments)
             if view.status == "retryable" and retry_key is not None:
                 self._retryable_tool_blocks[retry_key] = block
             elif view.ok is True and retry_key is not None:
                 self._retryable_tool_blocks.pop(retry_key, None)
             if view.name == "todo_write":
-                self._todo_text = block.body
+                self._todo_text = block.output_body
                 self._update_status(self.state.status)
-            diff_view = diff_view_from_tool_output(event.text)
-            if diff_view is not None:
-                await self._append_block(
-                    DiffBlock(
-                        diff_view,
-                        theme=self.settings.ui.theme,
-                        width=max(40, self.size.width - 6),
-                    )
-                )
             self._update_status(view.status.title())
             return
         if event.kind == "usage":
@@ -1654,6 +2117,47 @@ class DeepyTuiApp(App[None]):
         try:
             await transcript.mount(block)
         except MountError:
+            return
+        self._scroll_transcript_to_end(force=anchored)
+
+    async def _replace_or_append_block(self, old_block: Widget | None, new_block: Widget) -> None:
+        if old_block is None or not isinstance(old_block.parent, Widget):
+            await self._append_block(new_block)
+            return
+        transcript = old_block.parent
+        anchored = self._transcript_is_anchored_now()
+        try:
+            await transcript.mount(new_block, before=old_block)
+        except MountError:
+            await self._append_block(new_block)
+            return
+        await old_block.remove()
+        self._scroll_transcript_to_end(force=anchored)
+
+    async def _replace_or_prioritize_diff_block(
+        self,
+        old_block: Widget | None,
+        new_block: Widget,
+    ) -> None:
+        assistant_block = self._assistant_block
+        if assistant_block is not None and isinstance(assistant_block.parent, Widget):
+            if old_block is None or not _widget_appears_before(old_block, assistant_block):
+                await self._insert_block_before(assistant_block, new_block)
+                if old_block is not None and isinstance(old_block.parent, Widget):
+                    await old_block.remove()
+                return
+        await self._replace_or_append_block(old_block, new_block)
+
+    async def _insert_block_before(self, anchor: Widget, block: Widget) -> None:
+        parent = anchor.parent
+        if not isinstance(parent, Widget):
+            await self._append_block(block)
+            return
+        anchored = self._transcript_is_anchored_now()
+        try:
+            await parent.mount(block, before=anchor)
+        except MountError:
+            await self._append_block(block)
             return
         self._scroll_transcript_to_end(force=anchored)
 
@@ -1720,6 +2224,7 @@ class DeepyTuiApp(App[None]):
             self._assistant_block = AssistantBlock(self.state.assistant_buffer)
             await self._append_block(self._assistant_block)
             return
+        self._assistant_block.set_active(False)
         self._assistant_block.update_markdown(self.state.assistant_buffer)
         self._scroll_transcript_to_end(force=self._transcript_is_anchored_now())
 
@@ -1730,7 +2235,7 @@ class DeepyTuiApp(App[None]):
             return
         if not force and not self._transcript_is_anchored(transcript):
             self._new_output_available = True
-            self._set_status_bar("New output below")
+            self._set_status_bar("New output ↓")
             return
         self._new_output_available = False
         transcript.scroll_end(animate=False, force=True, x_axis=False)
@@ -1757,7 +2262,11 @@ class DeepyTuiApp(App[None]):
     def _update_status(self, status: str) -> None:
         self.state = set_status(self.state, status)
         self._set_status_bar(status)
-        self.query_one("#side-status", Static).update(
+        try:
+            side_status = self.query_one("#side-status", Static)
+        except NoMatches:
+            return
+        side_status.update(
             _format_tui_side_status(
                 self.project_root,
                 self.settings,
@@ -1770,8 +2279,8 @@ class DeepyTuiApp(App[None]):
 
     def _set_status_bar(self, status: str) -> None:
         display = (
-            f"{status} · New output below"
-            if self._new_output_available and status != "New output below"
+            f"{status} · New output ↓"
+            if self._new_output_available and status != "New output ↓"
             else status
         )
         try:
@@ -1781,13 +2290,14 @@ class DeepyTuiApp(App[None]):
         status_bar.update_status(display, self._status_context())
 
     def _status_context(self) -> str:
-        return _build_tui_status_context(
+        context = _build_tui_status_context(
             self.state.session_id,
             project_root=self.project_root,
             settings=self.settings,
             background_tasks=self.background_tasks,
             audit_state=self.audit_state,
         )
+        return context
 
     def action_cycle_audit_mode(self) -> None:
         mode = self.audit_state.cycle()
@@ -1805,6 +2315,7 @@ class DeepyTuiApp(App[None]):
         self._record_session_cost_end()
         self.exit_summary_text = self._build_exit_summary_text()
         self._cleanup_background_tasks()
+        asyncio.create_task(self.mcp_runtime.cleanup())
         self.exit()
 
     def _cleanup_background_tasks(self) -> None:
@@ -1890,6 +2401,8 @@ class DeepyTuiApp(App[None]):
             self._update_status("Idle" if not self.state.busy else "Running")
 
     def action_interrupt_or_focus_prompt(self) -> None:
+        if self._cancel_active_interaction():
+            return
         if self.state.busy:
             self.state = request_interrupt(self.state)
             self._update_status("Interrupt requested")
@@ -1976,6 +2489,11 @@ def _is_failed_tool_output(item: dict[str, Any]) -> bool:
     if _item_type(item) != "function_call_output" and _role(item) != "tool":
         return False
     return parse_tool_output(_tool_output_text(item)).ok is False
+
+
+def _is_local_command_tool_output(view: Any) -> bool:
+    metadata = getattr(view, "metadata", None) or {}
+    return getattr(view, "name", "") == "shell" and bool(metadata.get("localCommandMode"))
 
 
 def _visible_item_text(item: dict[str, Any]) -> str:
@@ -2176,9 +2694,15 @@ def _reset_config_validation_error(result: ResetConfigResult) -> str:
         return "Base URL is required."
     if not result.theme:
         return "Theme is required."
+    if result.interface not in {"classic", "modern"}:
+        return "Usage: UI must be classic|modern"
     if not is_valid_ui_theme(result.theme):
         return "Usage: theme must be dark|light"
     return ""
+
+
+def _format_tui_ui_interface_label(interface: str) -> str:
+    return "Modern UI" if interface == "modern" else "Classic UI"
 
 
 def _build_tui_status_context(
@@ -2471,6 +2995,24 @@ def _format_market_skills(skills: list[MarketSkill]) -> str:
         version = f" version={skill.version}" if skill.version else ""
         lines.append(f"- {skill.name}{marker}{version}{description}")
     return "\n".join(lines)
+
+
+def _tool_output_diff_text(output: str) -> str | None:
+    view = parse_tool_output(output)
+    if view.ok is not True or view.name not in {"Write", "Update"}:
+        return None
+    return view.diff_preview or view.diff
+
+
+def _widget_appears_before(left: Widget, right: Widget) -> bool:
+    parent = left.parent
+    if parent is None or parent is not right.parent:
+        return False
+    siblings = list(parent.children)
+    try:
+        return siblings.index(left) < siblings.index(right)
+    except ValueError:
+        return False
 
 
 def _now_ms() -> int:

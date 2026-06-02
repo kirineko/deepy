@@ -39,11 +39,16 @@ from deepy.config import (
     is_valid_thinking_mode_for_provider,
     load_settings,
     provider_info_for,
+    ui_interface_from_selection,
+    ui_interface_number,
+    ui_setup_from_selection,
+    ui_setup_number,
     ui_theme_from_selection,
     ui_theme_number,
     update_config_input_suggestions_enabled,
     update_config_model_settings,
     update_config_theme,
+    update_config_ui_interface,
     update_config_view_mode,
     write_config,
 )
@@ -664,7 +669,9 @@ def run_interactive(
                     settings = load_settings(settings.path) if settings.path is not None else settings
                     input_suggestions.set_enabled(settings.ui.input_suggestions_enabled)
                     image_attachments.supports_image_input = supports_image_input(settings)
-                if slash.name in {"skills", "theme", "reset", "model", "input-suggestion", "view"}:
+                if slash.name == "ui":
+                    settings = load_settings(settings.path) if settings.path is not None else settings
+                if slash.name in {"skills", "theme", "ui", "reset", "model", "input-suggestion", "view"}:
                     prompt_session = _create_interactive_prompt_session(
                         root,
                         palette,
@@ -965,6 +972,7 @@ def _run_once_with_status(
     interrupt_requested = threading.Event()
     suspend_interrupt_watcher = threading.Event()
     main_thread_bridge = _MainThreadCallbackBridge()
+    approved_preflight_diffs: set[str] = set()
 
     def should_interrupt() -> bool:
         if interrupt_requested.is_set():
@@ -992,6 +1000,7 @@ def _run_once_with_status(
             footer=footer,
             output_lock=getattr(status, "output_lock", None),
             view_mode=view_mode,
+            approved_preflight_diffs=approved_preflight_diffs,
         )
         stop_status_refresh = threading.Event()
         status_thread: threading.Thread | None = None
@@ -1012,6 +1021,7 @@ def _run_once_with_status(
                 status_thread_getter=lambda: status_thread,
                 suspend_interrupt_watcher=suspend_interrupt_watcher,
                 main_thread_bridge=main_thread_bridge,
+                approved_preflight_diffs=approved_preflight_diffs,
             )
 
         try:
@@ -1053,6 +1063,7 @@ def _terminal_approval_resolver(
     status_thread_getter: Callable[[], threading.Thread | None] | None = None,
     suspend_interrupt_watcher: threading.Event | None = None,
     main_thread_bridge: _MainThreadCallbackBridge | None = None,
+    approved_preflight_diffs: set[str] | None = None,
 ) -> Callable[[list[PendingApproval]], list[ApprovalDecision]]:
     active_palette = palette or DARK_PALETTE
 
@@ -1069,6 +1080,7 @@ def _terminal_approval_resolver(
                     stop_status_refresh=stop_status_refresh,
                     status_thread_getter=status_thread_getter,
                     suspend_interrupt_watcher=suspend_interrupt_watcher,
+                    approved_preflight_diffs=approved_preflight_diffs,
                 )
 
             approved = main_thread_bridge.call(decide) if main_thread_bridge is not None else decide()
@@ -1095,6 +1107,7 @@ def _collect_terminal_approval_decision(
     stop_status_refresh: threading.Event | None,
     status_thread_getter: Callable[[], threading.Thread | None] | None,
     suspend_interrupt_watcher: threading.Event | None,
+    approved_preflight_diffs: set[str] | None = None,
 ) -> bool:
     if suspend_interrupt_watcher is not None:
         suspend_interrupt_watcher.set()
@@ -1103,6 +1116,12 @@ def _collect_terminal_approval_decision(
             status=status,
             stop_status_refresh=stop_status_refresh,
             status_thread_getter=status_thread_getter,
+        )
+        preflight_diff = _print_preflight_diff(
+            item,
+            console=console,
+            palette=palette,
+            project_root=project_root,
         )
         _, can_expand = _approval_panel_state(
             item,
@@ -1122,10 +1141,42 @@ def _collect_terminal_approval_decision(
                 width=console.width,
             ),
         )
-        return choice == AUDIT_APPROVAL_APPROVE
+        approved = choice == AUDIT_APPROVAL_APPROVE
+        if approved and preflight_diff is not None and approved_preflight_diffs is not None:
+            approved_preflight_diffs.add(preflight_diff)
+        if item.preflight is not None and not approved:
+            console.print(Text("Proposed change rejected.", style=palette.warning))
+        return approved
     finally:
         if suspend_interrupt_watcher is not None:
             suspend_interrupt_watcher.clear()
+
+
+def _print_preflight_diff(
+    item: PendingApproval,
+    *,
+    console: Console,
+    palette: UiPalette,
+    project_root: str | Path | None,
+) -> str | None:
+    if item.preflight is None:
+        return None
+    output = json_utils.dumps(item.preflight)
+    diff_text = _tool_output_diff_text(output)
+    if diff_text is None:
+        return None
+    diff = render_tool_diff_preview(
+        output,
+        max_lines=120,
+        palette=palette,
+        width=console.width,
+        project_root=str(project_root) if project_root is not None else None,
+    )
+    if diff is None:
+        return None
+    console.print(_status_line("Proposed Change", palette.warning))
+    console.print(diff)
+    return diff_text
 
 
 def _prepare_terminal_approval_prompt(
@@ -1614,6 +1665,7 @@ class TerminalStreamRenderer:
         footer: StatusFooter | None = None,
         output_lock: threading.RLock | None = None,
         view_mode: str = "concise",
+        approved_preflight_diffs: set[str] | None = None,
     ) -> None:
         self.console = console
         self.project_root = project_root
@@ -1633,6 +1685,7 @@ class TerminalStreamRenderer:
         self.stream_status_updated_at = 0.0
         self.activity_state = ""
         self.output_lock = output_lock
+        self.approved_preflight_diffs = approved_preflight_diffs
 
     def __call__(self, event: DeepyStreamEvent) -> None:
         if self.output_lock is None:
@@ -1647,6 +1700,7 @@ class TerminalStreamRenderer:
                 pending_tool_calls=self.pending_tool_calls,
                 reasoning_sink=self,
                 palette=self.palette,
+                approved_preflight_diffs=self.approved_preflight_diffs,
             )
             return
         with self.output_lock:
@@ -1661,6 +1715,7 @@ class TerminalStreamRenderer:
                 pending_tool_calls=self.pending_tool_calls,
                 reasoning_sink=self,
                 palette=self.palette,
+                approved_preflight_diffs=self.approved_preflight_diffs,
             )
 
     def add_reasoning(self, text: str) -> None:
@@ -1823,6 +1878,7 @@ def _handle_slash_command(
         console.print("/input-suggestion Toggle input suggestions")
         console.print("/status     Show status, usage, and DeepSeek balance")
         console.print("/theme      Show or change UI theme")
+        console.print("/ui         Show or change Classic/Modern UI")
         console.print("/reset      Delete config and run setup again")
         console.print("/sessions   List project sessions")
         console.print("/resume ID  Resume a session")
@@ -1946,6 +2002,8 @@ def _handle_slash_command(
             palette,
             input_func=input_func,
         )
+    if command.name == "ui":
+        return _handle_ui_command(command, console, current_session_id, settings, palette, input_func=input_func)
     if command.name == "reset":
         return _handle_reset_command(console, current_session_id, settings, palette)
     if command.name == "skills":
@@ -2338,6 +2396,38 @@ def _handle_theme_command(
     update_config_theme(settings.path, theme)
     console.print(f"Saved UI theme: {theme}")
     console.print("Restart Deepy to apply the theme everywhere.")
+    return current_session_id
+
+
+def _handle_ui_command(
+    command: SlashCommand,
+    console: Console,
+    current_session_id: str | None,
+    settings: Settings,
+    palette: UiPalette,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    interface = command.argument.strip().lower()
+    if not interface:
+        console.print(f"Current UI: {settings.ui.interface}")
+        selected = _prompt_for_ui_selection(
+            settings.ui.interface,
+            console=console,
+            input_func=input_func,
+        )
+        if selected is None:
+            console.print("UI unchanged.")
+            return current_session_id
+        interface = selected
+    if interface not in {"classic", "modern"}:
+        console.print(f"[{palette.error}]Usage:[/] /ui classic|modern")
+        return current_session_id
+    if settings.path is None:
+        console.print(f"[{palette.error}]Cannot persist UI: config path is unknown.[/]")
+        return current_session_id
+    update_config_ui_interface(settings.path, interface)
+    console.print(f"Saved UI: {_format_ui_interface_label(interface)}")
+    console.print("Restart Deepy to enter the selected UI.")
     return current_session_id
 
 
@@ -2751,6 +2841,39 @@ def _print_theme_choices(console: Console) -> None:
         console.print(f"{index}. {label}")
 
 
+def _print_ui_choices(console: Console) -> None:
+    console.print("Available UI modes:")
+    console.print("1. Classic UI + dark theme  Default terminal UI")
+    console.print("2. Classic UI + light theme")
+    console.print("3. Modern UI + dark theme   Textual UI")
+    console.print("4. Modern UI + light theme  Textual UI")
+
+
+def _format_ui_interface_label(interface: str) -> str:
+    return "Modern UI" if interface == "modern" else "Classic UI"
+
+
+def _prompt_for_ui_selection(
+    default: str,
+    *,
+    console: Console,
+    input_func: InputFunc | None = None,
+) -> str | None:
+    if input_func is None:
+        console.print("Available UIs:")
+        console.print("1. Classic UI")
+        console.print("2. Modern UI")
+        value = Prompt.ask("UI number or name", default=ui_interface_number(default))
+    else:
+        console.print("Available UIs:")
+        console.print("1. Classic UI")
+        console.print("2. Modern UI")
+        value = input_func("UI number or name").strip()
+    if not value:
+        return None
+    return ui_interface_from_selection(value, default=default)
+
+
 def _prompt_for_theme_selection(
     default: str,
     *,
@@ -2866,7 +2989,11 @@ def _run_interactive_config_setup(
         input_func=lambda label: _prompt_config_value(label, default=""),
         setup_flow=True,
     ) or thinking_default
-    theme = _prompt_theme_config_value(default=previous.ui.theme, console=console)
+    interface, theme = _prompt_ui_config_choice(
+        default_interface=previous.ui.interface,
+        default_theme=previous.ui.theme,
+        console=console,
+    )
     write_config(
         config_path,
         api_key=api_key,
@@ -2875,6 +3002,7 @@ def _run_interactive_config_setup(
         base_url=base_url,
         thinking_mode=thinking_mode,
         theme=theme,
+        interface=interface,
     )
 
 
@@ -2882,6 +3010,24 @@ def _prompt_theme_config_value(*, default: str, console: Console) -> str:
     _print_theme_choices(console)
     value = _prompt_config_value("UI theme number", default=ui_theme_number(default))
     return ui_theme_from_selection(value, default=default)
+
+
+def _prompt_ui_config_choice(
+    *,
+    default_interface: str,
+    default_theme: str,
+    console: Console,
+) -> tuple[str, str]:
+    _print_ui_choices(console)
+    value = _prompt_config_value(
+        "UI number",
+        default=ui_setup_number(default_interface, default_theme),
+    )
+    return ui_setup_from_selection(
+        value,
+        default_interface=default_interface,
+        default_theme=default_theme,
+    )
 
 
 def _prompt_config_value(label: str, *, default: str, is_password: bool = False) -> str:
@@ -3967,6 +4113,7 @@ def _print_stream_event(
     pending_tool_calls: dict[str, ToolCallDisplay] | None = None,
     reasoning_sink: TerminalStreamRenderer | None = None,
     palette: UiPalette | None = None,
+    approved_preflight_diffs: set[str] | None = None,
 ) -> None:
     palette = palette or DARK_PALETTE
     if event.kind in {"text_delta", "message"}:
@@ -4018,12 +4165,20 @@ def _print_stream_event(
             if _is_audit_rejection_tool_output(event.text, view)
             else format_tool_progress_summary(call_summary, event.text)
         )
-        diff = render_tool_diff_preview(
+        diff_text = _tool_output_diff_text(event.text)
+        suppress_preflight_diff = (
+            diff_text is not None
+            and approved_preflight_diffs is not None
+            and diff_text in approved_preflight_diffs
+        )
+        diff = None if suppress_preflight_diff else render_tool_diff_preview(
             event.text,
             palette=palette,
             width=console.width,
             project_root=project_root,
         )
+        if suppress_preflight_diff and diff_text is not None and approved_preflight_diffs is not None:
+            approved_preflight_diffs.discard(diff_text)
         if not should_omit_success_summary(view, diff):
             console.print(_status_line(summary, tool_status_style(view, palette)))
         if _should_print_tool_output_debug(view):
@@ -4053,6 +4208,13 @@ def _stream_event_writes_terminal(event: DeepyStreamEvent) -> bool:
     if event.kind == "tool_call":
         return bool((event.name or "").startswith("subagent_"))
     return event.kind in {"tool_output", "status"}
+
+
+def _tool_output_diff_text(output: str) -> str | None:
+    view = parse_tool_output(output)
+    if view.ok is not True:
+        return None
+    return view.diff_preview or view.diff
 
 
 def _is_audit_rejection_tool_output(output: str, view: ToolOutputView) -> bool:

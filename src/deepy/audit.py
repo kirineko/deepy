@@ -139,6 +139,7 @@ class PendingApproval:
     agent_name: str = ""
     action_kind: str = "tool"
     server_name: str = ""
+    preflight: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

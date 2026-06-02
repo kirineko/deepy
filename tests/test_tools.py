@@ -82,6 +82,10 @@ def update_v3(
     return runtime.update(request)
 
 
+def preflight_v3(runtime: ToolRuntime, name: str, arguments: dict[str, object]) -> dict:
+    return runtime.preflight_file_mutation(name, json.dumps(arguments))
+
+
 def repeat_x_command(count: int) -> str:
     return f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * {count})\""
 
@@ -806,6 +810,25 @@ def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path
     assert target.read_bytes() == b"changed\r\n"
 
 
+def test_write_preflight_plans_diff_without_writing_file(tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("old\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    planned = preflight_v3(
+        runtime,
+        "Write",
+        {"path": "existing.txt", "content": "changed\n", "overwrite": True},
+    )
+
+    assert planned["ok"] is True
+    assert planned["metadata"]["preflight"] is True
+    assert target.read_text(encoding="utf-8") == "old\n"
+
+    committed = decode(runtime.write_v3("existing.txt", "changed\n", overwrite=True))
+    assert planned["metadata"]["diff"] == committed["metadata"]["diff"]
+
+
 def test_write_v3_rejects_stale_existing_file_after_read(tmp_path):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
@@ -820,6 +843,23 @@ def test_write_v3_rejects_stale_existing_file_after_read(tmp_path):
     assert denied["metadata"]["error_code"] == "stale_snapshot"
     assert "read" in denied["metadata"]["recovery"].lower()
     assert target.read_text(encoding="utf-8") == "external\n"
+
+
+def test_update_preflight_reuses_plan_without_writing_file(tmp_path):
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+
+    request = {"path": "app.py", "old": "value = 1", "new": "value = 2"}
+    planned = preflight_v3(runtime, "Update", request)
+
+    assert planned["ok"] is True
+    assert planned["metadata"]["preflight"] is True
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
+
+    committed = decode(runtime.update(request))
+    assert planned["metadata"]["diff"] == committed["metadata"]["diff"]
+    assert target.read_text(encoding="utf-8") == "value = 2\n"
 
 
 def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path):

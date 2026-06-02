@@ -22,9 +22,12 @@ from .config import (
     provider_info_for,
     settings_to_toml_dict,
     thinking_modes_for_provider,
+    ui_setup_from_selection,
+    ui_setup_number,
     ui_theme_from_selection,
     ui_theme_number,
     update_config_theme,
+    update_config_ui_choice,
     write_config,
 )
 from .config.settings import DEFAULT_UI_THEME, UI_THEMES
@@ -86,7 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--session", help="Resume an existing session id.")
     run_parser.add_argument("--skill", action="append", default=[], help="Load a skill by name.")
 
-    subparsers.add_parser("tui", help="Start the experimental Textual TUI.")
+    subparsers.add_parser("tui", help="Start the Modern UI.")
 
     sessions_parser = subparsers.add_parser("sessions", help="Inspect project sessions.")
     sessions_sub = sessions_parser.add_subparsers(dest="sessions_command", required=True)
@@ -131,6 +134,7 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
         base_url=args.base_url,
         thinking_mode=args.thinking,
         theme=args.theme,
+        interface="classic",
     )
     print(f"Wrote {config_path}")
     return 0
@@ -170,7 +174,10 @@ def _run_config_setup(config_path: Path) -> None:
     )
     base_url = _prompt_config_value("Base URL", default=base_default)
     thinking_mode = _prompt_thinking_mode_value(provider, default=existing.model.reasoning_mode)
-    theme = _prompt_theme_value(default=existing.ui.theme)
+    interface, theme = _prompt_ui_choice_value(
+        default_interface=existing.ui.interface,
+        default_theme=existing.ui.theme,
+    )
     _write_config(
         config_path,
         api_key=api_key,
@@ -179,6 +186,7 @@ def _run_config_setup(config_path: Path) -> None:
         base_url=base_url,
         thinking_mode=thinking_mode,
         theme=theme,
+        interface=interface,
     )
 
 
@@ -389,6 +397,27 @@ def _prompt_theme_value(*, default: str = DEFAULT_UI_THEME) -> str:
     return ui_theme_from_selection(value, default=default)
 
 
+def _prompt_ui_choice_value(
+    *,
+    default_interface: str = "classic",
+    default_theme: str = DEFAULT_UI_THEME,
+) -> tuple[str, str]:
+    print("UI:")
+    print("1. Classic UI + dark theme  Default terminal UI")
+    print("2. Classic UI + light theme")
+    print("3. Modern UI + dark theme   Textual UI")
+    print("4. Modern UI + light theme  Textual UI")
+    value = _prompt_config_value(
+        "UI number",
+        default=ui_setup_number(default_interface, default_theme),
+    )
+    return ui_setup_from_selection(
+        value,
+        default_interface=default_interface,
+        default_theme=default_theme,
+    )
+
+
 def _write_config(
     config_path: Path,
     *,
@@ -397,6 +426,7 @@ def _write_config(
     model: str,
     base_url: str | None,
     theme: str,
+    interface: str,
     thinking_mode: str | None,
 ) -> None:
     write_config(
@@ -406,6 +436,7 @@ def _write_config(
         model=model,
         base_url=base_url,
         theme=theme,
+        interface=interface,
         thinking_mode=thinking_mode,
     )
 
@@ -670,19 +701,33 @@ def _ensure_interactive_settings(args: argparse.Namespace) -> Settings:
             raise SystemExit(1)
         settings = load_settings(args.config)
     if settings.path is not None and not settings.ui.theme_configured:
-        theme = _prompt_theme_value(default=settings.ui.theme)
-        update_config_theme(settings.path, theme)
+        interface, theme = _prompt_ui_choice_value(
+            default_interface=settings.ui.interface,
+            default_theme=settings.ui.theme,
+        )
+        update_config_ui_choice(settings.path, interface=interface, theme=theme)
         settings = load_settings(args.config)
     return settings
 
 
 def _cmd_tui(args: argparse.Namespace) -> int:
     if not sys.stdin.isatty():
-        print("experimental TUI requires a TTY; use `deepy` for the stable terminal UI.", file=sys.stderr)
+        print("Modern UI requires a TTY; use `deepy run` for non-interactive prompts.", file=sys.stderr)
         return 1
     from deepy.tui import run_tui
 
     return run_tui(_ensure_interactive_settings(args), project_root=Path.cwd())
+
+
+def _cmd_interactive(args: argparse.Namespace) -> int:
+    settings = _ensure_interactive_settings(args)
+    if settings.ui.interface == "modern":
+        if not sys.stdin.isatty():
+            raise RuntimeError("Modern UI requires a TTY.")
+        from deepy.tui import run_tui
+
+        return run_tui(settings, project_root=Path.cwd())
+    return run_interactive(settings)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -715,7 +760,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not sys.stdin.isatty():
         parser.error("interactive mode requires a TTY; use `deepy doctor` or `deepy config show`.")
-    return run_interactive(_ensure_interactive_settings(args))
+    return _cmd_interactive(args)
 
 
 if __name__ == "__main__":
