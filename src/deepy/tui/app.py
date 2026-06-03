@@ -705,6 +705,9 @@ class DeepyTuiApp(App[None]):
         self._todo_text = ""
         self._stream_tokens = 0
         self._local_command_sequence = 0
+        self._status_session_entry: SessionEntry | None = None
+        self._status_session_entry_id: str | None = None
+        self._status_session_entry_loaded = False
         self.background_tasks = BackgroundTaskManager()
         self.mcp_runtime = DeepyMcpRuntime(
             settings,
@@ -745,6 +748,7 @@ class DeepyTuiApp(App[None]):
         )
         self._scroll_transcript_to_end(force=True)
         self.query_one("#prompt-input", PromptTextArea).focus()
+        self._refresh_status_session_entry()
         self._update_status("Idle")
         if self.guide_missing_config and not self.settings.model.api_key:
             self.call_after_refresh(self._start_initial_setup)
@@ -1106,6 +1110,7 @@ class DeepyTuiApp(App[None]):
         self.state = set_session_id(set_pending_questions(reset_turn_buffers(self.state), []), None)
         self.controller.reset_session_state()
         self._pending_question_answers.clear()
+        self._refresh_status_session_entry()
         await self._clear_transcript()
         await self._append_block(InfoBlock("Started a new TUI session."))
         self._update_status("New session")
@@ -1125,6 +1130,7 @@ class DeepyTuiApp(App[None]):
             await self._append_block(ErrorBlock(f"Session not found: {target}"))
             return
         self.state = set_session_id(self.state, target)
+        self._refresh_status_session_entry()
         await self._restore_transcript(target)
         self._update_status(f"Resumed {target}")
 
@@ -1178,6 +1184,7 @@ class DeepyTuiApp(App[None]):
                 f"preserved {result.preserved_item_count} items."
             )
         )
+        self._refresh_status_session_entry()
         self._update_status("Idle")
 
     async def _theme_command(self, argument: str) -> None:
@@ -2014,6 +2021,7 @@ class DeepyTuiApp(App[None]):
         await self._flush_assistant_block()
         self.state = set_session_id(self.state, summary.session_id)
         self._record_pending_session_cost_start(summary.session_id)
+        self._refresh_status_session_entry()
         self.state = set_usage(self.state, summary.usage)
         self.state = set_pending_questions(self.state, summary.pending_questions)
         self.state = set_busy(self.state, False, "Idle")
@@ -2626,6 +2634,7 @@ class DeepyTuiApp(App[None]):
 
     def _update_status(self, status: str) -> None:
         self.state = set_status(self.state, status)
+        session_entry = self._cached_status_session_entry()
         self._set_status_bar(status)
         try:
             side_status = self.query_one("#side-status", Static)
@@ -2639,6 +2648,7 @@ class DeepyTuiApp(App[None]):
                 self.controller.loaded_skill_names,
                 self._todo_text,
                 audit_state=self.audit_state,
+                session_entry=session_entry,
             )
         )
 
@@ -2661,8 +2671,22 @@ class DeepyTuiApp(App[None]):
             settings=self.settings,
             background_tasks=self.background_tasks,
             audit_state=self.audit_state,
+            session_entry=self._cached_status_session_entry(),
         )
         return context
+
+    def _cached_status_session_entry(self) -> SessionEntry | None:
+        if (
+            not self._status_session_entry_loaded
+            or self._status_session_entry_id != self.state.session_id
+        ):
+            self._refresh_status_session_entry()
+        return self._status_session_entry
+
+    def _refresh_status_session_entry(self) -> None:
+        self._status_session_entry_id = self.state.session_id
+        self._status_session_entry_loaded = True
+        self._status_session_entry = _tui_session_entry(self.project_root, self.state.session_id)
 
     def action_cycle_audit_mode(self) -> None:
         mode = self.audit_state.cycle()
@@ -2734,6 +2758,7 @@ class DeepyTuiApp(App[None]):
             pass
         finally:
             self._pending_session_cost_start = None
+            self._refresh_status_session_entry()
 
     def _record_session_cost_end(self) -> None:
         session_id = self.state.session_id
@@ -2751,6 +2776,7 @@ class DeepyTuiApp(App[None]):
             DeepySession.open(self.project_root, session_id).record_session_cost_end(snapshot)
         except Exception:
             return
+        self._refresh_status_session_entry()
 
     def _session_cost_has_start(self, session_id: str) -> bool:
         return any(
@@ -3195,6 +3221,9 @@ def _format_tui_ui_interface_label(interface: str) -> str:
     return "Modern UI" if interface == "modern" else "Classic UI"
 
 
+_SESSION_ENTRY_UNSET = object()
+
+
 def _build_tui_status_context(
     session_id: str | None,
     *,
@@ -3202,6 +3231,7 @@ def _build_tui_status_context(
     settings: Settings,
     background_tasks: BackgroundTaskManager | None = None,
     audit_state: AuditModeState | None = None,
+    session_entry: Any = _SESSION_ENTRY_UNSET,
 ) -> str:
     segments = [
         f"provider {settings.model.provider}",
@@ -3218,7 +3248,8 @@ def _build_tui_status_context(
         running = background_tasks.running_count()
         if running:
             segments.append(f"bg {running}")
-    session_entry = _tui_session_entry(project_root, session_id)
+    if session_entry is _SESSION_ENTRY_UNSET:
+        session_entry = _tui_session_entry(project_root, session_id)
     segments.append(
         _format_tui_context_window_status(
             session_entry,
@@ -3247,8 +3278,10 @@ def _format_tui_side_status(
     todo_text: str,
     *,
     audit_state: AuditModeState | None = None,
+    session_entry: Any = _SESSION_ENTRY_UNSET,
 ) -> str:
-    session_entry = _tui_session_entry(project_root, session_id)
+    if session_entry is _SESSION_ENTRY_UNSET:
+        session_entry = _tui_session_entry(project_root, session_id)
     lines = [
         f"Project: {project_root}",
         f"Provider: {settings.model.provider}",
@@ -3297,7 +3330,13 @@ def _format_tui_cache_status(session_entry: Any | None) -> str:
 def _tui_session_entry(project_root: Path, session_id: str | None) -> Any | None:
     if not session_id:
         return None
-    return next((entry for entry in list_session_entries(project_root) if entry.id == session_id), None)
+    try:
+        return next(
+            (entry for entry in list_session_entries(project_root) if entry.id == session_id),
+            None,
+        )
+    except Exception:
+        return None
 
 
 def _configured_mcp_server_count(settings: Settings, project_root: Path) -> int:

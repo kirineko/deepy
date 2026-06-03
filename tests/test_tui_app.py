@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import threading
 from collections.abc import Callable
@@ -2126,6 +2127,103 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         assert "Cache: gen 2" in app.query_one("#side-status").content
         assert "prefix changed: tools" in app.query_one("#side-status").content
         app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+def test_tui_status_context_falls_back_when_session_metadata_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_entries(project_root):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("deepy.tui.app.list_session_entries", fail_entries)
+    monkeypatch.setattr(
+        "deepy.tui.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+
+    context = tui_app._build_tui_status_context(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(path=tmp_path / "config.toml"),
+    )
+
+    assert "ctx unknown/" in context
+    assert "cache --" in context
+
+
+def test_tui_side_status_falls_back_when_session_metadata_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_entries(project_root):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("deepy.tui.app.list_session_entries", fail_entries)
+
+    side = tui_app._format_tui_side_status(
+        tmp_path,
+        Settings(path=tmp_path / "config.toml"),
+        "s1",
+        ["manual"],
+        "",
+    )
+
+    assert "Session: s1" in side
+    assert "Cache: unknown" in side
+    assert "Skills: manual" in side
+
+
+@pytest.mark.asyncio
+async def test_tui_stream_status_updates_reuse_cached_session_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry = SimpleNamespace(
+        id="s1",
+        latest_context_window_tokens=100,
+        usage=None,
+        cache_prefix_generation=0,
+        cache_break_reason=None,
+        cache_usage={"hit_tokens": 1, "miss_tokens": 1},
+    )
+    calls = 0
+
+    def list_entries(project_root):
+        nonlocal calls
+        calls += 1
+        return [entry]
+
+    monkeypatch.setattr("deepy.tui.app.list_session_entries", list_entries)
+    monkeypatch.setattr(
+        "deepy.tui.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    app = DeepyTuiApp(settings=Settings(path=tmp_path / "config.toml"), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.state = app.state.__class__(session_id="s1")
+        app._refresh_status_session_entry()
+        assert calls == 1
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="hello"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="thinking"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="raw_response", text="raw"))
+        await app._handle_stream_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="shell",
+                payload={"call_id": "call-1", "arguments": "{}"},
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert calls == 1
+        left = str(app.query_one("#status-left", Label).content)
+        assert "ctx 100/" in left
+        assert "cache 50%" in left
         app.exit()
 
 
