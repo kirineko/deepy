@@ -1,6 +1,6 @@
 [project]
 name = "deepy-cli"
-version = "0.2.28"
+version = "0.2.29"
 description = "Deepy - Vibe coding for DeepSeek models in your terminal"
 readme = "README.md"
 authors = [
