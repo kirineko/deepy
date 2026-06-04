@@ -22,7 +22,7 @@ from textual.widgets.option_list import Option
 import deepy.ui.modern.app as tui_app
 import deepy.ui.modern.runner as tui_runner
 from deepy.audit import AuditConfig, AuditMode, PendingApproval
-from deepy.config import ModelConfig, Settings, UiConfig
+from deepy.config import McpConfig, ModelConfig, Settings, UiConfig
 from deepy.config import load_settings
 from deepy.llm.events import DeepyStreamEvent
 from deepy.llm.runner import RunSummary
@@ -4275,6 +4275,85 @@ async def test_tui_mcp_command_prints_runtime_tools_to_transcript(tmp_path) -> N
 
         assert not isinstance(app.screen, InfoScreen)
         assert any("MCP servers:" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+class _FakeMcpServerForTui:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _patch_mcp_runtime_with_gated_connect_once(
+    runtime,
+    *,
+    gate: asyncio.Event,
+    entered: asyncio.Event,
+) -> _FakeMcpServerForTui:
+    server = _FakeMcpServerForTui("tavily")
+    definition = runtime.definitions[0]
+
+    async def gated_connect_once() -> None:
+        entered.set()
+        await gate.wait()
+        runtime._definitions_by_server[server] = definition
+        runtime._statuses[definition.name] = McpServerStatus(
+            name=definition.name,
+            transport=definition.transport,
+            source=definition.source,
+            state="active",
+            tool_count=1,
+            tools=("mcp_tavily__tavily_search",),
+        )
+        runtime._manager = SimpleNamespace(active_servers=[server])
+        runtime.connected = True
+
+    runtime._connect_once = gated_connect_once  # type: ignore[method-assign]
+    return server
+
+
+@pytest.mark.asyncio
+async def test_tui_early_prompt_waits_for_mcp_without_cancelling_startup(tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text("[mcp]\nenabled = true\n", encoding="utf-8")
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    gate = asyncio.Event()
+    connect_entered = asyncio.Event()
+    observed_active_servers: list[list[object]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        runtime = kwargs.get("mcp_runtime")
+        observed_active_servers.append(list(runtime.active_servers) if runtime else [])
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(
+            path=config,
+            model=ModelConfig(api_key="sk-test"),
+            mcp=McpConfig(enabled=True),
+        ),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+    server = _patch_mcp_runtime_with_gated_connect_once(
+        app.mcp_runtime,
+        gate=gate,
+        entered=connect_entered,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.05)
+        await _wait_for(pilot, lambda: connect_entered.is_set(), timeout=2.0)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        gate.set()
+        await _wait_for(pilot, lambda: observed_active_servers, timeout=2.0)
+
+        assert observed_active_servers == [[server]]
+        assert app.mcp_runtime.connected is True
         app.exit()
 
 

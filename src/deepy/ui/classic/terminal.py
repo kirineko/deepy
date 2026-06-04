@@ -52,7 +52,7 @@ from deepy.llm.multimodal import (
     format_user_prompt_display,
     supports_image_input,
 )
-from deepy.mcp import DeepyMcpRuntime, format_mcp_status
+from deepy.mcp import DeepyMcpRuntime, format_mcp_status, teardown_mcp_after_startup
 from deepy.prompts.init_agents import build_agents_init_prompt
 from deepy.prompts.rules import has_agents_instructions
 from deepy.sessions import DeepySession, SessionEntry, list_session_entries
@@ -365,9 +365,8 @@ class _McpStartupHandle:
         except Exception:
             self._startup_state.mark_mcp_failed()
 
-    def cancel(self) -> None:
-        if not self._future.done():
-            self._future.cancel()
+    async def teardown(self, mcp_runtime: DeepyMcpRuntime) -> None:
+        await teardown_mcp_after_startup(mcp_runtime, self._future)
 
 
 @dataclass(frozen=True)
@@ -755,9 +754,8 @@ def run_interactive(
             )
     finally:
         _cleanup_background_tasks(output, background_tasks, palette=palette)
-        mcp_startup.cancel()
         try:
-            async_runner.run(mcp_runtime.cleanup())
+            async_runner.run(mcp_startup.teardown(mcp_runtime))
         finally:
             async_runner.close()
 

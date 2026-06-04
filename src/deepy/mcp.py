@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -96,6 +99,9 @@ class DeepyMcpRuntime:
         }
         self.tools: list[McpToolInfo] = []
         self.connected = False
+        self._shutting_down = False
+        self._connect_lock = asyncio.Lock()
+        self._connect_task: asyncio.Task[None] | None = None
 
     @property
     def active_servers(self) -> list[Any]:
@@ -122,15 +128,44 @@ class DeepyMcpRuntime:
     async def connect(self) -> None:
         if self.connected:
             return
-        self.connected = True
-        if not self.settings.mcp.enabled:
+        async with self._connect_lock:
+            if self.connected:
+                return
+            if self._connect_task is None:
+                self._connect_task = asyncio.create_task(self._connect_once())
+            task = self._connect_task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            async with self._connect_lock:
+                if self._connect_task is task and task.done():
+                    self._connect_task = None
+        if self._shutting_down:
+            await self._release_manager_after_cancel()
             return
+
+    async def _await_connect_task(self, task: asyncio.Task[None]) -> None:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    async def _connect_once(self) -> None:
+        if self._shutting_down:
+            return
+        if not self.settings.mcp.enabled:
+            self.connected = True
+            return
+        self._clear_server_registry()
         try:
             servers = self._build_sdk_servers()
         except Exception as exc:
             self._record_connect_failure(exc)
             return
         if not servers:
+            self.connected = True
             return
         try:
             from agents.mcp import MCPServerManager
@@ -143,20 +178,62 @@ class DeepyMcpRuntime:
                 strict=False,
             )
             await self._manager.connect_all()
+            if self._shutting_down:
+                await self._release_manager()
+                return
             self._record_manager_failures()
             await self._collect_active_tools()
+            self.connected = True
+        except asyncio.CancelledError:
+            if not self._shutting_down:
+                await self._release_manager_after_cancel()
+            raise
         except Exception as exc:
             self._record_connect_failure(exc)
-            if self._manager is not None:
-                try:
-                    await self._manager.cleanup_all()
-                except Exception:
-                    pass
-            self._manager = None
+            await self._release_manager()
+
+    def _clear_server_registry(self) -> None:
+        self._definitions_by_server.clear()
+        self._servers_by_name.clear()
+        self.tools = []
+
+    async def _release_manager(self) -> None:
+        manager = self._manager
+        self._manager = None
+        self.connected = False
+        if manager is not None:
+            with suppress(asyncio.CancelledError, Exception):
+                await manager.cleanup_all()
+        self._clear_server_registry()
+
+    async def shutdown(self) -> None:
+        """Cancel an in-flight connect and release MCP resources."""
+        with _quiet_mcp_teardown_logs():
+            self._shutting_down = True
+            task: asyncio.Task[None] | None
+            async with self._connect_lock:
+                task = self._connect_task
+            if task is not None:
+                await self._await_connect_task(task)
+            async with self._connect_lock:
+                if self._connect_task is task:
+                    self._connect_task = None
+            await self._release_manager_after_cancel()
+
+    @staticmethod
+    def _clear_task_cancellation() -> None:
+        task = asyncio.current_task()
+        if task is None:
+            return
+        while task.cancelling() > 0:
+            task.uncancel()
+
+    async def _release_manager_after_cancel(self) -> None:
+        self._clear_task_cancellation()
+        await self._release_manager()
 
     async def cleanup(self) -> None:
-        if self._manager is not None:
-            await self._manager.cleanup_all()
+        await self.shutdown()
 
     def _build_sdk_servers(self) -> list[Any]:
         from agents.mcp import (
@@ -297,6 +374,35 @@ class DeepyMcpRuntime:
                 preferred_web_search_tools=tuple(preferred),
             )
         self.tools = tools
+
+
+async def teardown_mcp_after_startup(
+    mcp_runtime: DeepyMcpRuntime,
+    startup_future: Future[Any],
+) -> None:
+    """Cancel startup connect on the active loop, then release MCP resources."""
+    if not startup_future.done():
+        startup_future.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await asyncio.wrap_future(startup_future)
+    await asyncio.sleep(0)
+    await mcp_runtime.cleanup()
+
+
+@contextmanager
+def _quiet_mcp_teardown_logs():
+    loggers = (
+        logging.getLogger("openai.agents"),
+        logging.getLogger("agents"),
+    )
+    previous_levels = [(logger, logger.level) for logger in loggers]
+    for logger, _ in previous_levels:
+        logger.setLevel(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        for logger, level in previous_levels:
+            logger.setLevel(level)
 
 
 def load_mcp_config(

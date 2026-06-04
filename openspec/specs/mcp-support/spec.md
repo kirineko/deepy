@@ -54,6 +54,14 @@ one-shot model runs.
 - **AND** it SHALL NOT fail the entire Deepy session solely because one MCP
   server failed
 
+#### Scenario: MCP connection attempt is interrupted before completion
+- **WHEN** an in-progress MCP connection attempt is cancelled or fails before it
+  finishes connecting configured servers
+- **THEN** Deepy SHALL NOT leave the MCP runtime permanently marked as connected
+  while no servers are active
+- **AND** a subsequent connection attempt on the same runtime SHALL be able to
+  connect the configured servers successfully
+
 #### Scenario: Interactive mode exits
 - **WHEN** the user exits interactive mode through `/exit`, Ctrl+D confirmation,
   or KeyboardInterrupt
