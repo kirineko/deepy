@@ -370,7 +370,7 @@ async def teardown_mcp_after_startup(
         with suppress(asyncio.CancelledError, Exception):
             await asyncio.wrap_future(startup_future)
     await asyncio.sleep(0)
-    await mcp_runtime.shutdown()
+    await mcp_runtime.cleanup()
 
 
 @contextmanager
