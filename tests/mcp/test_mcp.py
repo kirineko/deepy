@@ -309,6 +309,46 @@ async def test_mcp_runtime_shutdown_cancels_in_flight_connect(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mcp_runtime_connect_waiter_cancel_leaves_shared_task_running(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    gate = asyncio.Event()
+    server = _GatedFakeMcpServer("tavily", gate)
+
+    def build_servers():
+        definition = runtime.definitions[0]
+        runtime._definitions_by_server[server] = definition
+        runtime._statuses[definition.name] = McpServerStatus(
+            name=definition.name,
+            transport=definition.transport,
+            source=definition.source,
+            state="configured",
+        )
+        return [server]
+
+    runtime._build_sdk_servers = build_servers  # type: ignore[method-assign]
+
+    primary = asyncio.create_task(runtime.connect())
+    await asyncio.wait_for(server.entered.wait(), timeout=1.0)
+    secondary = asyncio.create_task(runtime.connect())
+    await asyncio.sleep(0)
+    secondary.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await secondary
+
+    gate.set()
+    await asyncio.wait_for(primary, timeout=1.0)
+
+    assert runtime.connected
+    assert runtime.active_servers == [server]
+    await runtime.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_mcp_runtime_connect_retries_after_cancelled_attempt(tmp_path):
     config = tmp_path / "config.toml"
     (tmp_path / "mcp.json").write_text(

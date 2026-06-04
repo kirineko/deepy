@@ -135,18 +135,15 @@ class DeepyMcpRuntime:
                 self._connect_task = asyncio.create_task(self._connect_once())
             task = self._connect_task
         try:
-            await task
+            await asyncio.shield(task)
         except asyncio.CancelledError:
-            await self._await_connect_task(task)
-            if not self._shutting_down:
-                await self._release_manager()
             raise
         finally:
             async with self._connect_lock:
                 if self._connect_task is task and task.done():
                     self._connect_task = None
         if self._shutting_down:
-            await self._release_manager()
+            await self._release_manager_after_cancel()
             return
 
     async def _await_connect_task(self, task: asyncio.Task[None]) -> None:
@@ -188,7 +185,7 @@ class DeepyMcpRuntime:
             self.connected = True
         except asyncio.CancelledError:
             if not self._shutting_down:
-                await self._release_manager()
+                await self._release_manager_after_cancel()
             raise
         except Exception as exc:
             self._record_connect_failure(exc)
@@ -214,7 +211,19 @@ class DeepyMcpRuntime:
             async with self._connect_lock:
                 if self._connect_task is task:
                     self._connect_task = None
-            await self._release_manager()
+            await self._release_manager_after_cancel()
+
+    @staticmethod
+    def _clear_task_cancellation() -> None:
+        task = asyncio.current_task()
+        if task is None:
+            return
+        while task.cancelling() > 0:
+            task.uncancel()
+
+    async def _release_manager_after_cancel(self) -> None:
+        self._clear_task_cancellation()
+        await self._release_manager()
 
     async def cleanup(self) -> None:
         await self.shutdown()
