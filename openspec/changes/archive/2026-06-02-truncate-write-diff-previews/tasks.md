@@ -1,0 +1,3 @@
+- [x] Update shared diff preview rendering so `Write` uses the same line limit as `Update`.
+- [x] Add regression coverage for large rendered and text `Write` previews.
+- [x] Run focused rendering tests and strict OpenSpec validation.

@@ -12,7 +12,6 @@ wheels/
 
 # Local planning and migration references
 spec/
-openspec/
 .codex/
 .cursor/
 reference/
