@@ -171,9 +171,10 @@ def test_mcp_runtime_collects_active_tools_and_web_search_preference(tmp_path):
     runtime._build_sdk_servers = build_servers  # type: ignore[method-assign]
 
     asyncio.run(runtime.connect())
+    assert runtime.active_servers == [server]
     asyncio.run(runtime.cleanup())
 
-    assert runtime.active_servers == [server]
+    assert runtime.active_servers == []
     assert runtime.preferred_web_search_tools == ["mcp_tavily__tavily_search"]
     assert runtime.statuses[0].state == "active"
     assert runtime.statuses[0].tools == ("mcp_tavily__tavily_search",)
@@ -271,6 +272,88 @@ def test_mcp_runtime_records_failed_server(tmp_path):
     assert "connect failed" in (runtime.statuses[0].error or "")
 
 
+@pytest.mark.asyncio
+async def test_mcp_runtime_shutdown_cancels_in_flight_connect(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    gate = asyncio.Event()
+    server = _GatedFakeMcpServer("tavily", gate)
+
+    def build_servers():
+        definition = runtime.definitions[0]
+        runtime._definitions_by_server[server] = definition
+        runtime._statuses[definition.name] = McpServerStatus(
+            name=definition.name,
+            transport=definition.transport,
+            source=definition.source,
+            state="configured",
+        )
+        return [server]
+
+    runtime._build_sdk_servers = build_servers  # type: ignore[method-assign]
+
+    connect_task = asyncio.create_task(runtime.connect())
+    await asyncio.wait_for(server.entered.wait(), timeout=1.0)
+    await runtime.shutdown()
+    try:
+        await asyncio.wait_for(connect_task, timeout=1.0)
+    except asyncio.CancelledError:
+        pass
+
+    assert not runtime.connected
+    assert runtime.active_servers == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_connect_retries_after_cancelled_attempt(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    server = _FakeMcpServer("tavily")
+    attempts = 0
+    original_connect_once = runtime._connect_once
+
+    async def flaky_connect_once() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise asyncio.CancelledError()
+        await original_connect_once()
+
+    def build_servers():
+        definition = runtime.definitions[0]
+        runtime._definitions_by_server[server] = definition
+        runtime._statuses[definition.name] = McpServerStatus(
+            name=definition.name,
+            transport=definition.transport,
+            source=definition.source,
+            state="configured",
+        )
+        return [server]
+
+    runtime._build_sdk_servers = build_servers  # type: ignore[method-assign]
+    runtime._connect_once = flaky_connect_once  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.connect()
+
+    assert not runtime.connected
+    assert runtime.active_servers == []
+
+    await runtime.connect()
+
+    assert runtime.connected
+    assert runtime.active_servers == [server]
+    await runtime.cleanup()
+
+
 def test_mcp_runtime_degrades_when_sdk_setup_raises(tmp_path):
     config = tmp_path / "config.toml"
     (tmp_path / "mcp.json").write_text(
@@ -325,3 +408,15 @@ class _FakeMcpServer:
 
     async def list_tools(self):
         return [SimpleNamespace(name="tavily_search", description="Search the web")]
+
+
+class _GatedFakeMcpServer(_FakeMcpServer):
+    def __init__(self, name: str, gate: asyncio.Event) -> None:
+        super().__init__(name)
+        self._gate = gate
+        self.entered = asyncio.Event()
+
+    async def connect(self) -> None:
+        self.entered.set()
+        await self._gate.wait()
+

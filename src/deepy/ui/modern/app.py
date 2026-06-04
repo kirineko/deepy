@@ -359,7 +359,12 @@ class DeepyTuiApp(App[None]):
         self._update_status("Idle")
         if self.guide_missing_config and not self.settings.model.api_key:
             self.call_after_refresh(self._start_initial_setup)
-        self.run_worker(self._connect_mcp_runtime(), name="mcp-startup", exclusive=False)
+        self.run_worker(
+            self._connect_mcp_runtime(),
+            name="mcp-startup",
+            group="mcp-startup",
+            exclusive=False,
+        )
 
     async def _connect_mcp_runtime(self) -> None:
         await self.mcp_runtime.connect()
@@ -1584,6 +1589,7 @@ class DeepyTuiApp(App[None]):
         skill_names: list[str],
         image_attachments: list[PromptImageAttachment] | None = None,
     ) -> None:
+        await self.mcp_runtime.connect()
         try:
             summary = await self.run_once(
                 prompt,
@@ -2299,7 +2305,11 @@ class DeepyTuiApp(App[None]):
         self._record_session_cost_end()
         self.exit_summary_text = self._build_exit_summary_text()
         self._cleanup_background_tasks()
-        asyncio.create_task(self.mcp_runtime.cleanup())
+        asyncio.create_task(self._shutdown_mcp_and_exit())
+
+    async def _shutdown_mcp_and_exit(self) -> None:
+        self.workers.cancel_group(self, "mcp-startup")
+        await self.mcp_runtime.shutdown()
         self.exit()
 
     def _cleanup_background_tasks(self) -> None:
