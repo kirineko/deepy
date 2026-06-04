@@ -577,3 +577,4 @@ Deepy SHALL expose image-input support as explicit model capability metadata.
 - **WHEN** a future change adds Kimi K2.6 as a supported model
 - **THEN** Deepy SHALL be able to mark image support through the same capability metadata
 - **AND** it SHALL NOT require a new prompt attachment model
+

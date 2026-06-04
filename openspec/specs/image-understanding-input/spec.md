@@ -100,3 +100,4 @@ Deepy SHALL use OpenAI-compatible multipart content blocks for supported image p
 - **WHEN** a supported image model returns a provider API error for an image request
 - **THEN** Deepy SHALL surface the provider error through the existing model-turn error path
 - **AND** the interactive session SHALL continue
+

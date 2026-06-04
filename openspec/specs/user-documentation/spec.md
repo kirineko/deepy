@@ -157,3 +157,4 @@ claiming that the stable UI has already been removed or replaced.
 - **THEN** docs SHALL reference only existing assets
 - **AND** stale screenshots of the old TUI layout SHALL be removed or clearly
   replaced
+

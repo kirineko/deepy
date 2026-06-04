@@ -53,3 +53,4 @@ Deepy SHALL support explicit skill invocation through `/skill:<skill-name> [requ
 #### Scenario: Invoke skill by slash prefix
 - **WHEN** the user enters `/skill:review summarize this diff`
 - **THEN** Deepy starts a model turn with the `review` skill content and the request `summarize this diff`
+

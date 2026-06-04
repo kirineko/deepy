@@ -84,3 +84,4 @@ without switching the default interactive entrypoint in this change.
 - **WHEN** a later change proposes making Textual the default interactive UI
 - **THEN** that change SHALL define its own OpenSpec proposal, migration plan,
   compatibility behavior, and stable UI removal or deprecation policy
+

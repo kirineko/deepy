@@ -60,3 +60,4 @@ The market service SHALL allow multiple uploaded versions per skill while return
 #### Scenario: Download latest active version
 - **WHEN** a user downloads a skill by name
 - **THEN** the market service returns the latest active uploaded version for that skill
+

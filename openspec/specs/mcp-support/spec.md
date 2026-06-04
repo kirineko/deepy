@@ -206,3 +206,4 @@ Deepy SHALL support exact MCP approval overrides for auto mode.
 - **THEN** Deepy SHALL ignore that approval override for tool execution
 - **AND** status surfaces MAY report that the configured override did not match
   an active tool
+

@@ -459,3 +459,4 @@ Deepy SHALL normalize internal image content blocks to the Chat Completions imag
 #### Scenario: Future Kimi path reuses image normalization
 - **WHEN** a future provider uses the same OpenAI-compatible image-url contract
 - **THEN** Deepy's image normalization SHALL be reusable without changing prompt UI state
+

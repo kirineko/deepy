@@ -235,3 +235,4 @@ that predicts the mutation diff without committing side effects.
   unsupported target, invalid argument, or exact-match validation
 - **THEN** the preflight result SHALL report the blocking error
 - **AND** it SHALL NOT provide an approval path that bypasses the guardrail
+

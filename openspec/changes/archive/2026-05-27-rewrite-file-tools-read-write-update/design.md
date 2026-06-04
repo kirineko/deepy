@@ -130,25 +130,25 @@ its instructions continue to forbid tool calls.
 
 ## Risks / Trade-offs
 
-- **Risk: removing `apply_patch` loses create/delete/move convenience.**
+- **Risk: removing `apply_patch` loses create/delete/move convenience.**  
   Mitigation: scope v3 to the file read/write/update path requested here; use
   `Write` for creation and shell or future focused tools for file management.
 
 - **Risk: batch `Update` can still fail all edits because one edit is stale or
-  unmatched.**
+  unmatched.**  
   Mitigation: return per-edit failure metadata with edit index, path, reason,
   closest candidates where safe, and a concise recovery hint.
 
-- **Risk: old histories with old tool calls no longer render perfectly.**
+- **Risk: old histories with old tool calls no longer render perfectly.**  
   Mitigation: document this as an accepted breaking release behavior paired with
   the session/history rewrite.
 
 - **Risk: cache prefix changes reduce DeepSeek cache hits immediately after the
-  release.**
+  release.**  
   Mitigation: keep the v3 tool docs short, deterministic, and stable; verify
   cache-prefix diagnostics after implementation.
 
-- **Risk: strict schema requirements could recreate required-null verbosity.**
+- **Risk: strict schema requirements could recreate required-null verbosity.**  
   Mitigation: design schemas around genuinely required fields only and use
   runtime validation for shape alternatives when provider strictness requires
   trade-offs.

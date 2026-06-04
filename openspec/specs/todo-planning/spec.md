@@ -56,3 +56,4 @@ Deepy SHALL keep todo progress readable and consistent for users.
   truncate for terminal width or height
 - **AND** completed items SHALL be visually distinguishable from pending and
   in-progress items
+

@@ -1366,3 +1366,4 @@ Deepy's existing image follow-up messages from `Read` SHALL remain compatible wi
 - **WHEN** a `Read` image follow-up message would be sent to a model that does not support image input
 - **THEN** Deepy SHALL avoid sending image content blocks to that model
 - **AND** it SHALL surface a concise model incompatibility error rather than sending an unsupported payload
+

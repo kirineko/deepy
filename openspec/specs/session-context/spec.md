@@ -712,3 +712,4 @@ Deepy SHALL keep image session previews readable by redacting raw image data in 
 - **WHEN** Deepy estimates local context pressure for persisted image prompt items
 - **THEN** it SHALL account for image content conservatively
 - **AND** it SHALL avoid expanding redacted display labels back into raw base64 for user-facing context summaries
+

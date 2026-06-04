@@ -68,3 +68,4 @@ Deepy SHALL prevent unbounded background task growth.
 - **WHEN** background tasks have reached terminal states
 - **THEN** Deepy SHALL retain a bounded recent terminal task history for inspection
 - **AND** it SHALL never evict running tasks because of terminal history retention
+

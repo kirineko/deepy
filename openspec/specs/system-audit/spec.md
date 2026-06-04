@@ -152,3 +152,4 @@ Deepy SHALL show proposed file mutation diffs before resolving normal-mode
 - **AND** the model requests `Write` or `Update`
 - **THEN** Deepy SHALL preserve the existing approval behavior for that mode
 - **AND** Deepy SHALL NOT require an extra preflight approval step
+
