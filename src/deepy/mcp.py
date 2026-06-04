@@ -158,6 +158,7 @@ class DeepyMcpRuntime:
         if not self.settings.mcp.enabled:
             self.connected = True
             return
+        self._clear_server_registry()
         try:
             servers = self._build_sdk_servers()
         except Exception as exc:
@@ -191,6 +192,11 @@ class DeepyMcpRuntime:
             self._record_connect_failure(exc)
             await self._release_manager()
 
+    def _clear_server_registry(self) -> None:
+        self._definitions_by_server.clear()
+        self._servers_by_name.clear()
+        self.tools = []
+
     async def _release_manager(self) -> None:
         manager = self._manager
         self._manager = None
@@ -198,6 +204,7 @@ class DeepyMcpRuntime:
         if manager is not None:
             with suppress(asyncio.CancelledError, Exception):
                 await manager.cleanup_all()
+        self._clear_server_registry()
 
     async def shutdown(self) -> None:
         """Cancel an in-flight connect and release MCP resources."""

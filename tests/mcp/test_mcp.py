@@ -11,6 +11,7 @@ from deepy.config import McpConfig, Settings
 from deepy.mcp import (
     DeepyMcpRuntime,
     McpServerStatus,
+    McpToolInfo,
     format_mcp_status,
     load_mcp_config,
     sdk_mcp_tool_name,
@@ -172,10 +173,12 @@ def test_mcp_runtime_collects_active_tools_and_web_search_preference(tmp_path):
 
     asyncio.run(runtime.connect())
     assert runtime.active_servers == [server]
+    assert runtime.preferred_web_search_tools == ["mcp_tavily__tavily_search"]
     asyncio.run(runtime.cleanup())
 
     assert runtime.active_servers == []
-    assert runtime.preferred_web_search_tools == ["mcp_tavily__tavily_search"]
+    assert runtime.preferred_web_search_tools == []
+    assert runtime._definitions_by_server == {}
     assert runtime.statuses[0].state == "active"
     assert runtime.statuses[0].tools == ("mcp_tavily__tavily_search",)
     assert server.cleaned is True
@@ -345,6 +348,83 @@ async def test_mcp_runtime_connect_waiter_cancel_leaves_shared_task_running(tmp_
 
     assert runtime.connected
     assert runtime.active_servers == [server]
+    await runtime.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_release_clears_server_registry(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    definition = runtime.definitions[0]
+    stale_server = object()
+    runtime._definitions_by_server[stale_server] = definition
+    runtime._servers_by_name["tavily"] = stale_server
+    runtime.tools = [
+        McpToolInfo(
+            server_name="tavily",
+            original_name="search",
+            model_name="mcp_tavily__search",
+        )
+    ]
+
+    await runtime._release_manager()
+
+    assert runtime._definitions_by_server == {}
+    assert runtime._servers_by_name == {}
+    assert runtime.tools == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_connect_retry_does_not_accumulate_server_references(tmp_path):
+    config = tmp_path / "config.toml"
+    (tmp_path / "mcp.json").write_text(
+        '{"mcpServers": {"tavily": {"command": "npx"}}}',
+        encoding="utf-8",
+    )
+    runtime = DeepyMcpRuntime(Settings(path=config), project_root=tmp_path)
+    server = _FakeMcpServer("tavily")
+    attempts = 0
+    original_connect_once = runtime._connect_once
+
+    async def flaky_connect_once() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            runtime._definitions_by_server[object()] = runtime.definitions[0]
+            runtime._definitions_by_server[object()] = runtime.definitions[0]
+            await runtime._release_manager()
+            raise asyncio.CancelledError()
+        await original_connect_once()
+
+    def build_servers_with_name_map():
+        definition = runtime.definitions[0]
+        runtime._servers_by_name[definition.name] = server
+        runtime._definitions_by_server[server] = definition
+        runtime._statuses[definition.name] = McpServerStatus(
+            name=definition.name,
+            transport=definition.transport,
+            source=definition.source,
+            state="configured",
+        )
+        return [server]
+
+    runtime._build_sdk_servers = build_servers_with_name_map  # type: ignore[method-assign]
+    runtime._connect_once = flaky_connect_once  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.connect()
+
+    assert runtime._definitions_by_server == {}
+    assert runtime._servers_by_name == {}
+
+    await runtime.connect()
+
+    assert len(runtime._definitions_by_server) == 1
+    assert len(runtime._servers_by_name) == 1
     await runtime.cleanup()
 
 
