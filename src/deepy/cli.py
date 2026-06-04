@@ -40,8 +40,8 @@ from .sessions import DeepySession, list_session_entries
 from .skills import discover_skills, find_skill, format_skills_for_terminal, read_skill_body
 from .status import build_status_report, format_status_report, status_report_to_dict
 from .usage import TokenUsage, format_usage_line, usage_from_run_result
-from .ui import run_interactive
-from .ui.styles import resolve_ui_palette
+from .ui.classic import run_interactive
+from .ui.shared.render.styles import resolve_ui_palette
 from .utils import json as json_utils
 
 
@@ -714,7 +714,7 @@ def _cmd_tui(args: argparse.Namespace) -> int:
     if not sys.stdin.isatty():
         print("Modern UI requires a TTY; use `deepy run` for non-interactive prompts.", file=sys.stderr)
         return 1
-    from deepy.tui import run_tui
+    from deepy.ui.modern import run_tui
 
     return run_tui(_ensure_interactive_settings(args), project_root=Path.cwd())
 
@@ -724,7 +724,7 @@ def _cmd_interactive(args: argparse.Namespace) -> int:
     if settings.ui.interface == "modern":
         if not sys.stdin.isatty():
             raise RuntimeError("Modern UI requires a TTY.")
-        from deepy.tui import run_tui
+        from deepy.ui.modern import run_tui
 
         return run_tui(settings, project_root=Path.cwd())
     return run_interactive(settings)

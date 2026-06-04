@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,6 +17,7 @@ from deepy.llm.cache_context import (
 )
 from deepy.llm.replay import sanitize_sdk_items_for_replay
 from deepy.todos import normalize_persisted_todo_state
+from deepy.utils.clock import now_ms as _now_ms
 from deepy.usage import (
     ContextWindowUsage,
     TokenUsage,
@@ -73,8 +73,6 @@ def project_sessions_db(project_root: Path, deepy_home: Path | None = None) -> P
     return project_sessions_dir(project_root, deepy_home) / SESSION_DB_NAME
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 @dataclass

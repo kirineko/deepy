@@ -1,0 +1,5276 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sqlite3
+import sys
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import textual
+from rich.text import Text
+from textual import events
+from textual._xterm_parser import XTermParser
+from textual.command import CommandPalette
+from textual.widgets import Footer, Label, Markdown, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
+
+import deepy.ui.modern.app as tui_app
+import deepy.ui.modern.runner as tui_runner
+from deepy.audit import AuditConfig, AuditMode, PendingApproval
+from deepy.config import ModelConfig, Settings, UiConfig
+from deepy.config import load_settings
+from deepy.llm.events import DeepyStreamEvent
+from deepy.llm.runner import RunSummary
+from deepy.mcp import McpServerStatus
+from deepy.skill_market import InstalledSkill, MarketSkill
+from deepy.skills import SkillInfo
+from deepy.status import BalanceInfo, BalanceStatus
+from deepy.ui.modern.app import DeepyTuiApp
+from deepy.ui.modern.commands import DeepyCommandProvider
+from deepy.ui.modern.interaction_surfaces import TUI_INTERACTION_SURFACES, transcript_interrupting_surfaces
+from deepy.ui.modern.screens import (
+    ChoiceScreen,
+    InfoScreen,
+    SkillManagementScreen,
+    TextInputScreen,
+)
+from deepy.ui.modern.state import set_session_id
+from deepy.ui.modern.theme import (
+    TUI_DARK_THEME,
+    TUI_LIGHT_THEME,
+    TUI_TEXTUAL_THEME_OPTIONS,
+    is_supported_textual_theme,
+    textual_theme_for_ui_theme,
+)
+from deepy.ui.modern.render.transcript import transcript_display
+from deepy.ui.modern.widgets import (
+    AssistantBlock,
+    AttachmentRow,
+    AuditDecisionBlock,
+    DiffBlock,
+    ErrorBlock,
+    InfoBlock,
+    InlineChoiceBlock,
+    LocalCommandBlock,
+    PromptPanel,
+    PromptTextArea,
+    QuestionBlock,
+    ThinkingBlock,
+    ToolBlock,
+    UserBlock,
+)
+from deepy.sessions import DeepySession
+from deepy.ui.shared.local_command import LocalCommandResult
+from deepy.ui.shared.input.image_input import ClipboardImage
+from deepy.ui.shared.input.slash_commands import build_subagent_slash_prompt
+from deepy.usage import TokenUsage
+
+
+def test_textual_native_input_capabilities_are_available() -> None:
+    area = TextArea(soft_wrap=True, compact=True)
+    area.insert("😀\n你好")
+
+    assert textual.__version__ == "8.2.7"
+    assert area.compact is True
+    assert area.soft_wrap is True
+    assert area.text == "😀\n你好"
+    assert hasattr(TextArea, "suggestion")
+
+
+def test_textual_827_does_not_decode_ghostty_multi_codepoint_associated_text() -> None:
+    parser = XTermParser()
+
+    events = list(parser.feed("\x1b[32;;20320:22909u")) + list(parser.tick())
+
+    assert [
+        (getattr(event, "key", None), getattr(event, "character", None))
+        for event in events
+    ] != [("你好", "你好")]
+
+
+def test_tui_maps_shared_ui_themes_to_curated_textual_themes() -> None:
+    assert textual_theme_for_ui_theme("dark") == TUI_DARK_THEME == "tokyo-night"
+    assert textual_theme_for_ui_theme("light") == TUI_LIGHT_THEME == "solarized-light"
+    assert textual_theme_for_ui_theme("auto") == TUI_DARK_THEME
+    assert textual_theme_for_ui_theme("dark", "tokyo-night") == "tokyo-night"
+    assert is_supported_textual_theme("tokyo-night")
+    assert len(TUI_TEXTUAL_THEME_OPTIONS) >= 8
+
+
+def test_tui_css_keeps_composer_and_transcript_dense() -> None:
+    assert "#prompt-input" in DeepyTuiApp.CSS
+    assert "height: 4;" in DeepyTuiApp.CSS
+    assert "min-height: 4;" in DeepyTuiApp.CSS
+    assert "max-height: 4;" in DeepyTuiApp.CSS
+    assert "overflow-y: auto;" in DeepyTuiApp.CSS
+    assert ".block-markdown MarkdownTable" in DeepyTuiApp.CSS
+    assert "scrollbar-size-vertical: 1;" in DeepyTuiApp.CSS
+
+
+def test_tui_interaction_surface_audit_classifies_interruptions() -> None:
+    names = {surface.name for surface in TUI_INTERACTION_SURFACES}
+
+    assert {
+        "audit-approval",
+        "ask-user-question",
+        "session-resume",
+        "skills-management",
+        "reset-config",
+        "theme-picker",
+        "model-picker",
+    }.issubset(names)
+    assert all(surface.management_reason for surface in transcript_interrupting_surfaces())
+    assert all(
+        surface.kind != "management-screen"
+        for surface in TUI_INTERACTION_SURFACES
+        if surface.name in {"audit-approval", "ask-user-question", "theme-picker", "model-picker"}
+    )
+
+
+def test_tui_visual_foundation_avoids_heavy_default_chrome() -> None:
+    css = DeepyTuiApp.CSS
+
+    assert ".transcript-block {\n        height: auto;" in css
+    assert "#interaction-sheet" in css
+    assert "max-height: 16;" in css
+    assert "min-height: 3;" in css
+    assert "dock: bottom;" not in css
+    assert "#interaction-sheet OptionList > .option-list--option" in css
+    assert "#interaction-sheet OptionList > .option-list--option-highlighted" in css
+    assert "#interaction-sheet OptionList > .option-list--option-disabled" in css
+    assert "color: #e5e7eb !important;" in css
+    assert "background: #414868 !important;" in css
+    assert "Screen.-light-theme #interaction-sheet" in css
+    assert "Screen.-light-theme #prompt-suggestions" in css
+    assert "background: #268bd2 !important;" in css
+    assert "border-left: solid $primary" not in css
+    assert "#prompt-suggestions" in css
+    assert "border: solid $accent" not in css
+    assert ".block-markdown" in css
+    assert "padding: 0;" in css
+
+
+def test_tui_transcript_display_models_prioritize_conversation() -> None:
+    assert transcript_display("user").label == "›"
+    assert transcript_display("assistant").label == "•"
+    assert transcript_display("user").priority < transcript_display("tool").priority
+    assert transcript_display("assistant").priority < transcript_display("usage").priority
+    assert transcript_display("tool").folded_by_default is True
+    assert transcript_display("reasoning").label == "·"
+    assert transcript_display("reasoning").folded_by_default is True
+
+
+def test_tui_transcript_blocks_use_display_models() -> None:
+    assert UserBlock("hi").display_model.kind == "user"
+    assert AssistantBlock("hi").display_model.label == "•"
+    assert ThinkingBlock("think").display_model.folded_by_default is True
+    assert ErrorBlock("err").display_model.css_class == "error-block"
+
+
+@pytest.mark.asyncio
+async def test_tui_dense_markdown_reply_renders_without_overlapping_composer(tmp_path) -> None:
+    markdown = "\n".join(
+        [
+            "# Plan",
+            "Short paragraph with `inline` emphasis.",
+            "- first item",
+            "- second item",
+            "```python",
+            "print('hello')",
+            "```",
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+        ]
+        * 6
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(72, 18)) as pilot:
+        await pilot.pause(0.01)
+        await app._append_block(AssistantBlock(markdown))
+        await pilot.pause(0.1)
+
+        block = app.query_one(AssistantBlock)
+        panel = app.query_one("#prompt-panel", PromptPanel)
+        assert block.region.y < panel.region.y
+        assert block.markdown.startswith("# Plan")
+        assert ".block-markdown" in DeepyTuiApp.CSS
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_user_and_assistant_markers_render_inline_with_content(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(72, 18)) as pilot:
+        await pilot.pause(0.01)
+        await app._append_block(UserBlock("hi"))
+        await app._append_block(AssistantBlock("hello"))
+        await pilot.pause(0.1)
+
+        user_block = app.query_one(UserBlock)
+        assistant_block = app.query_one(AssistantBlock)
+        user_marker = user_block.query_one(".role-marker", Label)
+        user_body = user_block.query_one(".block-body", Static)
+        assistant_marker = assistant_block.query_one(".role-marker", Label)
+        assistant_body = assistant_block.query_one(Markdown)
+
+        assert str(user_marker.content) == "›"
+        assert str(assistant_marker.content) == "•"
+        assert user_marker.region.y == user_body.region.y
+        assert assistant_marker.region.y == assistant_body.region.y
+        assert user_marker.region.x < user_body.region.x
+        assert assistant_marker.region.x < assistant_body.region.x
+        app.exit()
+
+
+async def _idle_run_once(prompt: str, **kwargs) -> RunSummary:
+    return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+
+def _option_prompt_text(option: Option) -> str:
+    prompt = option.prompt
+    return getattr(prompt, "plain", str(prompt))
+
+
+async def _wait_for(pilot, condition: Callable[[], object], *, timeout: float = 1.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last_error: Exception | None = None
+    while True:
+        try:
+            if condition():
+                return
+        except Exception as exc:
+            last_error = exc
+        if loop.time() >= deadline:
+            raise AssertionError("Timed out waiting for TUI test condition") from last_error
+        await pilot.pause(0.01)
+
+
+async def _choose_inline_option(app: DeepyTuiApp, pilot, title: str, *, down: int = 0) -> None:
+    await _wait_for(
+        pilot,
+        lambda: app.query(InlineChoiceBlock).first()
+        and app.query(InlineChoiceBlock).last().title_text == title,
+    )
+    for _ in range(down):
+        await pilot.press("down")
+    await pilot.press("enter")
+
+
+async def _submit_text_input(app: DeepyTuiApp, pilot, title: str, value: str) -> None:
+    await _wait_for(
+        pilot,
+        lambda: isinstance(app.screen, TextInputScreen)
+        and app.screen.title_text == title,
+    )
+    app.screen.query_one("#text-input").value = value  # type: ignore[attr-defined]
+    await pilot.press("enter")
+
+
+async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable[[], object]) -> None:
+    prompt = app.query_one("#prompt-input", PromptTextArea)
+    prompt.text = text
+    prompt.action_submit()
+    await _wait_for(pilot, condition)
+
+
+@pytest.mark.asyncio
+async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
+    captured: list[tuple[str, list[object]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        prompt.text = "inspect"
+        await pilot.press("ctrl+v")
+        await _wait_for(
+            pilot,
+            lambda: app.query_one("#prompt-images", AttachmentRow).display,
+        )
+        assert "[图片1]" not in prompt.text
+        assert (
+            str(app.query_one("#prompt-images", AttachmentRow).content)
+            == "Attachments  [图片1]  · ↓ enter · ←/→ select · ↑ input · Backspace remove"
+        )
+        assert panel.image_attachments is app.image_attachments
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: captured)
+
+    assert captured[0][0] == "inspect"
+    assert captured[0][1][0].data_url == "data:image/png;base64,aW1hZ2U="
+
+
+@pytest.mark.asyncio
+async def test_tui_rejects_image_paste_for_unsupported_model_without_clearing_text(tmp_path):
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "keep this"
+        await pilot.press("ctrl+v")
+        await _wait_for(
+            pilot,
+            lambda: any("不支持图片输入" in block.markdown for block in app.query(AssistantBlock)),
+        )
+
+        assert prompt.text == "keep this"
+        assert str(app.query_one("#prompt-images", AttachmentRow).content) == ""
+        assert app.image_attachments.attachments == []
+
+
+@pytest.mark.asyncio
+async def test_tui_deleting_image_label_removes_attachment(tmp_path):
+    captured: list[tuple[str, list[object]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        prompt.text = "inspect"
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: app.image_attachments.attachments)
+
+        assert prompt.text == "inspect"
+        assert panel.remove_last_image_attachment()
+        await _wait_for(pilot, lambda: app.image_attachments.attachments == [])
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: captured)
+
+    assert captured[0] == ("inspect", [])
+
+
+@pytest.mark.asyncio
+async def test_tui_keyboard_deletes_selected_attachment_without_prompt_text(tmp_path):
+    captured: list[tuple[str, list[object]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        captured.append((prompt, list(kwargs.get("image_attachments") or [])))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "inspect"
+        await pilot.press("ctrl+v")
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: len(app.image_attachments.attachments) == 2)
+
+        row = app.query_one("#prompt-images", AttachmentRow)
+        assert prompt.has_focus
+        await pilot.press("down")
+        await _wait_for(
+            pilot,
+            lambda: str(row.content)
+            == "Attachments  ▸[图片1]  [图片2]  · ↓ enter · ←/→ select · ↑ input · Backspace remove",
+        )
+        await pilot.press("right")
+        await _wait_for(
+            pilot,
+            lambda: str(row.content)
+            == "Attachments  [图片1]  ▸[图片2]  · ↓ enter · ←/→ select · ↑ input · Backspace remove",
+        )
+        await pilot.press("up")
+        await _wait_for(
+            pilot,
+            lambda: str(row.content)
+            == "Attachments  [图片1]  [图片2]  · ↓ enter · ←/→ select · ↑ input · Backspace remove",
+        )
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("backspace")
+        await pilot.pause(0.01)
+        assert len(app.image_attachments.attachments) == 2
+        assert prompt.text == "inspec"
+        prompt.text = "inspect"
+        await pilot.press("down")
+        await pilot.press("right")
+        await _wait_for(
+            pilot,
+            lambda: str(row.content)
+            == "Attachments  [图片1]  ▸[图片2]  · ↓ enter · ←/→ select · ↑ input · Backspace remove",
+        )
+        await pilot.press("backspace")
+        await _wait_for(pilot, lambda: len(app.image_attachments.attachments) == 1)
+
+        assert prompt.text == "inspect"
+        assert prompt.has_focus
+        assert str(row.content) == "Attachments  ▸[图片1]  · ↓ enter · ←/→ select · ↑ input · Backspace remove"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: captured)
+
+    assert captured[0][0] == "inspect"
+    assert len(captured[0][1]) == 1
+
+
+@pytest.mark.asyncio
+async def test_tui_attachment_state_stays_outside_prompt_text(tmp_path):
+    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        app.image_attachments.clipboard_reader = lambda: ClipboardImage(
+            data=b"image",
+            mime_type="image/png",
+        )
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        prompt.text = "inspect"
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: app.image_attachments.attachments)
+
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("backspace")
+        await pilot.pause(0.01)
+
+        assert prompt.text == "inspec"
+        assert app.image_attachments.attachments
+
+        await pilot.press("ctrl+v")
+        await _wait_for(pilot, lambda: len(app.image_attachments.attachments) == 2)
+        await pilot.press("delete")
+        await pilot.pause(0.01)
+
+        assert "[图片1]" not in prompt.text
+        assert app.image_attachments.attachments
+        assert panel.remove_last_image_attachment()
+        assert len(app.image_attachments.attachments) == 1
+
+
+@pytest.mark.asyncio
+async def test_tui_starts_and_exits_headless(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        assert app.query_one("#prompt-input", PromptTextArea).has_focus
+        assert app.theme == "tokyo-night"
+        startup_text = app.query_one(InfoBlock).body
+        assert startup_text.startswith("Deepy Modern UI.")
+        assert "Ctrl+J for newline" in startup_text
+        assert "Shift+Enter" not in startup_text
+        assert app.query(InfoBlock).first() is not None
+        assert not app.screen.query(Footer)
+        await pilot.press("ctrl+o")
+        assert app.query_one("#side-panel").has_class("-visible")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_applies_curated_light_textual_theme(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(ui=UiConfig(theme="light")), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        assert app.theme == "solarized-light"
+        assert app.screen.has_class("-light-theme")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_handles_cjk_emoji_newline_and_submission(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.insert("你好😀")
+        assert prompt.text == "你好😀"
+        await pilot.press("ctrl+j")
+        assert prompt.text == "你好😀\n"
+        prompt.insert("world")
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: calls)
+        assert calls == ["你好😀\nworld"]
+        app.exit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(42, 18), (100, 32)])
+async def test_tui_compact_composer_geometry_stays_fixed_for_multiline(tmp_path, size) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause(0.05)
+        panel = app.query_one("#prompt-panel", PromptPanel)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        status = app.query_one("#status-bar")
+        transcript = app.query_one("#transcript")
+        suggestions = app.query_one("#prompt-suggestions", OptionList)
+        actions = app.query_one("#prompt-actions")
+
+        assert prompt.region.height == 4
+        assert actions.region.height == 1
+        assert panel.region.height >= prompt.region.height + actions.region.height
+        assert status.region.height == 1
+        assert transcript.region.y + transcript.region.height <= panel.region.y
+
+        prompt.insert("one\ntwo\nthree\nfour\nfive\nsix")
+        await pilot.pause(0.05)
+
+        assert prompt.region.height == 4
+        assert panel.region.height >= prompt.region.height + actions.region.height
+        assert transcript.region.y + transcript.region.height <= panel.region.y
+
+        prompt.text = "/"
+        await pilot.pause(0.05)
+
+        assert suggestions.display is True
+        assert suggestions.region.y < panel.region.y
+        assert suggestions.region.y + suggestions.region.height <= panel.region.y
+        app.exit()
+
+
+def test_tui_help_markdown_advertises_ctrl_j_newline(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    help_markdown = app._help_markdown()
+
+    assert "- **Ctrl+J** - insert newline" in help_markdown
+    assert "- **Shift+Tab** - cycle audit mode" in help_markdown
+    assert "**/ps**" in help_markdown
+    assert "**/stop**" in help_markdown
+    assert "Shift+Enter" not in help_markdown
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_slash_command_exits_without_model_turn(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    exited: list[bool] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+    app.background_tasks.start(
+        command="sleep",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/exit"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert exited == [True]
+        assert calls == []
+        assert app.exit_summary_text is not None
+        assert "Deepy Session Summary" in app.exit_summary_text
+        assert app.background_tasks.running_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_tui_ctrl_d_confirm_exits_with_summary(tmp_path, monkeypatch) -> None:
+    exited: list[bool] = []
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await pilot.press("ctrl+d")
+        await pilot.press("ctrl+d")
+        await pilot.pause(0.1)
+
+        assert exited == [True]
+        assert app.exit_summary_text is not None
+        assert "Deepy Session Summary" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_uses_inline_interrupt_flow_without_quit_popup(tmp_path, monkeypatch) -> None:
+    exited: list[bool] = []
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.append(True))
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+
+        assert exited == []
+        assert len(app.screen_stack) == 1
+        assert app.screen.id == "_default"
+        assert app.state.quit_confirm_pending is False
+        assert app.query_one("#prompt-input", PromptTextArea).has_focus
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_counts_session_messages(tmp_path) -> None:
+    session = DeepySession.create(tmp_path, session_id="s1")
+    await session.add_items(
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "assistant", "content": "done"},
+        ]
+    )
+    session.record_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.state = set_session_id(app.state, "s1")
+
+    summary = app._build_exit_summary_text()
+
+    assert "messages" in summary
+    assert "total" in summary
+    assert "assistant" in summary
+    assert "requests" in summary
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_includes_session_cost(tmp_path, monkeypatch) -> None:
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "99.75", "0.00", "99.75"),
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", lambda settings: next(balances))
+    app = DeepyTuiApp(
+        settings=Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "CNY 0.25" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_shows_unavailable_session_cost(tmp_path, monkeypatch) -> None:
+    balances = iter(
+        [
+            BalanceStatus(
+                is_available=True,
+                balance_infos=(
+                    BalanceInfo("CNY", "100.00", "0.00", "100.00"),
+                ),
+            ),
+            BalanceStatus(unavailable_reason="timeout"),
+        ]
+    )
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", lambda settings: next(balances))
+    app = DeepyTuiApp(
+        settings=Settings(model=ModelConfig(api_key="sk-test")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "unavailable (end timeout)" in app.exit_summary_text
+
+
+@pytest.mark.asyncio
+async def test_tui_exit_summary_marks_third_party_cost_unsupported(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(
+        settings=Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+            )
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+        assert "session cost" in app.exit_summary_text
+        assert "unsupported" in app.exit_summary_text
+
+
+def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, capsys) -> None:
+    run_kwargs: list[dict[str, object]] = []
+
+    class FakeApp:
+        exit_summary_text = "Deepy Session Summary\nmodel deepseek-v4-pro"
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run(self, **kwargs):
+            run_kwargs.append(kwargs)
+            return None
+
+    monkeypatch.setattr(tui_app, "DeepyTuiApp", FakeApp)
+
+    code = tui_runner.run_tui(Settings(), project_root=tmp_path)
+
+    assert code == 0
+    assert "Deepy Session Summary" in capsys.readouterr().out
+    assert run_kwargs == [{"mouse": True}]
+
+
+def test_tui_runner_disables_textual_kitty_key_by_default(tmp_path, monkeypatch) -> None:
+    seen_env: list[str | None] = []
+
+    class FakeApp:
+        exit_summary_text = None
+
+        def __init__(self, **kwargs):
+            seen_env.append(os.environ.get("TEXTUAL_DISABLE_KITTY_KEY"))
+
+        def run(self, **kwargs):
+            return None
+
+    monkeypatch.delenv("TEXTUAL_DISABLE_KITTY_KEY", raising=False)
+    monkeypatch.setattr(tui_app, "DeepyTuiApp", FakeApp)
+
+    assert tui_runner.run_tui(Settings(), project_root=tmp_path) == 0
+    assert seen_env == ["1"]
+
+
+def test_tui_runner_preserves_textual_kitty_key_override(tmp_path, monkeypatch) -> None:
+    seen_env: list[str | None] = []
+
+    class FakeApp:
+        exit_summary_text = None
+
+        def __init__(self, **kwargs):
+            seen_env.append(os.environ.get("TEXTUAL_DISABLE_KITTY_KEY"))
+
+        def run(self, **kwargs):
+            return None
+
+    monkeypatch.setenv("TEXTUAL_DISABLE_KITTY_KEY", "0")
+    monkeypatch.setattr(tui_app, "DeepyTuiApp", FakeApp)
+
+    assert tui_runner.run_tui(Settings(), project_root=tmp_path) == 0
+    assert seen_env == ["0"]
+
+
+def test_tui_registers_transcript_copy_bindings() -> None:
+    keys = {binding.key for binding in DeepyTuiApp.BINDINGS}
+
+    assert "ctrl+c,super+c" in keys
+
+
+@pytest.mark.asyncio
+async def test_tui_copies_focused_transcript_block(tmp_path, monkeypatch) -> None:
+    copied: list[str] = []
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause(0.01)
+        await app._append_block(UserBlock("copy this prompt"))
+        block = app.query_one(UserBlock)
+        block.focus()
+        await pilot.pause(0.01)
+
+        app.action_copy_focused_block()
+
+        assert copied == ["copy this prompt"]
+        assert "Copied transcript block" in str(app.query_one("#status-right", Label).content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reuses_session_id_between_turns(tmp_path) -> None:
+    calls: list[tuple[str, str | None, bool]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        session_id = kwargs.get("session_id")
+        calls.append((prompt, session_id, kwargs.get("background_tasks") is app.background_tasks))
+        return RunSummary(output=f"answer: {prompt}", session_id=session_id or "s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "first"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.state.session_id == "s1"
+
+        prompt.text = "second"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == [("first", None, True), ("second", "s1", True)]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_newline_slash_and_file_suggestions(tmp_path) -> None:
+    tmp_path.joinpath("src").mkdir()
+    tmp_path.joinpath("src", "app.py").write_text("print('hi')\n", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        prompt.text = "hello"
+        prompt.move_cursor((0, len(prompt.text)))
+        await pilot.press("ctrl+j")
+        assert prompt.text == "hello\n"
+
+        panel.refresh_suggestions("/")
+        assert any(suggestion.startswith("/model") for suggestion in panel.suggestions)
+        assert any(suggestion.startswith("/reviewer") for suggestion in panel.suggestions)
+        assert any(suggestion.startswith("/skill-creator") for suggestion in panel.suggestions)
+
+        panel.refresh_suggestions("/re")
+        assert panel.suggestions
+        assert [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions[:3]] == [
+            "/resume",
+            "/reviewer",
+            "/reset",
+        ]
+        panel.refresh_suggestions("/skill:")
+        assert any(suggestion.startswith("/skill:skill-creator") for suggestion in panel.suggestions)
+
+        panel.refresh_suggestions("@src/")
+        assert "@src/app.py" in panel.suggestions
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_suggestion_uses_native_text_area_suggestion(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        panel.set_input_suggestion("run tests")
+        await pilot.pause(0.01)
+
+        assert prompt.suggestion == "run tests"
+
+        await pilot.press("tab")
+        await pilot.pause(0.01)
+
+        assert prompt.text == "run tests"
+        assert prompt.suggestion == ""
+
+        prompt.clear()
+        await pilot.pause(0.01)
+
+        assert prompt.suggestion == "run tests"
+
+        prompt.clear()
+        panel.set_input_suggestion("commit changes")
+        prompt.text = "/"
+        await pilot.pause(0.01)
+
+        assert options.display is True
+        assert prompt.suggestion == ""
+
+        prompt.clear()
+        panel.set_input_suggestion("commit changes")
+        await pilot.pause(0.01)
+        prompt.action_cursor_right()
+        await pilot.pause(0.01)
+
+        assert prompt.text == "commit changes"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_suggestion_returns_after_type_delete_cycle(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        panel.set_input_suggestion("run tests")
+        prompt.text = "typed"
+        await pilot.pause(0.01)
+
+        assert prompt.suggestion == ""
+        assert panel.input_suggestion == "run tests"
+
+        prompt.clear()
+        await pilot.pause(0.01)
+
+        assert prompt.suggestion == "run tests"
+        assert options.display is False
+
+        await pilot.press("tab")
+        await pilot.pause(0.01)
+
+        assert prompt.text == "run tests"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_enter_does_not_accept_input_suggestion(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        panel.set_input_suggestion("run tests")
+        await pilot.pause(0.01)
+        await pilot.press("enter")
+        await pilot.pause(0.01)
+
+        assert prompt.text == ""
+        assert prompt.suggestion == "run tests"
+        assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_suggestions_support_tab_acceptance_and_keyboard_selection(tmp_path) -> None:
+    tmp_path.joinpath("aaa.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("bbb.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("ui").mkdir()
+    tmp_path.joinpath("ui", "panel.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("ui", "nested").mkdir()
+    tmp_path.joinpath("ui", "nested", "view.py").write_text("", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        prompt.text = "@"
+        await pilot.pause(0.01)
+        assert options.display is True
+        assert options.highlighted == 0
+
+        await pilot.press("down")
+        assert options.highlighted == 1
+
+        await pilot.press("tab")
+        assert prompt.text == "@bbb.py "
+        assert options.display is False
+
+        prompt.text = "@"
+        await pilot.pause(0.01)
+        await pilot.press("down")
+        await pilot.press("down")
+        assert options.highlighted == 2
+
+        await pilot.press("enter")
+        assert prompt.text == "@ui/"
+        assert "@ui/nested/" in panel.suggestions
+        assert "@ui/panel.py" in panel.suggestions
+
+        prompt.text = "@"
+        await pilot.pause(0.01)
+        assert options.highlighted == 0
+        await pilot.press("down")
+        await pilot.press("down")
+        assert options.highlighted == 2
+        await pilot.press("enter")
+        assert prompt.text == "@ui/"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_suggestions_short_fragment_matches_nested_paths(tmp_path) -> None:
+    tmp_path.joinpath("src", "deepy").mkdir(parents=True)
+    tmp_path.joinpath("src", "deepy", "audit.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("docs").mkdir()
+    tmp_path.joinpath("docs", "architecture.md").write_text("", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        prompt.text = "inspect @a"
+        await pilot.pause(0.01)
+
+        assert "@src/deepy/audit.py" in panel.suggestions
+        assert "@docs/architecture.md" in panel.suggestions
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_suggestions_bare_at_stays_top_level(tmp_path) -> None:
+    tmp_path.joinpath("src", "deepy").mkdir(parents=True)
+    tmp_path.joinpath("src", "deepy", "audit.py").write_text("", encoding="utf-8")
+    tmp_path.joinpath("README.md").write_text("", encoding="utf-8")
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+
+        prompt.text = "inspect @"
+        await pilot.pause(0.01)
+
+        assert "@src/" in panel.suggestions
+        assert "@README.md" in panel.suggestions
+        assert "@src/deepy/" not in panel.suggestions
+        assert "@src/deepy/audit.py" not in panel.suggestions
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_then_delete_clears_prompt_draft(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "delete this draft"
+        prompt.move_cursor((0, 0))
+
+        await pilot.press("delete")
+        assert prompt.text == "elete this draft"
+
+        prompt.text = "delete this draft"
+        await pilot.press("escape")
+        await pilot.press("delete")
+        assert prompt.text == ""
+
+        prompt.text = "delete this draft"
+        await pilot.press("escape")
+        await pilot.press("backspace")
+        assert prompt.text == ""
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_slash_suggestions_tab_cycles_and_enter_confirms(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        prompt.text = "/re"
+        await pilot.pause(0.01)
+        assert options.display is True
+        assert options.highlighted == 0
+        assert [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions[:3]] == [
+            "/resume",
+            "/reviewer",
+            "/reset",
+        ]
+
+        await pilot.press("down")
+        assert options.highlighted == 1
+
+        await pilot.press("tab")
+        assert prompt.text == "/reviewer "
+        assert options.display is False
+        assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_bare_slash_suggestions_expose_subagents_and_skills_beyond_visible_rows(
+    tmp_path,
+) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        panel = app.query_one(PromptPanel)
+        options = app.query_one("#prompt-suggestions", OptionList)
+
+        prompt.text = "/"
+        await pilot.pause(0.01)
+
+        labels = [suggestion.split(maxsplit=1)[0] for suggestion in panel.suggestions]
+        assert options.option_count == len(panel.suggestions)
+        assert options.option_count > 8
+        assert "/reviewer" in labels
+        assert "/skill-creator" in labels
+
+        reviewer_index = labels.index("/reviewer")
+        for _ in range(reviewer_index):
+            await pilot.press("down")
+        assert options.highlighted == reviewer_index
+
+        await pilot.press("tab")
+        assert prompt.text == "/reviewer "
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_slash_command_routes_model_turn(tmp_path) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs["skill_names"]))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reviewer inspect auth"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == [(build_subagent_slash_prompt("reviewer", "inspect auth"), [])]
+        assert app.query_one(UserBlock).body == "/reviewer inspect auth"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skills_use_loads_skill_without_printing_body(tmp_path) -> None:
+    skill_dir = tmp_path / ".agents" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill\n---\nVERY LONG SKILL BODY",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, list[str]]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs["skill_names"]))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills use demo"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert not calls
+        transcript_text = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Loaded skill: demo" in transcript_text
+        assert "VERY LONG SKILL BODY" not in transcript_text
+
+        prompt.text = "use it"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == [("use it", ["demo"])]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_init_command_routes_generated_prompt_without_unsupported_message(tmp_path) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs.get("session_id")))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/init prefer concise guidance"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert len(calls) == 1
+        assert "Analyze this repository and create the project root AGENTS.md file." in calls[0][0]
+        assert "Additional user instruction:\nprefer concise guidance" in calls[0][0]
+        assert not any("not supported" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_writes_config_and_reloads_settings(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        assert any(block.body == "/reset" for block in app.query(UserBlock))
+        assert app.controller.prompt_history[-1] == "/reset"
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider selected: deepseek" in rendered_info
+        assert "https://platform.deepseek.com/api_keys" in rendered_info
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://example.test")
+        await _choose_inline_option(app, pilot, "Reset: select thinking", down=2)
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.api_key == "sk-test")
+
+        saved = load_settings(config_path)
+        assert saved.model.api_key == "sk-test"
+        assert saved.model.provider == "deepseek"
+        assert saved.model.name == "deepseek-v4-flash"
+        assert saved.model.base_url == "https://example.test"
+        assert saved.model.reasoning_mode == "max"
+        assert saved.ui.interface == "modern"
+        assert saved.ui.theme == "light"
+        assert app.settings.ui.interface == "modern"
+        assert app.settings.ui.theme == "light"
+        assert any("Wrote" in block.body for block in app.query(InfoBlock))
+        assert any("Restart Deepy" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_warns_against_running_modern_ui_not_stale_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path, ui=UiConfig(interface="classic", theme="dark"))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model")
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://api.deepseek.com")
+        await _choose_inline_option(app, pilot, "Reset: select thinking")
+        await _choose_inline_option(app, pilot, "Reset: select UI")
+        await _wait_for(pilot, lambda: load_settings(config_path).model.api_key == "sk-test")
+
+        saved = load_settings(config_path)
+        assert saved.ui.interface == "classic"
+        assert saved.ui.theme == "dark"
+        assert any("Restart Deepy" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_writes_third_party_provider_settings(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+
+        await _choose_inline_option(app, pilot, "Reset: select provider", down=2)
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider selected: xiaomi" in rendered_info
+        assert "https://platform.xiaomimimo.com/console/api-keys" in rendered_info
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://api.xiaomimimo.com/v1")
+        await _choose_inline_option(app, pilot, "Reset: select thinking")
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=1)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "xiaomi")
+
+        saved = load_settings(config_path)
+        assert saved.model.provider == "xiaomi"
+        assert saved.model.name == "mimo-v2.5"
+        assert saved.model.reasoning_mode == "disabled"
+        assert saved.model.reasoning_effort == "none"
+        assert saved.ui.interface == "classic"
+        assert saved.ui.theme == "light"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_accepts_openrouter_custom_model_and_effort(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+
+        await _choose_inline_option(app, pilot, "Reset: select provider", down=1)
+        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
+        await _choose_inline_option(app, pilot, "Reset: select model", down=2)
+        await _submit_text_input(
+            app,
+            pilot,
+            "Reset: custom model",
+            "anthropic/claude-sonnet-4.5",
+        )
+        await _submit_text_input(app, pilot, "Reset: base URL", "https://openrouter.ai/api/v1")
+        await _choose_inline_option(app, pilot, "Reset: select thinking", down=6)
+        await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
+        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "openrouter")
+
+        saved = load_settings(config_path)
+        assert saved.model.provider == "openrouter"
+        assert saved.model.name == "anthropic/claude-sonnet-4.5"
+        assert saved.model.reasoning_mode == "minimal"
+        assert saved.model.reasoning_effort == "minimal"
+        assert saved.ui.interface == "modern"
+        assert saved.ui.theme == "light"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_cancellation_preserves_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[model]\nname = \"deepseek-v4-pro\"\n", encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Reset: select provider",
+        )
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: any("Reset cancelled" in block.body for block in app.query(InfoBlock)))
+
+        assert config_path.read_text(encoding="utf-8") == "[model]\nname = \"deepseek-v4-pro\"\n"
+        assert app.settings.model.name == "deepseek-v4-pro"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_reset_flow_cancellation_during_value_input_preserves_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[ui]\ntheme = \"dark\"\n", encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/reset"
+        await pilot.press("enter")
+        await _choose_inline_option(app, pilot, "Reset: select provider")
+        await _wait_for(pilot, lambda: isinstance(app.screen, TextInputScreen))
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: any("Reset cancelled" in block.body for block in app.query(InfoBlock)))
+
+        assert load_settings(config_path).ui.theme == "dark"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_suggestion_command_toggles_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[ui]\ninput_suggestions_enabled = true\n", encoding="utf-8")
+    app = DeepyTuiApp(settings=load_settings(config_path), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+
+        prompt.text = "/input-suggestion"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert load_settings(config_path).ui.input_suggestions_enabled is False
+        assert app.input_suggestions.enabled is False
+        assert any("Input suggestions disabled." in block.body for block in app.query(InfoBlock))
+
+        prompt.text = "/input-suggestion extra"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert load_settings(config_path).ui.input_suggestions_enabled is False
+        assert any("Usage: /input-suggestion" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+def _local_command_result(
+    command: str,
+    *,
+    output: str = "ok\n",
+    exit_code: int = 0,
+    shell_kind: str = "zsh",
+    command_dialect: str = "posix",
+    os_family: str = "posix",
+    tty_mode: str = "pty",
+    error: str | None = None,
+) -> LocalCommandResult:
+    if error is None and exit_code != 0:
+        error = f"Command exited with code {exit_code}."
+    return LocalCommandResult(
+        command=command,
+        output=output,
+        display_output=output,
+        context_output=output,
+        exit_code=exit_code,
+        cwd=Path("/tmp"),
+        shell_path="powershell.exe" if shell_kind == "powershell" else "cmd.exe" if shell_kind == "cmd" else "/bin/zsh",
+        shell_kind=shell_kind,
+        command_dialect=command_dialect,
+        path_style="windows" if os_family == "windows" else "posix",
+        os_family=os_family,
+        tty_mode=tty_mode,
+        duration_ms=12,
+        timeout_ms=120000,
+        error=error,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_runs_renders_and_persists_without_model_turn(tmp_path, monkeypatch) -> None:
+    model_calls: list[str] = []
+    local_calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        model_calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        local_calls.append(command)
+        return _local_command_result(command, output="hello\n")
+
+    monkeypatch.setattr("deepy.ui.modern.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!echo hello"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        assert local_calls == ["echo hello"]
+        assert model_calls == []
+        assert app.state.session_id is not None
+        block = app.query_one(LocalCommandBlock)
+        assert not app.query(ToolBlock)
+        assert not block.query(".tool-summary")
+        assert "hello" in block.output_body
+        assert block.meta_body == ""
+        session = DeepySession.open(tmp_path, app.state.session_id)
+        items = await session.get_items()
+        assert items[0]["role"] == "user"
+        assert items[0]["content"] == "!echo hello"
+        assert items[1]["name"] == "shell"
+        assert items[1]["call_id"].startswith("deepy-local-command-")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_appends_separate_shell_blocks_for_later_commands(tmp_path, monkeypatch) -> None:
+    local_calls: list[str] = []
+
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        local_calls.append(command)
+        return _local_command_result(command, output=f"{command}\n")
+
+    monkeypatch.setattr("deepy.ui.modern.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!pwd"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        prompt.text = "!ls"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        blocks = list(app.query(LocalCommandBlock))
+        assert local_calls == ["pwd", "ls"]
+        assert len(blocks) == 2
+        assert "pwd" in blocks[0].output_body
+        assert "ls" in blocks[1].output_body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_empty_local_command_shows_usage_without_session_or_model(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert calls == []
+        assert app.state.session_id is None
+        assert any("Usage: !<command>" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_keeps_nonzero_exit_metadata(tmp_path, monkeypatch) -> None:
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        return _local_command_result(command, output="failed\n", exit_code=2)
+
+    monkeypatch.setattr("deepy.ui.modern.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!false"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        block = app.query_one(LocalCommandBlock)
+        assert "failed" in block.output_body
+        assert "exit 2" in block.meta_body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_renders_windows_powershell_pipe_metadata(tmp_path, monkeypatch) -> None:
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        return _local_command_result(
+            command,
+            output="中文\n",
+            shell_kind="powershell",
+            command_dialect="powershell",
+            os_family="windows",
+            tty_mode="pipe",
+        )
+
+    monkeypatch.setattr("deepy.ui.modern.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!Write-Output 中文"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        block = app.query_one(LocalCommandBlock)
+        assert "中文" in block.output_body
+        assert block.meta_body == ""
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_local_command_accepts_windows_cmd_pipe_metadata(tmp_path, monkeypatch) -> None:
+    def fake_run_local_command(command: str, **kwargs) -> LocalCommandResult:
+        return _local_command_result(
+            command,
+            output="ok\n",
+            shell_kind="cmd",
+            command_dialect="cmd",
+            os_family="windows",
+            tty_mode="pipe",
+        )
+
+    monkeypatch.setattr("deepy.ui.modern.app.run_local_command", fake_run_local_command)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "!echo ok"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        block = app.query_one(LocalCommandBlock)
+        assert "ok" in block.output_body
+        assert block.meta_body == ""
+        assert app.state.session_id is not None
+        app.exit()
+
+
+def _installed_record(name: str, path: Path) -> InstalledSkill:
+    return InstalledSkill(
+        name=name,
+        scope="user",
+        install_path=path,
+        market_url="https://market.test",
+        version_id="v1",
+        version="1.0.0",
+        sha256="sha",
+        content_hash="hash",
+        installed_at="2026-05-19T00:00:00Z",
+    )
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_market_subcommands(tmp_path, monkeypatch) -> None:
+    installed = _installed_record("demo", tmp_path / ".agents" / "skills" / "demo")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.search_market_skills",
+        lambda query: [MarketSkill(name="demo", description=f"result {query}", version="1.0.0")],
+    )
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.install_market_skill",
+        lambda name, **kwargs: calls.append(("install", kwargs["scope"])) or installed,
+    )
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.uninstall_market_skill",
+        lambda name: calls.append(("uninstall", name)) or name,
+    )
+    monkeypatch.setattr("deepy.ui.modern.app.list_installed_skills", lambda: [installed])
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.update_market_skill",
+        lambda name: calls.append(("update", name)) or ("updated", installed),
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills search pdf",
+            lambda: any("demo" in block.body and "result pdf" in block.body for block in app.query(InfoBlock)),
+        )
+        assert any("demo" in block.body and "result pdf" in block.body for block in app.query(InfoBlock))
+
+        await _submit_prompt(app, pilot, "/skills install demo", lambda: isinstance(app.screen, ChoiceScreen))
+        assert isinstance(app.screen, ChoiceScreen)
+        assert not app.screen.query(Footer)
+        app.screen.dismiss("user")
+        await _wait_for(pilot, lambda: ("install", "user") in calls)
+        assert ("install", "user") in calls
+
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills installed",
+            lambda: any("Market-installed skills" in block.body for block in app.query(InfoBlock)),
+        )
+        assert any("Market-installed skills" in block.body for block in app.query(InfoBlock))
+
+        await _submit_prompt(app, pilot, "/skills update demo", lambda: ("update", "demo") in calls)
+        assert ("update", "demo") in calls
+
+        await _submit_prompt(app, pilot, "/skills uninstall demo", lambda: ("uninstall", "demo") in calls)
+        assert ("uninstall", "demo") in calls
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_installs_market_skill(tmp_path, monkeypatch) -> None:
+    installed = _installed_record("market-demo", tmp_path / ".agents" / "skills" / "market-demo")
+    installed_records: list[InstalledSkill] = []
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.search_market_skills",
+        lambda query: [
+            MarketSkill(
+                name="market-demo",
+                description="Market demo",
+                version="1.0.0",
+                installed=bool(installed_records),
+            )
+        ],
+    )
+
+    def fake_install(name: str, **kwargs) -> InstalledSkill:
+        calls.append((name, kwargs["scope"]))
+        installed_records.append(installed)
+        return installed
+
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.install_market_skill",
+        fake_install,
+    )
+    monkeypatch.setattr("deepy.ui.modern.app.list_installed_skills", lambda: list(installed_records))
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills",
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and "market-demo" in _option_prompt_text(app.screen.query_one("#skill-options", OptionList).get_option_at_index(0)),
+        )
+
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert not app.screen.query(Footer)
+        assert app.screen.view == "market"
+        app.screen.action_toggle_view()
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "installed"
+        app.screen.action_toggle_view()
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "market"
+
+        app.screen.action_primary()
+        await _wait_for(pilot, lambda: isinstance(app.screen, InfoScreen))
+        assert isinstance(app.screen, InfoScreen)
+        assert app.screen.title_text == "Market Skill: market-demo"
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: isinstance(app.screen, SkillManagementScreen))
+
+        await pilot.press("i")
+        await _wait_for(pilot, lambda: isinstance(app.screen, ChoiceScreen))
+        assert isinstance(app.screen, ChoiceScreen)
+        assert not app.screen.query(Footer)
+        app.screen.dismiss("project")
+        await _wait_for(pilot, lambda: calls == [("market-demo", "project")])
+
+        assert calls == [("market-demo", "project")]
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and "[installed]" in str(app.screen.query_one("#skill-options", OptionList).get_option_at_index(0).prompt),
+        )
+        assert not any("Installed skill: market-demo" in block.body for block in app.query(InfoBlock))
+        assert app.screen.view == "market"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_loads_market_in_background(tmp_path, monkeypatch) -> None:
+    ready = threading.Event()
+
+    def fake_search(query: str) -> list[MarketSkill]:
+        ready.wait(timeout=1)
+        return [MarketSkill(name="async-demo", description="Loaded after HTTP", version="1.0.0")]
+
+    monkeypatch.setattr("deepy.ui.modern.app.search_market_skills", fake_search)
+    monkeypatch.setattr("deepy.ui.modern.app.list_installed_skills", lambda: [])
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/skills",
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and "Loading skill market" in _option_prompt_text(
+                app.screen.query_one("#skill-options", OptionList).get_option_at_index(0)
+            ),
+        )
+
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.market_loading is True
+        ready.set()
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and "async-demo" in _option_prompt_text(app.screen.query_one("#skill-options", OptionList).get_option_at_index(0)),
+        )
+        assert app.screen.market_loading is False
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_blocks_builtin_uninstall_from_command(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fail_uninstall(name: str) -> str:
+        calls.append(name)
+        raise AssertionError("builtin uninstall should not call market uninstall")
+
+    monkeypatch.setattr("deepy.ui.modern.app.uninstall_market_skill", fail_uninstall)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills uninstall skill-creator"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == []
+        assert any("Built-in skill cannot be uninstalled" in block.body for block in app.query(ErrorBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_uses_compact_market_rows(tmp_path, monkeypatch) -> None:
+    long_description = " ".join(["description"] * 40)
+    user_record = _installed_record("user-demo", tmp_path / ".agents" / "skills" / "user-demo")
+    for name in ("project-demo", "user-demo"):
+        skill_dir = tmp_path / ".agents" / "skills" / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            f"---\ndescription: {name}\n---\n# {name}\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.search_market_skills",
+        lambda query: [MarketSkill(name="long-demo", description=long_description, version="1.0.0")],
+    )
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.discover_skills",
+        lambda project_root: [
+            SkillInfo(
+                name="skill-creator",
+                path=tmp_path / "builtin" / "skill-creator" / "SKILL.md",
+                description="Create skills",
+                scope="builtin",
+            ),
+            SkillInfo(
+                name="project-demo",
+                path=tmp_path / ".agents" / "skills" / "project-demo" / "SKILL.md",
+                description="Project skill",
+                scope="project",
+            ),
+            SkillInfo(
+                name="user-demo",
+                path=tmp_path / ".agents" / "skills" / "user-demo" / "SKILL.md",
+                description="User skill",
+                scope="user",
+            )
+        ],
+    )
+    monkeypatch.setattr("deepy.ui.modern.app.list_installed_skills", lambda: [user_record])
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(180, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and "long-demo" in _option_prompt_text(app.screen.query_one("#skill-options", OptionList).get_option_at_index(0)),
+        )
+
+        assert isinstance(app.screen, SkillManagementScreen)
+        assert app.screen.view == "market"
+        assert app.screen._title() == "Skills"
+        assert app.screen._tabs() == "[Market 1]  Installed 2"
+        assert "Tab switch view" in app.screen._help()
+        assert "Tab installed" not in app.screen._help()
+        options = app.screen.query_one("#skill-options", OptionList)
+        market_prompt = _option_prompt_text(options.get_option_at_index(0))
+        assert "\n" not in market_prompt
+        assert "[market]" in market_prompt
+        assert "[not-installed]" not in market_prompt
+        assert "1.0.0" not in market_prompt
+        assert len(market_prompt) > 108
+        assert len(market_prompt) <= 168
+
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert app.screen.view == "installed"
+        assert app.screen._tabs() == "Market 1  [Installed 2]"
+        installed_options = app.screen.query_one("#skill-options", OptionList)
+        installed_prompts = [
+            _option_prompt_text(installed_options.get_option_at_index(index))
+            for index in range(installed_options.option_count)
+        ]
+        assert any("[project]" in prompt for prompt in installed_prompts)
+        assert any("[user]" in prompt for prompt in installed_prompts)
+        assert all("1.0.0" not in prompt for prompt in installed_prompts)
+        assert all(len(prompt) <= 168 for prompt in installed_prompts)
+
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InfoScreen))
+        assert isinstance(app.screen, InfoScreen)
+        assert "Skill:" in app.screen.title_text
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: isinstance(app.screen, SkillManagementScreen))
+        await pilot.press("v")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InfoScreen))
+        assert not any("Loaded skill:" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skill_management_screen_uninstalls_without_transcript_output(tmp_path, monkeypatch) -> None:
+    skill_dir = tmp_path / ".agents" / "skills" / "project-demo"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\ndescription: Project skill\n---\n# Project\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("deepy.ui.modern.app.search_market_skills", lambda query: [])
+    monkeypatch.setattr("deepy.ui.modern.app.list_installed_skills", lambda: [])
+    def discover_project_demo(project_root: Path) -> list[SkillInfo]:
+        skill_md = project_root / ".agents" / "skills" / "project-demo" / "SKILL.md"
+        if not skill_md.is_file():
+            return []
+        return [
+            SkillInfo(
+                name="project-demo",
+                path=skill_md,
+                description="Project skill",
+                scope="project",
+            ),
+        ]
+
+    monkeypatch.setattr("deepy.ui.modern.app.discover_skills", discover_project_demo)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen) and not app.screen.market_loading,
+        )
+
+        await pilot.press("tab")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and app.screen.view == "installed"
+            and app.screen.query_one("#skill-options", OptionList).option_count == 1,
+        )
+        await pilot.press("u")
+        await _wait_for(
+            pilot,
+            lambda: isinstance(app.screen, SkillManagementScreen)
+            and app.screen.view == "installed"
+            and not skill_dir.exists(),
+        )
+
+        assert "Installed 0" in app.screen._tabs()
+        assert not any("Removed local skill: project-demo" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_skills_uninstall_removes_manual_project_skill(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    skill_dir = tmp_path / ".agents" / "skills" / "manual"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\ndescription: Manual skill\n---\n# Manual\n", encoding="utf-8")
+
+    def fail_uninstall(name: str) -> str:
+        calls.append(name)
+        raise AssertionError("manual skill removal should not call market uninstall")
+
+    monkeypatch.setattr("deepy.ui.modern.app.uninstall_market_skill", fail_uninstall)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/skills uninstall manual"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == []
+        assert not skill_dir.exists()
+        assert any("Removed local skill: manual" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = Settings(path=config_path)
+    entry = SimpleNamespace(
+        id="s1",
+        latest_context_window_tokens=900,
+        usage=None,
+        cache_prefix_generation=2,
+        cache_break_reason="prefix changed: tools",
+        cache_usage={"hit_tokens": 80, "miss_tokens": 20},
+    )
+    monkeypatch.setattr("deepy.ui.modern.app.list_session_entries", lambda project_root: [entry])
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=(object(),)),
+    )
+    app = DeepyTuiApp(
+        settings=settings.__class__(
+            model=settings.model,
+            context=settings.context.__class__(window_tokens=1000, compact_trigger_ratio=0.8),
+            logging=settings.logging,
+            notify=settings.notify,
+            tools=settings.tools,
+            mcp=settings.mcp,
+            ui=settings.ui,
+            path=settings.path,
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.background_tasks.start(
+            command="worker",
+            argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+            cwd=tmp_path,
+        )
+        app.state = app.state.__class__(session_id="s1")
+        app._update_status("Idle")
+        await pilot.pause(0.1)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert "model deepseek-v4-pro[max]" in left
+        assert "cwd" in left
+        assert "mcp 1" in left
+        assert "bg 1" in left
+        assert "ctx 900/1K (90.0%)" in left
+        assert "left" not in left
+        assert "compact next" in left
+        assert "cache 80%" in left
+        assert "cache gen 2" not in left
+        assert "80.0% hit" not in left
+        assert "Cache: gen 2" in app.query_one("#side-status").content
+        assert "prefix changed: tools" in app.query_one("#side-status").content
+        app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+def test_tui_status_context_falls_back_when_session_metadata_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_entries(project_root):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("deepy.ui.modern.app.list_session_entries", fail_entries)
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+
+    context = tui_app._build_tui_status_context(
+        "s1",
+        project_root=tmp_path,
+        settings=Settings(path=tmp_path / "config.toml"),
+    )
+
+    assert "ctx unknown/" in context
+    assert "cache --" in context
+
+
+def test_tui_side_status_falls_back_when_session_metadata_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_entries(project_root):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("deepy.ui.modern.app.list_session_entries", fail_entries)
+
+    side = tui_app._format_tui_side_status(
+        tmp_path,
+        Settings(path=tmp_path / "config.toml"),
+        "s1",
+        ["manual"],
+        "",
+    )
+
+    assert "Session: s1" in side
+    assert "Cache: unknown" in side
+    assert "Skills: manual" in side
+
+
+@pytest.mark.asyncio
+async def test_tui_stream_status_updates_reuse_cached_session_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry = SimpleNamespace(
+        id="s1",
+        latest_context_window_tokens=100,
+        usage=None,
+        cache_prefix_generation=0,
+        cache_break_reason=None,
+        cache_usage={"hit_tokens": 1, "miss_tokens": 1},
+    )
+    calls = 0
+
+    def list_entries(project_root):
+        nonlocal calls
+        calls += 1
+        return [entry]
+
+    monkeypatch.setattr("deepy.ui.modern.app.list_session_entries", list_entries)
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    app = DeepyTuiApp(settings=Settings(path=tmp_path / "config.toml"), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.state = app.state.__class__(session_id="s1")
+        app._refresh_status_session_entry()
+        assert calls == 1
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="hello"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="thinking"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="raw_response", text="raw"))
+        await app._handle_stream_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="shell",
+                payload={"call_id": "call-1", "arguments": "{}"},
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert calls == 1
+        left = str(app.query_one("#status-left", Label).content)
+        assert "ctx 100/" in left
+        assert "cache 50%" in left
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_bar_hides_mcp_when_no_servers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    app = DeepyTuiApp(settings=Settings(path=tmp_path / "config.toml"), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        app._update_status("Idle")
+        await pilot.pause(0.1)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert not any(segment.strip().startswith("mcp ") for segment in left.split("·"))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_surfaces_show_runtime_audit_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deepy.ui.modern.app.load_mcp_config",
+        lambda settings, *, project_root=None: SimpleNamespace(definitions=()),
+    )
+    settings = Settings(audit=AuditConfig(mode=AuditMode.NORMAL))
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        left = str(app.query_one("#status-left", Label).content)
+        assert "audit normal" in left
+        assert "model deepseek-v4-pro[max]" in left
+        assert "cwd" in left
+
+        await pilot.press("shift+tab")
+        await pilot.pause(0.01)
+
+        left = str(app.query_one("#status-left", Label).content)
+        side = str(app.query_one("#side-status").content)
+        assert "audit auto" in left
+        assert "Audit: auto (runtime, config normal)" in side
+
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/status"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InfoScreen))
+        assert isinstance(app.screen, InfoScreen)
+        assert "- Audit: `auto (runtime, config normal)`" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_shift_tab_cycles_audit_mode_without_consuming_plain_tab(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/re"
+        await pilot.pause(0.01)
+
+        await pilot.press("shift+tab")
+        await pilot.press("shift+tab")
+        await pilot.press("shift+tab")
+        await pilot.pause(0.01)
+
+        assert app.audit_state.mode == AuditMode.NORMAL
+        assert prompt.text == "/re"
+        assert calls == []
+
+        await pilot.press("tab")
+
+        assert prompt.text.startswith("/resume ")
+        assert calls == []
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_resolver_approves_and_resumes_turn_without_transcript_noise(tmp_path) -> None:
+    decisions: list[str] = []
+    audit_modes: list[object] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        audit_modes.append(kwargs["audit_mode"])
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="shell",
+                    tool_name="shell",
+                    arguments=json.dumps({"command": "pwd", "description": "show cwd"}),
+                    action_kind="command",
+                )
+            ]
+        )
+        decisions.extend(decision.outcome for decision in resolved)
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "needs approval"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(AuditDecisionBlock).first())
+
+        block = app.query_one(AuditDecisionBlock)
+        assert "Approve shell command?" in str(block.query_one("#audit-decision-title").content)
+        summary = block.query_one("#audit-decision-summary")
+        assert summary.display is not False
+        summary_text = str(summary.content)
+        assert "command:" in summary_text
+        assert "pwd" in summary_text
+        assert "show cwd" not in summary_text
+        assert prompt.disabled is True
+
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: decisions == ["approve"] and app.state.session_id == "s1")
+
+        assert audit_modes == [app.audit_state]
+        assert block.completed_outcome == "approve"
+        assert [user_block.body for user_block in app.query(UserBlock)] == ["needs approval"]
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        assert prompt.disabled is False
+        assert prompt.has_focus
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_inline_audit_decision_keeps_file_preview_out_of_controls(tmp_path) -> None:
+    item = PendingApproval(
+        index=0,
+        name="Write",
+        tool_name="Write",
+        arguments=json.dumps({"path": str(tmp_path / "long.py"), "content": "print('x')\n"}),
+        action_kind="text_write",
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        block = AuditDecisionBlock(item, project_root=tmp_path, width=100)
+        await app._append_block(block)
+        await pilot.pause(0.1)
+
+        preview = block.query_one("#audit-decision-preview")
+        assert preview.display is False
+        block.action_toggle_preview()
+        assert preview.display is False
+        assert block._preview_text == ""
+        block.action_submit()
+        await pilot.pause(0.1)
+        assert block.completed_outcome == "approve"
+        assert block.query_one("#audit-decision-options").display is False
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_resolver_rejects_with_escape_and_resumes_turn(tmp_path) -> None:
+    decisions: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="mcp_web",
+                    tool_name="mcp_web__fetch",
+                    arguments=json.dumps({"url": "https://example.test"}),
+                    action_kind="mcp_tool",
+                    server_name="mcp_web",
+                )
+            ]
+        )
+        decisions.extend(decision.outcome for decision in resolved)
+        return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "needs mcp"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(AuditDecisionBlock).first())
+
+        block = app.query_one(AuditDecisionBlock)
+        assert "Approve MCP tool?" in str(block.query_one("#audit-decision-title").content)
+        assert prompt.disabled is True
+        prompt.focus()
+
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: decisions == ["reject"] and app.state.session_id == "s1")
+        assert block.completed_outcome == "reject"
+        assert app.query_one("#prompt-input", PromptTextArea).disabled is False
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_file_approval_renders_preflight_diff_once(tmp_path) -> None:
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    preflight = {
+        "ok": True,
+        "name": "Write",
+        "output": "Proposed write",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+            "preflight": True,
+        },
+        "awaitUserResponse": False,
+    }
+    actual_output = {
+        "ok": True,
+        "name": "Write",
+        "output": "Wrote file",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+        },
+        "awaitUserResponse": False,
+    }
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="Write",
+                    tool_name="Write",
+                    arguments=json.dumps({"path": str(tmp_path / "app.py"), "content": "new\n"}),
+                    action_kind="text_write",
+                    preflight=preflight,
+                )
+            ]
+        )
+        if resolved[0].outcome == "approve":
+            emit_event = kwargs["emit_event"]
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_call",
+                    name="Write",
+                    payload={"call_id": "write-1", "arguments": '{"path":"app.py"}'},
+                )
+            )
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=json.dumps(actual_output),
+                    payload={"call_id": "write-1"},
+                )
+            )
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(AuditDecisionBlock).first())
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.state.session_id == "s1")
+
+        assert len(app.query(DiffBlock)) == 1
+        diff_block = app.query_one(DiffBlock)
+        assert "app.py" in diff_block.body
+        assert diff_block.allow_vertical_scroll is False
+        assert not app.query(ToolBlock)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_initial_setup_guides_missing_config(tmp_path) -> None:
+    settings = Settings(path=tmp_path / "config.toml")
+    app = DeepyTuiApp(
+        settings=settings,
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+        guide_missing_config=True,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.2)
+
+        assert app.query(InlineChoiceBlock).first()
+        assert app.query(InlineChoiceBlock).last().title_text == "Reset: select provider"
+        assert any("Deepy needs a provider API key" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_load_skill_tool_output_is_summarized(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "load_skill",
+            "output": "# Skill: demo\n\nVERY LONG SKILL BODY",
+            "error": None,
+            "metadata": {
+                "name": "demo",
+                "description": "Demo skill",
+                "root": str(tmp_path / ".agents" / "skills" / "demo"),
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "load-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "load skill"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Load Skill ok - demo"
+        assert block.body == ""
+        assert "Loaded skill: demo" in block.output_body
+        assert "VERY LONG SKILL BODY" not in block.output_body
+        assert block.query_one(".tool-output", Static).display is False
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_stream_events_render_transcript_blocks(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "src/app.py",
+                "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="reasoning_delta", text="thinking"))
+        emit_event(DeepyStreamEvent(kind="text_delta", text="hello"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={"call_id": "call-1", "arguments": '{"path":"src/app.py"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Shell",
+                payload={"call_id": "call-2", "arguments": '{"command":"pytest"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "call-1"},
+            )
+        )
+        return RunSummary(
+            output="hello",
+            session_id="s1",
+            complete=True,
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        )
+
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "change it"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        thinking = app.query_one(ThinkingBlock)
+        assert thinking.title == "·"
+        assert thinking.body == "thinking"
+        assert thinking.query_one(".thinking-role-line")
+        assert str(thinking.query_one(".thinking-marker", Label).content) == "·"
+        assert app.query_one(AssistantBlock).markdown == "hello"
+        diff_block = app.query_one(DiffBlock)
+        assert diff_block.body.startswith("src/app.py")
+        assert "/src/app.py" not in diff_block.body
+        assert not app.query(".usage-line")
+        assert "usage input" not in str(app.query_one("#status-left", Label).content)
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("AssistantBlock") < ordered.index("DiffBlock")
+        assert ordered.index("DiffBlock") < ordered.index("ToolBlock")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_call_placeholder_before_assistant_updates_in_place(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="mcp_search",
+                payload={"call_id": "mcp-1", "arguments": '{"query":"x"}'},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("ToolBlock") < ordered.index("AssistantBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assert app.query_one(AssistantBlock).markdown == "Answer starts\nAnswer continues"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_raw_tool_start_anchors_placeholder_before_active_assistant_block(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="raw_response",
+                name="response.output_item.added",
+                payload={
+                    "raw": SimpleNamespace(
+                        item=SimpleNamespace(
+                            type="function_call",
+                            call_id="mcp-1",
+                            name="mcp_search",
+                            arguments='{"query":"x"}',
+                        )
+                    )
+                },
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="mcp_search",
+                payload={"call_id": "mcp-1", "arguments": '{"query":"x"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("ToolBlock") < ordered.index("AssistantBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assert app.query_one(AssistantBlock).markdown == "Answer starts\nAnswer continues"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_late_tool_output_without_placeholder_appends_after_active_assistant_block(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "mcp_search",
+            "output": "Found result",
+            "error": None,
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Answer starts"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "mcp-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="\nAnswer continues"))
+        return RunSummary(output="Answer starts\nAnswer continues", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "search"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("AssistantBlock") < ordered.index("ToolBlock")
+        block = app.query_one(ToolBlock)
+        assert block.title.endswith(" ok")
+        assert "Server: memory" in block.output_body
+        assert "Tool: search" in block.output_body
+        assistant_blocks = list(app.query(AssistantBlock))
+        assert [block.markdown for block in assistant_blocks] == ["Answer starts", "\nAnswer continues"]
+        ordered_blocks = list(app.query(".transcript-block"))
+        assert ordered_blocks.index(assistant_blocks[0]) < ordered.index("ToolBlock")
+        assert ordered.index("ToolBlock") < ordered_blocks.index(assistant_blocks[1])
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_shell_output_after_approved_update_stays_after_prior_content(tmp_path) -> None:
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    preflight = {
+        "ok": True,
+        "name": "Update",
+        "output": "Proposed update",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+            "preflight": True,
+        },
+        "awaitUserResponse": False,
+    }
+    actual_update = {
+        "ok": True,
+        "name": "Update",
+        "output": "Updated file",
+        "error": None,
+        "metadata": {
+            "path": str(tmp_path / "app.py"),
+            "changedFiles": [str(tmp_path / "app.py")],
+            "diff": diff,
+            "diff_preview": diff,
+        },
+        "awaitUserResponse": False,
+    }
+    shell_output = tui_app.shell_tool_result_json(
+        _local_command_result("pytest", output="7 passed\n"),
+        output="7 passed\n",
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="I will update and then test."))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Update",
+                payload={
+                    "call_id": "update-1",
+                    "arguments": json.dumps(
+                        {
+                            "file_path": str(tmp_path / "app.py"),
+                            "old_string": "old",
+                            "new_string": "new",
+                        }
+                    ),
+                },
+            )
+        )
+        resolved = await kwargs["approval_resolver"](
+            [
+                PendingApproval(
+                    index=0,
+                    name="Update",
+                    tool_name="Update",
+                    arguments=json.dumps(
+                        {
+                            "file_path": str(tmp_path / "app.py"),
+                            "old_string": "old",
+                            "new_string": "new",
+                        }
+                    ),
+                    call_id="update-1",
+                    action_kind="text_update",
+                    preflight=preflight,
+                )
+            ]
+        )
+        if resolved[0].outcome == "approve":
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=json.dumps(actual_update),
+                    payload={"call_id": "update-1"},
+                )
+            )
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_call",
+                    name="shell",
+                    payload={
+                        "call_id": "shell-1",
+                        "arguments": json.dumps({"command": "pytest", "description": "run tests"}),
+                    },
+                )
+            )
+            shell_resolved = await kwargs["approval_resolver"](
+                [
+                    PendingApproval(
+                        index=0,
+                        name="shell",
+                        tool_name="shell",
+                        arguments=json.dumps({"command": "pytest", "description": "run tests"}),
+                        call_id="shell-1",
+                        action_kind="command",
+                    )
+                ]
+            )
+            if shell_resolved[0].outcome != "approve":
+                return RunSummary(output="done", session_id="s1", complete=True)
+            emit_event(
+                DeepyStreamEvent(
+                    kind="tool_output",
+                    text=shell_output,
+                    payload={"call_id": "shell-1"},
+                )
+            )
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(audit=AuditConfig(mode=AuditMode.NORMAL)), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "update"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(AuditDecisionBlock).first())
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(AuditDecisionBlock).first()
+            and "shell" in str(app.query_one(AuditDecisionBlock).query_one("#audit-decision-title").content).lower(),
+        )
+        block = app.query_one(AuditDecisionBlock)
+        summary = block.query_one("#audit-decision-summary")
+        assert summary.display is not False
+        summary_text = str(summary.content)
+        assert "command:" in summary_text
+        assert "pytest" in summary_text
+        assert "run tests" not in summary_text
+        assert not app.query(ToolBlock)
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(LocalCommandBlock).first())
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("AssistantBlock") < ordered.index("LocalCommandBlock")
+        assert ordered.index("DiffBlock") < ordered.index("LocalCommandBlock")
+        assert "7 passed" in app.query_one(LocalCommandBlock).output_body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_yolo_tool_outputs_split_later_assistant_text_after_diff(tmp_path) -> None:
+    diff = "--- a/leetcode/two_sum.py\n+++ b/leetcode/two_sum.py\n@@ -1 +1,3 @@\n-old\n+old\n+case 6\n+case 7\n"
+    update_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Update",
+            "output": "Updated file",
+            "error": None,
+            "metadata": {
+                "path": str(tmp_path / "leetcode" / "two_sum.py"),
+                "changedFiles": [str(tmp_path / "leetcode" / "two_sum.py")],
+                "diff": diff,
+                "diff_preview": diff,
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    read_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Read",
+            "output": "print('ok')",
+            "error": None,
+            "metadata": {"path": str(tmp_path / "leetcode" / "two_sum.py")},
+            "awaitUserResponse": False,
+        }
+    )
+    shell_output = tui_app.shell_tool_result_json(
+        _local_command_result("python leetcode/two_sum.py", output="7 passed\n"),
+        output="7 passed\n",
+    )
+    table = (
+        "| # | 输入 nums | target | 期望输出 | 说明 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 6 | `[2, 5, 5, 11]` | 10 | `[1, 2]` | 重复值 |\n"
+        "| 7 | `[1, 2, 3, 4, 5]` | 9 | `[3, 4]` | 末尾 |\n"
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=update_output,
+                payload={"call_id": "update-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="当前文件已有 5 个测试用例，我再加 2 个：\n"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=read_output,
+                payload={"call_id": "read-1"},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=shell_output,
+                payload={"call_id": "shell-1"},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="验证一下修改后的结果：\n\n" + table))
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(audit=AuditConfig(mode=AuditMode.YOLO)),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(140, 36)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "add tests"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.state.session_id == "s1")
+        await pilot.pause(0.2)
+
+        ordered_blocks = list(app.query(".transcript-block"))
+        ordered_types = [type(block).__name__ for block in ordered_blocks]
+        assistant_blocks = list(app.query(AssistantBlock))
+        assert len(assistant_blocks) == 2
+        assert assistant_blocks[0].markdown.startswith("当前文件已有")
+        assert assistant_blocks[1].markdown.startswith("验证一下")
+        assert ordered_types.index("DiffBlock") < ordered_blocks.index(assistant_blocks[0])
+        assert ordered_blocks.index(assistant_blocks[0]) < ordered_types.index("ToolBlock")
+        assert ordered_types.index("ToolBlock") < ordered_types.index("LocalCommandBlock")
+        assert ordered_types.index("LocalCommandBlock") < ordered_blocks.index(assistant_blocks[1])
+
+        transcript_blocks = [block for block in ordered_blocks if block.region.height > 0]
+        for before, after in zip(transcript_blocks, transcript_blocks[1:], strict=False):
+            assert before.region.y + before.region.height <= after.region.y
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_mutation_diff_precedes_streamed_assistant_summary(tmp_path) -> None:
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Update",
+            "output": "Updated file",
+            "error": None,
+            "metadata": {
+                "path": "src/app.py",
+                "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Update",
+                payload={"call_id": "update-1", "arguments": '{"path":"src/app.py"}'},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Updated src/app.py."))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "update-1"},
+            )
+        )
+        return RunSummary(output="Updated src/app.py.", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "update"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        ordered = [type(block).__name__ for block in app.query(".transcript-block")]
+        assert ordered.index("DiffBlock") < ordered.index("AssistantBlock")
+        assert not app.query(ToolBlock)
+        assert app.query_one(AssistantBlock).markdown == "Updated src/app.py."
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_concise_view_hides_reasoning_and_counts_stream_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="abc"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="de"))
+        await pilot.pause(0.01)
+
+        assert list(app.query(ThinkingBlock)) == []
+        status = app.query_one("#status-right", Label)
+        assert "↓ 5 tokens" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_full_view_renders_reasoning_and_counts_stream_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(DeepyStreamEvent(kind="reasoning_delta", text="abc"))
+        await app._handle_stream_event(DeepyStreamEvent(kind="text_delta", text="de"))
+        await pilot.pause(0.01)
+
+        thinking = app.query_one(ThinkingBlock)
+        assert thinking.body == "abc"
+        assert thinking.query_one(".thinking-role-line")
+        status = app.query_one("#status-right", Label)
+        assert "↓ 5 tokens" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_counts_silent_tool_arguments_with_short_units(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tui_app, "estimate_tokens_for_text", len)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+
+        await app._handle_stream_event(
+            DeepyStreamEvent(
+                kind="raw_response",
+                name="response.function_call_arguments.delta",
+                text="x" * 1100,
+            )
+        )
+        await pilot.pause(0.01)
+
+        status = app.query_one("#status-right", Label)
+        assert "↓ 1.1K tokens" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_tool_block_includes_subagent_name(tmp_path) -> None:
+    subagent_output = json.dumps(
+        {
+            "ok": True,
+            "name": "subagent_explore",
+            "output": "Found auth routing in src/app.py.",
+            "error": None,
+            "metadata": {"kind": "subagent_result", "subagent": "explore"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="subagent_explore",
+                payload={
+                    "call_id": "sub-1",
+                    "arguments": '{"input":"Trace auth routing"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=subagent_output,
+                payload={"call_id": "sub-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "trace auth"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Subagent explore ok"
+        assert block.body == ""
+        assert "Trace auth routing" in block.arguments
+        assert "Found auth routing in src/app.py." in block.output_body
+        params = block.query_one(".subagent-parameters", Static)
+        assert params.display is True
+        assert "Subagent Parameters" in str(params.content)
+        assert "Trace auth routing" in str(params.content)
+        details = block.query_one(".tool-details", Static)
+        assert details.display is False
+        block.action_toggle_expand()
+        await pilot.pause(0.01)
+        assert details.display is True
+        rendered_details = block.details
+        assert "Task" in rendered_details
+        assert "Trace auth routing" in rendered_details
+        assert "Report" in rendered_details
+        assert "Found auth routing in src/app.py." in rendered_details
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_subagent_expanded_report_is_bounded(tmp_path) -> None:
+    long_report = "\n".join(f"finding {index}" for index in range(24))
+    subagent_output = json.dumps(
+        {
+            "ok": True,
+            "name": "subagent_reviewer",
+            "output": long_report,
+            "error": None,
+            "metadata": {"kind": "subagent_result", "subagent": "reviewer"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="subagent_reviewer",
+                payload={
+                    "call_id": "sub-1",
+                    "arguments": '{"input":"Review the staged change"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=subagent_output,
+                payload={"call_id": "sub-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "review"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        block.action_toggle_expand()
+        await pilot.pause(0.01)
+        rendered_details = block.details
+        assert "finding 0" in rendered_details
+        assert "finding 15" in rendered_details
+        assert "finding 16" not in rendered_details
+        assert "... output truncated ..." in rendered_details
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_folds_retryable_file_tool_attempt_into_later_success(tmp_path) -> None:
+    retryable_output = json.dumps(
+        {
+            "ok": False,
+            "name": "Write",
+            "output": "",
+            "error": "Invalid tool arguments JSON",
+            "metadata": {
+                "error_code": "invalid_arguments",
+                "retryable": True,
+                "recovery": "Pass valid JSON.",
+                "parse_error": "unexpected character",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    success_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {"path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={
+                    "call_id": "bad-1",
+                    "arguments": (
+                        '{"path":"src/app.py","content":SECRET,'
+                        '"overwrite":true}'
+                    ),
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=retryable_output, payload={"call_id": "bad-1"})
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={
+                    "call_id": "good-1",
+                    "arguments": '{"path":"src/app.py","content":"new\\n"}',
+                },
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=success_output, payload={"call_id": "good-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        tool_blocks = list(app.query(ToolBlock))
+        assert len(tool_blocks) == 1
+        block = tool_blocks[0]
+        assert block.title == "Write ok - src/app.py"
+        assert block.body == ""
+        assert "SECRET" not in block.output_body
+        assert "SECRET" not in block.arguments
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_call_shows_running_state_until_output(tmp_path) -> None:
+    release = asyncio.Event()
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Read",
+                payload={"call_id": "read-1", "arguments": '{"path":"src/app.py"}'},
+            )
+        )
+        await release.wait()
+        return RunSummary(output="", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "read"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.query(ToolBlock).first())
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Read running"
+        assert block.has_class("-running")
+        assert not block.has_class("-ok")
+        release.set()
+        await pilot.pause(0.1)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_does_not_fold_blocking_file_tool_failure(tmp_path) -> None:
+    blocking_output = json.dumps(
+        {
+            "ok": False,
+            "name": "Write",
+            "output": "",
+            "error": "File must be read before it can be modified.",
+            "metadata": {"error_code": "stale_snapshot", "path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+    success_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {"path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={"call_id": "bad-1", "arguments": '{"path":"src/app.py"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=blocking_output, payload={"call_id": "bad-1"})
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={"call_id": "good-1", "arguments": '{"path":"src/app.py"}'},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(kind="tool_output", text=success_output, payload={"call_id": "good-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        tool_blocks = list(app.query(ToolBlock))
+        assert len(tool_blocks) == 2
+        assert tool_blocks[0].title == "Write failed - src/app.py"
+        assert tool_blocks[1].title == "Write ok - src/app.py"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_retryable_tool_block_exposes_bounded_recovery_details(tmp_path) -> None:
+    retryable_output = json.dumps(
+        {
+            "ok": False,
+            "name": "Write",
+            "output": "",
+            "error": "Invalid tool arguments JSON",
+            "metadata": {
+                "error_code": "invalid_arguments",
+                "retryable": True,
+                "recovery": "Pass valid JSON.",
+                "parse_error": "\n".join(f"parse line {index}" for index in range(20)),
+            },
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="Write",
+                payload={
+                    "call_id": "bad-1",
+                    "arguments": '{"path":"src/app.py","content":SECRET}',
+                },
+            )
+        )
+        kwargs["emit_event"](
+            DeepyStreamEvent(kind="tool_output", text=retryable_output, payload={"call_id": "bad-1"})
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "write"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.title == "Write retryable"
+        assert block.has_class("-retryable")
+        assert not block.has_class("-running")
+        assert block.body == ""
+        assert "Invalid tool arguments JSON" in block.output_body
+        assert "SECRET" not in block.output_body
+        assert "Pass valid JSON." in block.details
+        assert "parse line 6" in block.details
+        assert "parse line 8" not in block.details
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ignores_final_message_after_text_delta_to_avoid_duplicate_output(
+    tmp_path,
+) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="你好"))
+        emit_event(DeepyStreamEvent(kind="text_delta", text="，世界"))
+        emit_event(DeepyStreamEvent(kind="message", text="你好，世界"))
+        return RunSummary(output="你好，世界", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert [block.markdown for block in app.query(AssistantBlock)] == ["你好，世界"]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_assistant_block_shows_live_activity_without_stealing_focus(tmp_path) -> None:
+    release = asyncio.Event()
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](DeepyStreamEvent(kind="text_delta", text="streaming"))
+        await release.wait()
+        return RunSummary(output="streaming", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query_one(AssistantBlock).has_class("-active")
+            and str(app.query_one(AssistantBlock).query_one(".block-title", Label).content) == "•",
+        )
+
+        assert app.query_one("#prompt-input", PromptTextArea).has_focus
+        release.set()
+        await _wait_for(
+            pilot,
+            lambda: not app.query_one(AssistantBlock).has_class("-active")
+            and str(app.query_one(AssistantBlock).query_one(".block-title", Label).content) == "•",
+        )
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_uses_message_event_when_no_text_delta_was_streamed(tmp_path) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](DeepyStreamEvent(kind="message", text="final only"))
+        return RunSummary(output="final only", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert [block.markdown for block in app.query(AssistantBlock)] == ["final only"]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_interleaves_thinking_and_tool_calls_in_stream_order(tmp_path) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="reasoning_delta", text="first"))
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="WebFetch",
+                payload={"call_id": "fetch-1", "arguments": '{"url":"https://example.com"}'},
+            )
+        )
+        emit_event(DeepyStreamEvent(kind="reasoning_delta", text="second"))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "fetch"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        blocks = list(app.query(".transcript-block"))
+        ordered = [
+            (type(block).__name__, getattr(block, "body", ""))
+            for block in blocks
+            if isinstance(block, ThinkingBlock | ToolBlock)
+        ]
+        assert ordered == [
+            ("ThinkingBlock", "first"),
+            ("ToolBlock", ""),
+            ("ThinkingBlock", "second"),
+        ]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_autoscrolls_when_live_block_grows(tmp_path) -> None:
+    release = asyncio.Event()
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        for index in range(80):
+            emit_event(DeepyStreamEvent(kind="reasoning_delta", text=f"line {index}\n"))
+            await asyncio.sleep(0)
+        await release.wait()
+        return RunSummary(output="", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "think"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        transcript = app.query_one("#transcript")
+        assert transcript.max_scroll_y > 0
+        assert transcript.scroll_y == transcript.max_scroll_y
+
+        release.set()
+        await pilot.pause(0.2)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_autoscrolls_after_assistant_markdown_table_renders(tmp_path) -> None:
+    release = asyncio.Event()
+    table = "| Case | Input | Output |\n| --- | --- | --- |\n" + "\n".join(
+        f"| {index} | `[1, {index}]` | `{index + 1}` |" for index in range(60)
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(DeepyStreamEvent(kind="text_delta", text="Here is the table:\n\n"))
+        await asyncio.sleep(0)
+        emit_event(DeepyStreamEvent(kind="text_delta", text=table))
+        await release.wait()
+        return RunSummary(output="", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "table"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        transcript = app.query_one("#transcript")
+        assert transcript.max_scroll_y > 0
+        assert transcript.scroll_y == transcript.max_scroll_y
+
+        release.set()
+        await pilot.pause(0.2)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_transcript_wheel_scroll_does_not_trigger_prompt_history(tmp_path) -> None:
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        transcript = app.query_one("#transcript")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        app.controller.add_prompt_history("previous prompt")
+        for index in range(80):
+            await app._append_block(InfoBlock(f"line {index}"))
+        await pilot.pause(0.1)
+
+        assert transcript.max_scroll_y > 0
+        assert transcript.scroll_y == transcript.max_scroll_y
+        assert prompt.has_focus
+        assert prompt.text == ""
+
+        scroll_target = list(app.query(InfoBlock))[-1]
+        wheel_event = events.MouseScrollUp(
+            scroll_target,
+            0,
+            0,
+            0,
+            5,
+            0,
+            False,
+            False,
+            False,
+        )
+        scroll_target.post_message(wheel_event)
+        await pilot.pause(0.1)
+
+        assert getattr(wheel_event, "_no_default_action") is True
+        assert transcript.scroll_y < transcript.max_scroll_y
+        assert prompt.text == ""
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "previous prompt")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_wheel_scroll_does_not_trigger_prompt_history(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        app.controller.add_prompt_history("previous prompt")
+        prompt.text = ""
+
+        wheel_event = events.MouseScrollUp(
+            prompt,
+            0,
+            0,
+            0,
+            5,
+            0,
+            False,
+            False,
+            False,
+        )
+        prompt.post_message(wheel_event)
+        await pilot.pause(0.1)
+
+        assert getattr(wheel_event, "_no_default_action") is True
+        assert prompt.text == ""
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "previous prompt")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_preserves_scroll_position_and_new_output_indicator(tmp_path) -> None:
+    first_batch_done = asyncio.Event()
+    continue_output = asyncio.Event()
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        for index in range(80):
+            emit_event(DeepyStreamEvent(kind="reasoning_delta", text=f"line {index}\n"))
+            await asyncio.sleep(0)
+        first_batch_done.set()
+        await continue_output.wait()
+        emit_event(DeepyStreamEvent(kind="reasoning_delta", text="late line\n"))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "fill transcript"
+        await pilot.press("enter")
+        await asyncio.wait_for(first_batch_done.wait(), timeout=1)
+        await pilot.pause(0.1)
+
+        transcript = app.query_one("#transcript")
+        assert transcript.max_scroll_y > 0
+        transcript.scroll_home(animate=False)
+        await pilot.pause(0.1)
+        assert transcript.scroll_y < transcript.max_scroll_y
+
+        continue_output.set()
+        await pilot.pause(0.2)
+
+        assert transcript.scroll_y < transcript.max_scroll_y
+        status = app.query_one("#status-right", Label)
+        assert "New output ↓" in str(status.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_submitting_prompt_from_history_scrolls_to_bottom(tmp_path) -> None:
+    calls = 0
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        nonlocal calls
+        calls += 1
+        emit_event = kwargs["emit_event"]
+        if calls == 1:
+            for index in range(80):
+                emit_event(DeepyStreamEvent(kind="reasoning_delta", text=f"line {index}\n"))
+                await asyncio.sleep(0)
+        return RunSummary(output=f"ok {calls}", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(
+        settings=Settings(ui=UiConfig(view_mode="full")),
+        project_root=tmp_path,
+        run_once=fake_run_once,
+    )
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "fill transcript"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+        transcript = app.query_one("#transcript")
+        assert transcript.max_scroll_y > 0
+        transcript.scroll_home(animate=False)
+        await pilot.pause(0.1)
+        assert transcript.scroll_y < transcript.max_scroll_y
+
+        prompt.text = "new prompt"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert transcript.scroll_y == transcript.max_scroll_y
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_output_is_compacted(tmp_path) -> None:
+    long_output = "\n".join(f"line {index}" for index in range(30))
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "WebFetch",
+            "output": long_output,
+            "error": None,
+            "metadata": {"url": "https://example.com"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="WebFetch",
+                payload={"call_id": "fetch-1", "arguments": '{"url":"https://example.com"}'},
+            )
+        )
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "fetch-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "fetch"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        body = app.query_one(ToolBlock).body
+        block = app.query_one(ToolBlock)
+        assert body == ""
+        assert "https://example.com" in block.arguments
+        assert block.title == "WebFetch ok"
+        assert "line 0" in block.output_body
+        output = block.query_one(".tool-output", Static)
+        assert output.display is False
+        assert "line 0" not in str(output.content)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_stream_errors_render_error_block(tmp_path) -> None:
+    async def failing_run_once(prompt: str, **kwargs) -> RunSummary:
+        raise RuntimeError(f"failed: {prompt}")
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=failing_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "break"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.query_one(ErrorBlock).body == "failed: break"
+        assert app.state.status == "Error"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_unknown_slash_command_is_not_sent_to_model(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        return RunSummary(output="unexpected", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/unknown"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert calls == []
+        assert "Unsupported TUI command: /unknown" in app.query_one(ErrorBlock).body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_view_persists_toggled_mode_and_shows_confirmation(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\nview_mode = "concise"\n', encoding="utf-8")
+    app = DeepyTuiApp(
+        settings=load_settings(config_path),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/view",
+            lambda: any("View: full · reasoning shown" in block.body for block in app.query(InfoBlock)),
+        )
+
+        assert load_settings(config_path).ui.view_mode == "full"
+        assert app.settings.ui.view_mode == "full"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_view_invalid_argument_reports_usage_without_persisting(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\nview_mode = "full"\n', encoding="utf-8")
+    app = DeepyTuiApp(
+        settings=load_settings(config_path),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await _submit_prompt(
+            app,
+            pilot,
+            "/view verbose",
+            lambda: any("Usage: /view [toggle|concise|full]" in block.body for block in app.query(ErrorBlock)),
+        )
+
+        assert load_settings(config_path).ui.view_mode == "full"
+        assert app.settings.ui.view_mode == "full"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_command_provider_discovers_and_searches_commands(tmp_path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_invoke(name: str, argument: str = "") -> None:
+        calls.append((name, argument))
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.invoke_tui_command = fake_invoke  # type: ignore[method-assign]
+        provider = DeepyCommandProvider(app.screen)
+
+        discovered = [hit async for hit in provider.discover()]
+        assert [hit.text for hit in discovered[:3]] == ["/help", "/new", "/resume"]
+        assert any(hit.text == "/view" and hit.help == "Settings: Hide or show reasoning transcript text" for hit in discovered)
+        assert any(hit.text == "/help" and hit.help == "Help: Show commands, keybindings, and TUI state" for hit in discovered)
+
+        help_hit = next(hit for hit in discovered if hit.text == "/help")
+        help_hit.command()
+        assert calls == [("help", "")]
+
+        searched = [hit async for hit in provider.search("mcp")]
+        assert any(hit.text == "/mcp" and hit.help == "Tools: Show MCP status" for hit in searched)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_command_palette_closes_with_escape(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        await pilot.press("ctrl+p")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, CommandPalette)
+
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+        assert not isinstance(app.screen, CommandPalette)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_still_requests_interrupt_while_busy(tmp_path) -> None:
+    release = asyncio.Event()
+
+    async def slow_run_once(prompt: str, **kwargs) -> RunSummary:
+        await release.wait()
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=slow_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "long task"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert app.state.interrupt_requested is True
+        assert app.state.status == "Interrupt requested"
+
+        release.set()
+        await pilot.pause(0.2)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_help_command_opens_info_screen(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/help"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, InfoScreen)
+        assert "Deepy Commands" in app.screen.markdown
+        assert not app.screen.query(Footer)
+        await pilot.press("escape")
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ps_command_appends_foreground_background_task_block(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.background_tasks.start(
+        command="worker",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/ps"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert not isinstance(app.screen, InfoScreen)
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Background Tasks" in rendered_info
+        assert "1. " in rendered_info
+        assert "worker" in rendered_info
+        assert "Use /stop <id>, /stop <number>, or /stop all." in rendered_info
+        assert any(block.body == "/ps" for block in app.query(UserBlock))
+        assert app.controller.prompt_history[-1] == "/ps"
+        app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_background_task_state_does_not_render_as_user_ps_output(tmp_path) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        app.background_tasks.start(
+            command="worker",
+            argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+            cwd=tmp_path,
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "start background work"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Background Tasks" not in rendered_info
+        app.background_tasks.stop_all(force_after_grace=True)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_stop_command_requests_background_task_stop(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.background_tasks.start(
+        command="worker",
+        argv=[sys.executable, "-c", "import time; time.sleep(5)"],
+        cwd=tmp_path,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/stop"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, ChoiceScreen)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        blocks = list(app.query(InfoBlock))
+        assert any("Stop requested for background task" in block.body for block in blocks)
+        left = str(app.query_one("#status-left", Label).content)
+        assert "bg " not in left
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_command_opens_status_screen(tmp_path, monkeypatch) -> None:
+    calls = 0
+
+    def fake_fetch(settings):
+        nonlocal calls
+        calls += 1
+        return BalanceStatus(is_available=True)
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fake_fetch)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/status"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, InfoScreen)
+        assert calls == 1
+        assert "## Project" in app.screen.markdown
+        assert "Root:" in app.screen.markdown
+        assert "## MCP" in app.screen.markdown
+        assert "State:" in app.screen.markdown
+        assert "## Balance" in app.screen.markdown
+        assert "Account:" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_mcp_command_prints_runtime_tools_to_transcript(tmp_path) -> None:
+    class FakeMcpRuntime:
+        statuses = [
+            McpServerStatus(
+                name="mcp_tavily",
+                transport="stdio",
+                source="project",
+                state="connected",
+                tool_count=1,
+                tools=("mcp_tavily__tavily_search",),
+                preferred_web_search_tools=("mcp_tavily__tavily_search",),
+            )
+        ]
+
+        async def connect(self) -> None:
+            return
+
+        async def cleanup(self) -> None:
+            return
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app.mcp_runtime = FakeMcpRuntime()  # type: ignore[assignment]
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/mcp"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: any("mcp_tavily__tavily_search *web-search*" in block.body for block in app.query(InfoBlock)),
+        )
+
+        assert not isinstance(app.screen, InfoScreen)
+        assert any("MCP servers:" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_model_turn_reuses_app_mcp_runtime(tmp_path) -> None:
+    observed: list[object] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        observed.append(kwargs.get("mcp_runtime"))
+        return RunSummary(output="done", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: observed)
+
+        assert observed == [app.mcp_runtime]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_status_command_does_not_fetch_balance_for_third_party_provider(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(
+        settings=Settings(
+            model=ModelConfig(
+                provider="xiaomi",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="sk-test",
+            )
+        ),
+        project_root=tmp_path,
+        run_once=_idle_run_once,
+    )
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/status"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, InfoScreen)
+        assert "## Balance" in app.screen.markdown
+        assert "Account:" in app.screen.markdown
+        assert "unsupported provider" in app.screen.markdown
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_non_status_surfaces_do_not_fetch_balance(tmp_path, monkeypatch) -> None:
+    def fail_fetch(settings):
+        raise AssertionError("balance lookup should not run")
+
+    monkeypatch.setattr(tui_app, "fetch_deepseek_balance", fail_fetch)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        app._update_status("Idle")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/help"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        app._exit_with_summary()
+
+        assert app.exit_summary_text is not None
+
+
+@pytest.mark.asyncio
+async def test_tui_theme_and_model_direct_commands_persist_settings(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/theme light"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        prompt.text = "/model set deepseek-v4-flash high"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        prompt.text = "/model set openrouter xiaomi/mimo-v2.5 high"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        saved = load_settings(config_path)
+        assert saved.ui.theme == "light"
+        assert saved.model.provider == "openrouter"
+        assert saved.model.name == "xiaomi/mimo-v2.5"
+        assert saved.model.reasoning_mode == "high"
+        rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
+        assert "Provider switched to openrouter" in rendered_info
+        assert "Reconfigure the API key" in rendered_info
+        assert "https://openrouter.ai/workspaces/default/keys" in rendered_info
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_theme_picker_uses_inline_choice(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/theme"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Select theme",
+        )
+
+        block = app.query_one(InlineChoiceBlock)
+        assert block.parent is app.query_one("#interaction-sheet")
+        assert not block.has_class("transcript-block")
+        assert "Decision" not in str(block.query_one(".block-title", Label).content)
+        options = block.query_one("#inline-choice-options", OptionList)
+        labels = [_option_prompt_text(options.get_option_at_index(index)) for index in range(options.option_count)]
+        assert any("tokyo-night" in label for label in labels)
+        assert any("solarized-light" in label for label in labels)
+        assert options.region.height >= min(3, options.option_count)
+        assert options.has_focus
+        assert "Ctrl+C interrupt" not in str(app.query_one("#prompt-actions").content)
+        assert not isinstance(app.screen, ChoiceScreen)
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: load_settings(config_path).ui.theme == "light")
+        assert not app.query(InlineChoiceBlock)
+        assert app.query_one("#interaction-sheet").display is False
+        assert app.query_one("#prompt-input", PromptTextArea).has_focus
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_theme_picker_persists_textual_theme_override(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\ntheme = "dark"\n', encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/theme tokyo-night"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: load_settings(config_path).ui.textual_theme == "tokyo-night")
+
+        saved = load_settings(config_path)
+        assert saved.ui.theme == "dark"
+        assert app.theme == "tokyo-night"
+        assert any("Saved TUI theme: tokyo-night" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ui_command_persists_interface(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\ninterface = "modern"\ntheme = "dark"\n', encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/ui classic"
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: load_settings(config_path).ui.interface == "classic")
+
+        assert app.settings.ui.interface == "classic"
+        assert any("Saved UI: Classic UI" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ui_picker_persists_without_usage_error(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[ui]\ninterface = "modern"\ntheme = "dark"\n', encoding="utf-8")
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/ui"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Select UI",
+        )
+
+        block = app.query_one(InlineChoiceBlock)
+        options = block.query_one("#inline-choice-options", OptionList)
+        assert options.has_focus
+        assert not app.query(ErrorBlock)
+
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: load_settings(config_path).ui.interface == "classic")
+
+        assert app.settings.ui.interface == "classic"
+        assert not app.query(ErrorBlock)
+        assert any("Saved UI: Classic UI" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_model_picker_refocuses_prompt_after_save(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/model"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Select provider",
+        )
+
+        provider_block = app.query_one(InlineChoiceBlock)
+        provider_options = provider_block.query_one("#inline-choice-options", OptionList)
+        provider_labels = [
+            _option_prompt_text(provider_options.get_option_at_index(index))
+            for index in range(provider_options.option_count)
+        ]
+        assert any("deepseek" in label for label in provider_labels)
+        assert any("openrouter" in label for label in provider_labels)
+        assert provider_options.region.height >= min(3, provider_options.option_count)
+        assert provider_options.has_focus
+
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).last().title_text == "Select model",
+        )
+        model_block = app.query_one(InlineChoiceBlock)
+        model_options = model_block.query_one("#inline-choice-options", OptionList)
+        model_labels = [
+            _option_prompt_text(model_options.get_option_at_index(index))
+            for index in range(model_options.option_count)
+        ]
+        assert any("deepseek-v4-pro" in label for label in model_labels)
+        assert model_options.region.height >= 1
+        assert model_options.has_focus
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).last().title_text == "Select thinking",
+        )
+        await pilot.press("enter")
+
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        saved = load_settings(config_path)
+        assert saved.model.provider == "deepseek"
+        assert saved.model.name == "deepseek-v4-pro"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_model_picker_refocuses_prompt_after_cancel(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    settings = load_settings(config_path)
+    app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/model"
+        await pilot.press("enter")
+        await _wait_for(
+            pilot,
+            lambda: app.query(InlineChoiceBlock).first()
+            and app.query(InlineChoiceBlock).last().title_text == "Select provider",
+        )
+
+        await pilot.press("escape")
+
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_new_command_resets_session_and_loaded_skills(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.state = app.state.__class__(session_id="old-session")
+        app.controller.loaded_skill_names.append("demo")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/new"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.state.session_id is None
+        assert app.controller.loaded_skill_names == []
+        assert "Started a new TUI session." in app.query_one(InfoBlock).body
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_compact_command_reports_result(tmp_path, monkeypatch) -> None:
+    class Result:
+        compacted = True
+        before_tokens = 100
+        after_tokens = 40
+        preserved_item_count = 2
+        message = ""
+
+    async def fake_compact(self, session_id: str, *, focus_instruction: str | None = None):
+        assert session_id == "s1"
+        assert focus_instruction == "keep decisions"
+        return Result()
+
+    monkeypatch.setattr("deepy.ui.modern.app.DeepySessionManager.compact_session", fake_compact)
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        app.state = app.state.__class__(session_id="s1")
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/compact keep decisions"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert any("Context compacted" in block.body for block in app.query(InfoBlock))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_resumes_session_and_restores_transcript(tmp_path) -> None:
+    session = DeepySession.create(tmp_path, session_id="s1")
+    write_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Write",
+            "output": "Wrote file",
+            "error": None,
+            "metadata": {
+                "path": "selection_sort.py",
+                "diff": "--- a/selection_sort.py\n+++ b/selection_sort.py\n@@ -1 +1 @@\n-old\n+new\n",
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    shell_output = json.dumps(
+        {
+            "ok": True,
+            "name": "shell",
+            "output": "排序后: [1, 2, 3]",
+            "error": None,
+            "metadata": {"command": "python selection_sort.py", "exitCode": 0},
+            "awaitUserResponse": False,
+        }
+    )
+    await session.add_items(
+        [
+            {"role": "user", "content": "hello"},
+            {
+                "type": "function_call",
+                "call_id": "write-1",
+                "name": "Write",
+                "arguments": '{"path":"selection_sort.py"}',
+            },
+            {"type": "function_call_output", "call_id": "write-1", "output": write_output},
+            {"role": "assistant", "content": "Hi."},
+            {"type": "function_call_output", "call_id": "shell-1", "output": shell_output},
+        ]
+    )
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/resume s1"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        assert app.state.session_id == "s1"
+        assert any(block.body == "hello" for block in app.query(UserBlock))
+        assert any(block.markdown == "Hi." for block in app.query(AssistantBlock))
+        assert not any("function_call_output" in block.body for block in app.query(InfoBlock))
+        tool_blocks = list(app.query(ToolBlock))
+        assert all(block.title != "Write ok - selection_sort.py" for block in tool_blocks)
+        shell_block = next(block for block in tool_blocks if block.title.startswith("Shell ok"))
+        assert shell_block.title == "Shell ok - python selection_sort.py"
+        assert shell_block.query_one(".tool-output", Static).display is False
+        assert app.query_one(DiffBlock).body.startswith("selection_sort.py")
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_sessions_command_opens_session_picker(tmp_path) -> None:
+    session = DeepySession.create(tmp_path, session_id="s1")
+    await session.add_items([{"role": "user", "content": "hello"}])
+    session.record_usage({"prompt_tokens": 120, "completion_tokens": 4, "total_tokens": 124})
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "/sessions"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert not isinstance(app.screen, ChoiceScreen)
+        block = app.query_one(InlineChoiceBlock)
+        assert block.title_text == "Sessions"
+        options = block.query_one("#inline-choice-options", OptionList)
+        label = _option_prompt_text(options.get_option_at_index(0))
+        assert label.startswith("hello  ")
+        assert "\n" not in label
+        assert "completed" in label
+        assert "tokens" in label
+        assert "s1" in label
+        assert "updated=" not in label
+        assert "history estimate" not in label
+        assert ".jsonl" not in label
+        await pilot.press("enter")
+        await _wait_for(pilot, lambda: app.state.session_id == "s1")
+        assert app.query_one("#prompt-input", PromptTextArea).has_focus
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_answer_continues_same_session(tmp_path) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append((prompt, kwargs.get("session_id")))
+        if len(calls) == 1:
+            return RunSummary(
+                output="",
+                session_id="s1",
+                complete=False,
+                status="waiting_for_user",
+                pending_questions=[
+                    {
+                        "question": "Which package manager?",
+                        "options": [{"label": "uv"}, {"label": "pip"}],
+                    }
+                ],
+            )
+        return RunSummary(output="continued", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        assert app.query_one(QuestionBlock).body == "Which package manager?"
+        app.query_one(QuestionBlock).action_submit()
+        await _wait_for(pilot, lambda: len(calls) == 2)
+
+        assert calls[0] == ("ask", None)
+        assert calls[1][1] == "s1"
+        assert '"Which package manager?"="uv"' in calls[1][0]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_ask_user_question_tool_block_does_not_duplicate_question(tmp_path) -> None:
+    tool_args = json.dumps(
+        {
+            "questions": [
+                {
+                    "question": "Which package manager?",
+                    "options": [{"label": "uv"}, {"label": "pip"}],
+                }
+            ]
+        }
+    )
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "AskUserQuestion",
+            "output": (
+                "Waiting for user input.\n"
+                "1. Which package manager?\n"
+                "   Mode: single-select\n"
+                "   - uv\n"
+                "   - pip"
+            ),
+            "error": None,
+            "metadata": {
+                "kind": "ask_user_question",
+                "questions": [
+                    {
+                        "question": "Which package manager?",
+                        "options": [{"label": "uv"}, {"label": "pip"}],
+                    }
+                ],
+            },
+            "awaitUserResponse": True,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        emit_event = kwargs["emit_event"]
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="AskUserQuestion",
+                payload={"call_id": "ask-1", "arguments": tool_args},
+            )
+        )
+        emit_event(
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "ask-1"},
+            )
+        )
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[
+                {
+                    "question": "Which package manager?",
+                    "options": [{"label": "uv"}, {"label": "pip"}],
+                }
+            ],
+        )
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        tool_block = app.query_one(ToolBlock)
+        assert tool_block.title == "AskUserQuestion ok"
+        assert tool_block.body == ""
+        assert "Waiting for user input." in tool_block.output_body
+        assert "Parameters" not in tool_block.output_body
+        assert "Which package manager?" not in tool_block.output_body
+        assert app.query_one(QuestionBlock).body == "Which package manager?"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_sheet_locks_prompt_and_escape_cancels(tmp_path) -> None:
+    prompts: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        prompts.append(prompt)
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[
+                {
+                    "question": "Proceed with install?",
+                    "options": [{"label": "Yes"}, {"label": "No"}],
+                }
+            ],
+        )
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        assert prompt.disabled is True
+        prompt.focus()
+
+        await pilot.press("escape")
+        await _wait_for(
+            pilot,
+            lambda: any("declined to answer" in block.body for block in app.query(UserBlock)),
+        )
+
+        assert prompt.disabled is False
+        assert prompts == ["ask"]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_multiselect_custom_and_cancel_paths(tmp_path) -> None:
+    prompts: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        prompts.append(prompt)
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[
+                {
+                    "question": "Select work",
+                    "multiSelect": True,
+                    "options": [{"label": "tests"}, {"label": "docs"}],
+                }
+            ],
+        )
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        block = app.query_one(QuestionBlock)
+        block.selected_values = frozenset({"tests", "__other__"})
+        custom = block.query_one("#question-custom", TextArea)
+        custom.text = "lint"
+        block.action_submit()
+        await _wait_for(pilot, lambda: len(prompts) >= 2)
+
+        assert '"Select work"="tests, lint"' in prompts[-1]
+        app.exit()
+
+    declined: list[str] = []
+
+    async def cancel_run_once(prompt: str, **kwargs) -> RunSummary:
+        declined.append(prompt)
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[
+                {"question": "Proceed?", "options": [{"label": "Yes"}]},
+            ],
+        )
+
+    cancel_app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=cancel_run_once)
+    async with cancel_app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: cancel_app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(cancel_app, pilot, "ask", lambda: cancel_app.query_one(QuestionBlock))
+        cancel_app.query_one(QuestionBlock).action_cancel()
+        await _wait_for(
+            pilot,
+            lambda: any("declined to answer" in block.body for block in cancel_app.query(UserBlock)),
+        )
+
+        assert any("declined to answer" in block.body for block in cancel_app.query(UserBlock))
+        cancel_app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_custom_text_area_submits_with_enter(tmp_path) -> None:
+    prompts: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return RunSummary(
+                output="",
+                session_id="s1",
+                complete=False,
+                status="waiting_for_user",
+                pending_questions=[
+                    {
+                        "question": "Python goal?",
+                        "options": [{"label": "Web"}, {"label": "Data"}],
+                    }
+                ],
+            )
+        return RunSummary(output="continued", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        block = app.query_one(QuestionBlock)
+        options = block.query_one("#question-options", OptionList)
+        options.focus()
+        await _wait_for(pilot, lambda: options.has_focus)
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: block.selected_values == frozenset({"Data"}))
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: block.selected_values == frozenset({"__other__"}))
+        block.action_toggle_selected()
+        await _wait_for(
+            pilot,
+            lambda: (
+                block.query_one("#question-custom", TextArea).display
+                and block.query_one("#question-custom", TextArea).has_focus
+            ),
+        )
+        custom_option_text = _option_prompt_text(options.get_option_at_index(2))
+        assert block.selected_values == frozenset({"__other__"})
+        assert "Custom answer" in custom_option_text
+        custom = block.query_one("#question-custom", TextArea)
+        assert custom.display
+        assert custom.has_focus
+
+        custom.text = "AI"
+        custom.move_cursor((0, len(custom.text)))
+        custom.action_newline()
+        assert custom.text == "AI\n"
+        custom.insert("coding")
+        custom.action_submit()
+        await _wait_for(pilot, lambda: len(prompts) == 2)
+
+        assert '"Python goal?"="AI coding"' in prompts[-1]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_single_select_toggle_updates_selected_marker(tmp_path) -> None:
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        return RunSummary(
+            output="",
+            session_id="s1",
+            complete=False,
+            status="waiting_for_user",
+            pending_questions=[
+                {
+                    "question": "Python goal?",
+                    "options": [{"label": "Web"}, {"label": "Data"}],
+                }
+            ],
+        )
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        block = app.query_one(QuestionBlock)
+        options = block.query_one("#question-options", OptionList)
+        options.highlighted = 1
+        block.action_toggle_selected()
+
+        assert block.selected_values == frozenset({"Data"})
+        assert "[x] Data" in _option_prompt_text(options.get_option_at_index(1))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_question_single_select_marker_follows_highlight(tmp_path) -> None:
+    calls: list[str] = []
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        calls.append(prompt)
+        if len(calls) == 1:
+            return RunSummary(
+                output="",
+                session_id="s1",
+                complete=False,
+                status="waiting_for_user",
+                pending_questions=[
+                    {
+                        "question": "Python goal?",
+                        "options": [{"label": "Web"}, {"label": "Data"}],
+                    }
+                ],
+            )
+        return RunSummary(output="continued", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        await _submit_prompt(app, pilot, "ask", lambda: app.query_one(QuestionBlock))
+
+        options = app.query_one("#question-options", OptionList)
+        options.focus()
+        await _wait_for(pilot, lambda: options.has_focus)
+        assert options.has_focus
+        assert "[x] Web" in _option_prompt_text(options.get_option_at_index(0))
+        assert "[ ] Data" in _option_prompt_text(options.get_option_at_index(1))
+
+        options.action_cursor_down()
+        await _wait_for(pilot, lambda: "[x] Data" in _option_prompt_text(options.get_option_at_index(1)))
+        assert "[ ] Web" in _option_prompt_text(options.get_option_at_index(0))
+        assert "[x] Data" in _option_prompt_text(options.get_option_at_index(1))
+
+        app.query_one(QuestionBlock).action_submit()
+        await _wait_for(pilot, lambda: len(calls) == 2)
+        assert '"Python goal?"="Data"' in calls[-1]
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_block_expands_hidden_details(tmp_path) -> None:
+    long_output = "\n".join(f"line {index}" for index in range(30))
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "name": "Read",
+            "output": long_output,
+            "error": None,
+            "metadata": {"path": "src/app.py"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_output",
+                text=tool_output,
+                payload={"call_id": "read-1"},
+            )
+        )
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "read"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        block = app.query_one(ToolBlock)
+        assert block.details.startswith("line 0")
+        assert "line 29" in block.details
+        assert block.query_one(".subagent-parameters", Static).display is False
+        block.action_toggle_expand()
+        await pilot.pause(0.01)
+        assert block.query_one(".tool-details").display is False
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_tool_surfaces_show_metadata_and_side_projection(tmp_path) -> None:
+    shell_output = json.dumps(
+        {
+            "ok": False,
+            "name": "shell",
+            "output": "boom",
+            "error": "Command exited with code 2.",
+            "metadata": {
+                "cwd": str(tmp_path),
+                "exitCode": 2,
+                "durationMs": 15,
+                "shellPath": "/bin/zsh",
+                "commandDialect": "posix",
+                "outputTruncated": True,
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    todo_output = json.dumps(
+        {
+            "ok": True,
+            "name": "todo_write",
+            "output": "Updated todos",
+            "error": None,
+            "metadata": {
+                "kind": "todo_list",
+                "todos": [
+                    {"id": "t1", "content": "Implement shell block", "status": "completed"},
+                    {"id": "t2", "content": "Verify side panel", "status": "in_progress"},
+                    {"id": "t3", "content": "Ship todo progress UI", "status": "pending"},
+                ],
+            },
+            "awaitUserResponse": False,
+        }
+    )
+    mcp_output = json.dumps(
+        {
+            "ok": False,
+            "name": "external_tool",
+            "output": "",
+            "error": "server unavailable",
+            "metadata": {"kind": "mcp_tool", "server": "memory", "tool": "search", "state": "unavailable"},
+            "awaitUserResponse": False,
+        }
+    )
+
+    async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
+        kwargs["emit_event"](
+            DeepyStreamEvent(
+                kind="tool_call",
+                name="shell",
+                payload={
+                    "call_id": "s",
+                    "arguments": json.dumps({"command": "false", "description": "explain failure"}),
+                },
+            )
+        )
+        kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=shell_output, payload={"call_id": "s"}))
+        kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=todo_output, payload={"call_id": "t"}))
+        kwargs["emit_event"](DeepyStreamEvent(kind="tool_output", text=mcp_output, payload={"call_id": "m"}))
+        return RunSummary(output="ok", session_id="s1", complete=True)
+
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=fake_run_once)
+
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "tools"
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        shell_block, todo_block, mcp_block = list(app.query(ToolBlock))
+        assert shell_block.body == ""
+        assert shell_block.arguments == "false"
+        assert "explain failure" not in shell_block.arguments
+        assert shell_block.title == "Shell failed - false"
+        assert shell_block.output_body == ""
+        assert shell_block.query_one(".tool-output", Static).display is False
+        assert todo_block.body == ""
+        assert "Progress" not in todo_block.output_body
+        assert "Status" not in todo_block.output_body
+        assert "Current" in todo_block.output_body
+        assert "[>] t2: Verify side panel" in todo_block.output_body
+        assert "Verify side panel" in todo_block.output_body
+        assert "Parameters" not in todo_block.output_body
+        todo_output = todo_block.query_one(".tool-output", Static)
+        assert todo_output.display is True
+        assert isinstance(todo_output.content, Text)
+        assert todo_output.content.spans
+        todo_output_text = str(todo_output.content)
+        assert "Progress" not in todo_output_text
+        assert "Status" not in todo_output_text
+        assert "Current\n  [>] t2: Verify side panel" in todo_output_text
+        assert "[ ] t3: Ship todo progress UI" in todo_output_text
+        assert mcp_block.body == ""
+        assert "Server: memory" in mcp_block.output_body
+        assert "Tool: search" in mcp_block.output_body
+        assert "State: unavailable" in mcp_block.output_body
+        assert mcp_block.query_one(".tool-output", Static).display is False
+        assert all(block.body == "" for block in (shell_block, todo_block, mcp_block))
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_history_navigation(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        app.controller.add_prompt_history("first")
+        app.controller.add_prompt_history("second")
+        prompt.text = ""
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "second")
+        assert prompt.text == "second"
+        prompt.action_history_previous()
+        await _wait_for(pilot, lambda: prompt.text == "first")
+        assert prompt.text == "first"
+        prompt.action_history_next()
+        await _wait_for(pilot, lambda: prompt.text == "second")
+        assert prompt.text == "second"
+        prompt.action_history_next()
+        await _wait_for(pilot, lambda: prompt.text == "")
+        assert prompt.text == ""
+        prompt.action_cursor_up()
+        await _wait_for(pilot, lambda: prompt.text == "second")
+        assert prompt.text == "second"
+        prompt.action_cursor_up()
+        await _wait_for(pilot, lambda: prompt.text == "first")
+        assert prompt.text == "first"
+        prompt.action_cursor_down()
+        await _wait_for(pilot, lambda: prompt.text == "second")
+        assert prompt.text == "second"
+        app.exit()
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_arrow_keys_still_move_inside_multiline_input(tmp_path) -> None:
+    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause(0.01)
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "first\nsecond"
+        prompt.move_cursor((1, 0))
+
+        await pilot.press("up")
+        assert prompt.cursor_location == (0, 0)
+
+        await pilot.press("down")
+        assert prompt.cursor_location == (1, 0)
+        app.exit()
