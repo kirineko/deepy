@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from deepy.config import Settings
+from deepy.format_tokens import format_token_count_short as _format_token_count_short
 from deepy.llm.cache_context import format_cache_usage
 from deepy.mcp import mcp_policy_to_dict
 from deepy.prompts.runtime_context import build_runtime_context
@@ -339,18 +340,6 @@ def _format_context_window_status(report: StatusReport) -> str:
     if report.compact_threshold_tokens > 0 and used >= report.compact_threshold_tokens:
         status = f"{status} · compact next"
     return status
-
-
-def _format_token_count_short(value: int) -> str:
-    if value < 1_000:
-        return str(value)
-    if value < 1_000_000:
-        return f"{round(value / 1_000):g}K"
-    scaled = value / 1_000_000
-    if scaled >= 10:
-        return f"{round(scaled):g}M"
-    rounded = round(scaled, 1)
-    return f"{rounded:g}M"
 
 
 def _simple_box(title: str, rows: list[tuple[str, str]]) -> str:

@@ -173,7 +173,7 @@ def _subagent_stream_handler(definition: SubagentDefinition, emit_event: Any | N
         if emit_event is None:
             return
         from .events import DeepyStreamEvent, normalize_stream_event
-        from deepy.ui.message_view import format_tool_display_label
+        from deepy.ui.shared.render.message_view import format_tool_display_label
 
         normalized = normalize_stream_event(event)
         if normalized is None or normalized.kind != "tool_call":

@@ -90,8 +90,8 @@ uv run pytest
 开发中的 focused loop 优先运行最小相关测试：
 
 ```bash
-uv run pytest tests/test_tools.py -q
-uv run pytest tests/test_terminal_ui.py -q
+uv run pytest tests/tools/test_tools.py -q
+uv run pytest tests/ui/classic/test_terminal.py -q
 ```
 
 发布前运行完整套件：
