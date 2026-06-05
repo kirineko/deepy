@@ -175,18 +175,3 @@ def _coerce_write_content(path: Path, content: object) -> tuple[str, dict[str, o
             return "", {}, f"JSON content is not serializable: {exc}"
     return "", {}, "content must be a string."
 
-
-def _normalize_optional_tool_identifier(value: str | None) -> str | None:
-    if value is None:
-        return None
-    stripped = value.strip()
-    if not stripped or stripped.casefold() in {"null", "none", "undefined"}:
-        return None
-    return value
-
-
-def _optional_string_value(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    return _normalize_optional_tool_identifier(value)
-

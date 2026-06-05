@@ -35,7 +35,7 @@ from deepy.ui.shared.render.message_view import (
     format_tool_call_summary,
     format_tool_progress_summary,
     render_shell_output_block,
-    )
+)
 from deepy.ui.shared.render.styles import DARK_PALETTE, UiPalette, resolve_ui_palette, status_style
 from deepy.utils import json as json_utils
 
