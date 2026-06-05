@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gzip
 import urllib.parse
-import urllib.request
 import zlib
 from html.parser import HTMLParser
 

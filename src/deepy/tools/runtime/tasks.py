@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 from ..result import ToolResult
 from ..shell_command import (
     _background_task_output_metadata,
@@ -33,6 +32,7 @@ class TaskToolsMixin(ToolRuntimeState):
                 "tasks": [_background_task_payload(snapshot) for snapshot in snapshots],
             },
         ).to_json()
+
     def task_output(
         self,
         task_id: str,
@@ -59,6 +59,7 @@ class TaskToolsMixin(ToolRuntimeState):
             _format_background_task_output(output),
             metadata=_background_task_output_metadata(output),
         ).to_json()
+
     def task_stop(self, task_id: str) -> str:
         name = "task_stop"
         snapshot = self.background_tasks.stop(task_id)

@@ -139,15 +139,15 @@ def _build_status_footer(
     session_entry = _session_entry(project_root, session_id)
     segments.extend(
         [
-        StatusFooterSegment(
-            _format_context_window_status(
-                session_entry,
-                settings.context.window_tokens,
-                settings.context.resolved_compact_threshold,
+            StatusFooterSegment(
+                _format_context_window_status(
+                    session_entry,
+                    settings.context.window_tokens,
+                    settings.context.resolved_compact_threshold,
+                ),
+                "context",
             ),
-            "context",
-        ),
-        StatusFooterSegment(_format_session_cache_hit_rate(session_entry), "context"),
+            StatusFooterSegment(_format_session_cache_hit_rate(session_entry), "context"),
         ]
     )
     return StatusFooter(tuple(segments)).with_active(active_work)

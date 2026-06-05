@@ -63,6 +63,7 @@ class WebToolsMixin(ToolRuntimeState):
                 },
             ).to_json()
         return self._web_search_builtin(query)
+
     def web_fetch(self, url: str) -> str:
         name = "WebFetch"
         target_url, validation_error = _validate_web_fetch_url(url)
@@ -150,6 +151,7 @@ class WebToolsMixin(ToolRuntimeState):
                 "activityLabel": activity_label,
             },
         ).to_json()
+
     def _web_search_builtin(self, query: str) -> str:
         name = "WebSearch"
         prepared, prepare_error = _prepare_web_search_query_with_llm(query, self.settings)
@@ -216,6 +218,7 @@ class WebToolsMixin(ToolRuntimeState):
             ).to_json()
         finally:
             self.running_processes.pop(activity_id, None)
+
     def _try_duckduckgo_search(
         self,
         query: str,
@@ -254,6 +257,7 @@ class WebToolsMixin(ToolRuntimeState):
         return WebSearchProviderResult(
             provider=provider, search_url=search_url, results=results
         ), None
+
     def _try_searxng_search(
         self,
         query: str,
