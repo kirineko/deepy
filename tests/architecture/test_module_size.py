@@ -20,6 +20,8 @@ TRACKED_MODULES: dict[str, int] = {
 
 def _line_count(relative_path: str) -> int:
     path = SRC_ROOT / relative_path
+    if not path.is_file():
+        pytest.fail(f"Tracked module missing: {relative_path} (expected at {path})")
     return len(path.read_text(encoding="utf-8").splitlines())
 
 

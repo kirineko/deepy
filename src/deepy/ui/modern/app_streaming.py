@@ -102,26 +102,29 @@ class AppStreamingMixin(AppStateProto):
         self._clear_input_suggestion()
         if not summary.session_id or summary.pending_questions:
             return
-        session = DeepySession.open(self.project_root, summary.session_id)
-        items = await session.get_items()
-        if not is_eligible_for_input_suggestion(
-            items,
-            enabled=self.settings.ui.input_suggestions_enabled,
-            has_pending_questions=bool(summary.pending_questions),
-            turn_status=summary.status,
-        ):
+        try:
+            session = DeepySession.open(self.project_root, summary.session_id)
+            items = await session.get_items()
+            if not is_eligible_for_input_suggestion(
+                items,
+                enabled=self.settings.ui.input_suggestions_enabled,
+                has_pending_questions=bool(summary.pending_questions),
+                turn_status=summary.status,
+            ):
+                return
+            suggestion = await generate_input_suggestion(self.settings, items)
+            if suggestion is None or self.state.busy or self.state.pending_questions:
+                return
+            session.record_input_suggestion_usage(
+                suggestion.usage,
+                model=suggestion.model,
+                elapsed_ms=suggestion.elapsed_ms,
+            )
+            self.input_suggestions.set_suggestion(suggestion.text)
+            panel = self.query_one(PromptPanel)
+            panel.set_input_suggestion(suggestion.text)
+        except Exception:
             return
-        suggestion = await generate_input_suggestion(self.settings, items)
-        if suggestion is None or self.state.busy or self.state.pending_questions:
-            return
-        session.record_input_suggestion_usage(
-            suggestion.usage,
-            model=suggestion.model,
-            elapsed_ms=suggestion.elapsed_ms,
-        )
-        self.input_suggestions.set_suggestion(suggestion.text)
-        panel = self.query_one(PromptPanel)
-        panel.set_input_suggestion(suggestion.text)
 
 
     def _clear_input_suggestion(self) -> None:
