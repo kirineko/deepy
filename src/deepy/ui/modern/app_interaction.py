@@ -12,7 +12,7 @@ from deepy.ui.modern.app_helpers import _tool_output_diff_text
 from deepy.ui.modern.app_state_proto import AppStateProto
 from deepy.ui.modern.render.diff import diff_view_from_tool_output
 from deepy.ui.modern.screens import Choice
-from deepy.ui.modern.state import reset_turn_buffers, set_busy, set_pending_questions
+from deepy.ui.modern.state import set_pending_questions
 from deepy.ui.modern.widgets import (
     AuditDecisionBlock,
     DiffBlock,
@@ -192,16 +192,7 @@ class AppInteractionMixin(AppStateProto):
         continuation = format_ask_user_question_answers(self._pending_question_answers)
         self._pending_question_answers.clear()
         self.state = set_pending_questions(self.state, [])
-        self.state = set_busy(reset_turn_buffers(self.state), True, "Running")
-        self._assistant_block = None
-        self._assistant_rendered_text = ""
-        self._thinking_block = None
-        self._stream_tokens = 0
-        self._tool_blocks.clear()
-        self._suppressed_approval_tool_call_ids.clear()
-        self._completed_tool_call_ids.clear()
-        self._update_status("Running")
-        self.run_model_turn(continuation, list(self.controller.loaded_skill_names))
+        self._start_model_turn(continuation, list(self.controller.loaded_skill_names), status="Running")
 
 
     async def _show_pending_question(self, pending_questions: list[dict[str, Any]]) -> None:

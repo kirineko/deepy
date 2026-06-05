@@ -105,6 +105,16 @@ class AppStateProto(App[None]):
     ) -> None:
         raise NotImplementedError
 
+    def _start_model_turn(
+        self,
+        prompt: str,
+        skill_names: list[str],
+        *,
+        status: str,
+        image_attachments: list[PromptImageAttachment] | None = None,
+    ) -> None:
+        raise NotImplementedError
+
     def _clear_input_suggestion(self) -> None:
         raise NotImplementedError
 
