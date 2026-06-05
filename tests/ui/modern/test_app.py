@@ -6,7 +6,6 @@ import os
 import sqlite3
 import sys
 import threading
-from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +16,6 @@ from textual import events
 from textual._xterm_parser import XTermParser
 from textual.command import CommandPalette
 from textual.widgets import Footer, Label, Markdown, OptionList, Static, TextArea
-from textual.widgets.option_list import Option
 
 import deepy.ui.modern.app as tui_app
 import deepy.ui.modern.runner as tui_runner
@@ -69,6 +67,16 @@ from deepy.ui.shared.local_command import LocalCommandResult
 from deepy.ui.shared.input.image_input import ClipboardImage
 from deepy.ui.shared.input.slash_commands import build_subagent_slash_prompt
 from deepy.usage import TokenUsage
+
+from tui_harness import (
+    _choose_inline_option,
+    _idle_run_once,
+    _option_prompt_text,
+    _submit_prompt,
+    _submit_text_input,
+    _wait_for,
+    tui_harness,
+)
 
 
 def test_textual_native_input_capabilities_are_available() -> None:
@@ -173,7 +181,7 @@ def test_tui_transcript_blocks_use_display_models() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_dense_markdown_reply_renders_without_overlapping_composer(tmp_path) -> None:
+async def test_tui_dense_markdown_reply_renders_without_overlapping_composer(make_tui_app) -> None:
     markdown = "\n".join(
         [
             "# Plan",
@@ -189,9 +197,8 @@ async def test_tui_dense_markdown_reply_renders_without_overlapping_composer(tmp
         ]
         * 6
     )
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
 
-    async with app.run_test(size=(72, 18)) as pilot:
+    async with tui_harness(make_tui_app(), size=(72, 18)) as (app, pilot, _prompt):
         await pilot.pause(0.01)
         await app._append_block(AssistantBlock(markdown))
         await pilot.pause(0.1)
@@ -201,14 +208,11 @@ async def test_tui_dense_markdown_reply_renders_without_overlapping_composer(tmp
         assert block.region.y < panel.region.y
         assert block.markdown.startswith("# Plan")
         assert ".block-markdown" in DeepyTuiApp.CSS
-        app.exit()
 
 
 @pytest.mark.asyncio
-async def test_tui_user_and_assistant_markers_render_inline_with_content(tmp_path) -> None:
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
-
-    async with app.run_test(size=(72, 18)) as pilot:
+async def test_tui_user_and_assistant_markers_render_inline_with_content(make_tui_app) -> None:
+    async with tui_harness(make_tui_app(), size=(72, 18)) as (app, pilot, _prompt):
         await pilot.pause(0.01)
         await app._append_block(UserBlock("hi"))
         await app._append_block(AssistantBlock("hello"))
@@ -227,59 +231,6 @@ async def test_tui_user_and_assistant_markers_render_inline_with_content(tmp_pat
         assert assistant_marker.region.y == assistant_body.region.y
         assert user_marker.region.x < user_body.region.x
         assert assistant_marker.region.x < assistant_body.region.x
-        app.exit()
-
-
-async def _idle_run_once(prompt: str, **kwargs) -> RunSummary:
-    return RunSummary(output=f"answer: {prompt}", session_id="s1", complete=True)
-
-
-def _option_prompt_text(option: Option) -> str:
-    prompt = option.prompt
-    return getattr(prompt, "plain", str(prompt))
-
-
-async def _wait_for(pilot, condition: Callable[[], object], *, timeout: float = 1.0) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    last_error: Exception | None = None
-    while True:
-        try:
-            if condition():
-                return
-        except Exception as exc:
-            last_error = exc
-        if loop.time() >= deadline:
-            raise AssertionError("Timed out waiting for TUI test condition") from last_error
-        await pilot.pause(0.01)
-
-
-async def _choose_inline_option(app: DeepyTuiApp, pilot, title: str, *, down: int = 0) -> None:
-    await _wait_for(
-        pilot,
-        lambda: app.query(InlineChoiceBlock).first()
-        and app.query(InlineChoiceBlock).last().title_text == title,
-    )
-    for _ in range(down):
-        await pilot.press("down")
-    await pilot.press("enter")
-
-
-async def _submit_text_input(app: DeepyTuiApp, pilot, title: str, value: str) -> None:
-    await _wait_for(
-        pilot,
-        lambda: isinstance(app.screen, TextInputScreen)
-        and app.screen.title_text == title,
-    )
-    app.screen.query_one("#text-input").value = value  # type: ignore[attr-defined]
-    await pilot.press("enter")
-
-
-async def _submit_prompt(app: DeepyTuiApp, pilot, text: str, condition: Callable[[], object]) -> None:
-    prompt = app.query_one("#prompt-input", PromptTextArea)
-    prompt.text = text
-    prompt.action_submit()
-    await _wait_for(pilot, condition)
 
 
 @pytest.mark.asyncio

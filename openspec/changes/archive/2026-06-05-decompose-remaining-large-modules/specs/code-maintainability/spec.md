@@ -1,8 +1,5 @@
-# code-maintainability Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change split-oversized-modules. Update Purpose after archive.
-## Requirements
 ### Requirement: Source modules stay within the maintainable size ceiling
 
 Tracked source modules under `src/deepy/` SHALL stay below the maintainable size
@@ -63,6 +60,8 @@ public import paths SHALL keep resolving.
 - **AND** symbols those tests import from the original modules are still importable
   from those modules
 
+## ADDED Requirements
+
 ### Requirement: High-duplication test suites obtain their harness from shared fixtures
 
 Test suites with heavily repeated harness construction SHALL obtain that harness
@@ -83,4 +82,3 @@ fixtures SHALL preserve every assertion and the suite's behavior coverage.
 - **WHEN** a suite is migrated onto shared fixtures
 - **THEN** its test count and assertions remain unchanged
 - **AND** the full test suite passes
-

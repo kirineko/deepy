@@ -15,6 +15,9 @@ TRACKED_MODULES: dict[str, int] = {
     "tools/builtin.py": 3846,
     "ui/classic/terminal.py": 2697,
     "ui/modern/app.py": 2632,
+    "tools/agents.py": 1079,
+    "config/settings.py": 1070,
+    "llm/runner.py": 943,
 }
 
 

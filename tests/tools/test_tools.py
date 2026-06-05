@@ -18,7 +18,7 @@ from deepy.config.settings import (
     ToolsConfig,
     WebSearchToolConfig,
 )
-from deepy.tools import ToolResult, ToolRuntime
+from deepy.tools import ToolResult
 from deepy.tools.agents import build_function_tools, make_mimo_compatible_tool_schema
 from deepy.tools.builtin import (
     DEFAULT_LINE_LIMIT,
@@ -30,70 +30,15 @@ from deepy.tools.builtin import (
 )
 from deepy.tools.test_shell import classify_test_shell_command
 
-
-def decode(payload: str) -> dict:
-    return json.loads(payload)
-
-
-def read_v3(
-    runtime: ToolRuntime,
-    path: str,
-    start_line: int = 1,
-    limit: int | None = None,
-    pages: str | None = None,
-) -> str:
-    request: dict[str, object] = {"path": path}
-    if start_line != 1:
-        request["offset"] = start_line
-    if limit is not None:
-        request["limit"] = limit
-    if pages is not None:
-        request["pages"] = pages
-    return runtime.read(request)
-
-
-def write_v3(
-    runtime: ToolRuntime,
-    path: str,
-    content: object,
-    *,
-    overwrite: bool = True,
-    **_: object,
-) -> str:
-    return runtime.write_v3(path, content, overwrite=overwrite)
-
-
-def update_v3(
-    runtime: ToolRuntime,
-    path: str | None,
-    old: str,
-    new: str,
-    replace_all: bool = False,
-    expected_occurrences: int | None = None,
-    **_: object,
-) -> str:
-    request: dict[str, object] = {
-        "path": path,
-        "old": old,
-        "new": new,
-        "replace_all": replace_all,
-    }
-    if expected_occurrences is not None:
-        request["expected_occurrences"] = expected_occurrences
-    return runtime.update(request)
-
-
-def preflight_v3(runtime: ToolRuntime, name: str, arguments: dict[str, object]) -> dict:
-    return runtime.preflight_file_mutation(name, json.dumps(arguments))
-
-
-def repeat_x_command(count: int) -> str:
-    return f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * {count})\""
-
-
-def write_encoded_stdout_command(text: str, encoding: str) -> str:
-    payload = repr(text.encode(encoding))
-    return shlex.join([sys.executable, "-c", f"import sys; sys.stdout.buffer.write({payload})"])
+from tool_harness import (
+    decode,
+    preflight_v3,
+    read_v3,
+    repeat_x_command,
+    update_v3,
+    write_encoded_stdout_command,
+    write_v3,
+)
 
 
 def test_tool_result_shape_is_stable():
@@ -177,8 +122,8 @@ def test_test_shell_keeps_common_language_test_commands_allowed():
         assert decision.decision == "allow"
 
 
-def test_todo_write_updates_reads_and_clears_state(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_todo_write_updates_reads_and_clears_state(tmp_path, make_runtime):
+    runtime = make_runtime()
     todos = [
         {"id": "inspect", "content": "Inspect code", "status": "completed"},
         {"id": "implement", "content": "Implement todo tool", "status": "in_progress"},
@@ -211,8 +156,8 @@ def test_todo_write_updates_reads_and_clears_state(tmp_path):
     assert cleared["metadata"]["todos"] == []
 
 
-def test_todo_write_rejects_invalid_updates_and_preserves_previous_state(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_todo_write_rejects_invalid_updates_and_preserves_previous_state(tmp_path, make_runtime):
+    runtime = make_runtime()
     first = [{"id": "one", "content": "One", "status": "in_progress"}]
     assert decode(runtime.todo_write(first))["ok"] is True
 
@@ -230,8 +175,8 @@ def test_todo_write_rejects_invalid_updates_and_preserves_previous_state(tmp_pat
     assert decode(runtime.todo_write())["metadata"]["todos"] == first
 
 
-def test_build_function_tools_registers_todo_write(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_build_function_tools_registers_todo_write(tmp_path, make_runtime):
+    runtime = make_runtime()
     tools = build_function_tools(runtime)
 
     todo_tool = next(tool for tool in tools if tool.name == "todo_write")
@@ -245,10 +190,10 @@ def test_build_function_tools_registers_todo_write(tmp_path):
     ]
 
 
-def test_function_tool_repairs_trailing_comma_write_arguments(tmp_path):
+def test_function_tool_repairs_trailing_comma_write_arguments(tmp_path, make_runtime):
     target = tmp_path / "index.html"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     decode(runtime.read({"path": "index.html"}))
     tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Write")
 
@@ -269,10 +214,10 @@ def test_function_tool_repairs_trailing_comma_write_arguments(tmp_path):
     assert target.read_text(encoding="utf-8") == "new\n"
 
 
-def test_function_tool_rejects_unsafe_malformed_write_content_arguments(tmp_path):
+def test_function_tool_rejects_unsafe_malformed_write_content_arguments(tmp_path, make_runtime):
     target = tmp_path / "index.html"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Write")
 
     payload = decode(
@@ -292,10 +237,10 @@ def test_function_tool_rejects_unsafe_malformed_write_content_arguments(tmp_path
     assert target.read_text(encoding="utf-8") == "old\n"
 
 
-def test_function_tool_repairs_unquoted_read_range_arguments(tmp_path):
+def test_function_tool_repairs_unquoted_read_range_arguments(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
 
     payload = decode(
@@ -319,12 +264,12 @@ def test_function_tool_repairs_unquoted_read_range_arguments(tmp_path):
     assert "4: four" not in payload["output"]
 
 
-def test_function_tool_repairs_unquoted_batch_read_ranges(tmp_path):
+def test_function_tool_repairs_unquoted_batch_read_ranges(tmp_path, make_runtime):
     first = tmp_path / "a.txt"
     second = tmp_path / "b.txt"
     first.write_text("a1\na2\na3\n", encoding="utf-8")
     second.write_text("b1\nb2\nb3\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
 
     payload = decode(
@@ -349,10 +294,10 @@ def test_function_tool_repairs_unquoted_batch_read_ranges(tmp_path):
     assert "3: b3" not in payload["output"]
 
 
-def test_function_tool_rejects_unsafe_malformed_read_range_arguments(tmp_path):
+def test_function_tool_rejects_unsafe_malformed_read_range_arguments(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     tool = next(tool for tool in build_function_tools(runtime) if tool.name == "Read")
 
     payload = decode(
@@ -372,10 +317,10 @@ def test_function_tool_rejects_unsafe_malformed_read_range_arguments(tmp_path):
     assert payload["metadata"]["recovery"] == "Pass a valid JSON object matching the tool schema."
 
 
-def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
+def test_read_marks_file_and_edit_requires_prior_read(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     edited = decode(update_v3(runtime, "a.txt", "one", "ONE"))
     assert edited["ok"] is True
@@ -385,7 +330,7 @@ def test_read_marks_file_and_edit_requires_prior_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "ONE\ntwo\n"
 
 
-def test_read_directory_lists_entries(tmp_path):
+def test_read_directory_lists_entries(tmp_path, make_runtime):
     (tmp_path / "dir").mkdir()
     (tmp_path / "reference").mkdir()
     (tmp_path / "spec").mkdir()
@@ -394,7 +339,7 @@ def test_read_directory_lists_entries(tmp_path):
     (tmp_path / "dist").mkdir()
     (tmp_path / "b.txt").write_text("b", encoding="utf-8")
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "."))
 
@@ -412,7 +357,7 @@ def test_read_directory_lists_entries(tmp_path):
     assert payload["metadata"]["ignoredEntryCount"] == 3
 
 
-def test_read_directory_respects_gitignore(tmp_path):
+def test_read_directory_respects_gitignore(tmp_path, make_runtime):
     (tmp_path / ".gitignore").write_text(
         "ignored.log\nignored_dir/\nspec/\nreference/\n", encoding="utf-8"
     )
@@ -421,7 +366,7 @@ def test_read_directory_respects_gitignore(tmp_path):
     (tmp_path / "visible.txt").write_text("ok", encoding="utf-8")
     (tmp_path / "spec").mkdir()
     (tmp_path / "reference").mkdir()
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "."))
 
@@ -434,11 +379,11 @@ def test_read_directory_respects_gitignore(tmp_path):
     assert payload["metadata"]["ignoredEntryCount"] == 4
 
 
-def test_read_resolves_unique_relative_suffix(tmp_path):
+def test_read_resolves_unique_relative_suffix(tmp_path, make_runtime):
     target_dir = tmp_path / "src" / "deepy"
     target_dir.mkdir(parents=True)
     target_dir.joinpath("settings.py").write_text("value = 1\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "settings.py"))
 
@@ -447,7 +392,7 @@ def test_read_resolves_unique_relative_suffix(tmp_path):
     assert "1: value = 1" in payload["output"]
 
 
-def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path):
+def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path, make_runtime):
     (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")
     source_dir = tmp_path / "src"
     generated_dir = tmp_path / "generated"
@@ -455,7 +400,7 @@ def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path):
     generated_dir.mkdir()
     source_dir.joinpath("settings.py").write_text("value = 1\n", encoding="utf-8")
     generated_dir.joinpath("settings.py").write_text("value = 2\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "settings.py"))
 
@@ -464,14 +409,14 @@ def test_read_suffix_matching_ignores_gitignored_candidates(tmp_path):
     assert "value = 1" in payload["output"]
 
 
-def test_read_rejects_ambiguous_relative_suffix(tmp_path):
+def test_read_rejects_ambiguous_relative_suffix(tmp_path, make_runtime):
     first = tmp_path / "src" / "a"
     second = tmp_path / "tests" / "a"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
     first.joinpath("settings.py").write_text("one\n", encoding="utf-8")
     second.joinpath("settings.py").write_text("two\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "settings.py"))
 
@@ -481,7 +426,7 @@ def test_read_rejects_ambiguous_relative_suffix(tmp_path):
     assert str(second / "settings.py") in payload["error"]
 
 
-def test_read_notebook_returns_textual_cells_and_outputs(tmp_path):
+def test_read_notebook_returns_textual_cells_and_outputs(tmp_path, make_runtime):
     notebook = tmp_path / "demo.ipynb"
     notebook.write_text(
         json.dumps(
@@ -510,7 +455,7 @@ def test_read_notebook_returns_textual_cells_and_outputs(tmp_path):
         ),
         encoding="utf-8",
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "demo.ipynb"))
 
@@ -524,10 +469,10 @@ def test_read_notebook_returns_textual_cells_and_outputs(tmp_path):
     assert "10: [image/png 4 chars]" in payload["output"]
 
 
-def test_read_invalid_notebook_returns_parse_error(tmp_path):
+def test_read_invalid_notebook_returns_parse_error(tmp_path, make_runtime):
     notebook = tmp_path / "broken.ipynb"
     notebook.write_text("{not json", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "broken.ipynb"))
 
@@ -535,14 +480,14 @@ def test_read_invalid_notebook_returns_parse_error(tmp_path):
     assert "Failed to parse notebook JSON" in payload["error"]
 
 
-def test_read_image_returns_follow_up_message(tmp_path):
+def test_read_image_returns_follow_up_message(tmp_path, make_runtime):
     image = tmp_path / "pixel.png"
     image.write_bytes(
         bytes.fromhex(
             "89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da63fcff1f0003030200eed9d17f0000000049454e44ae426082"
         )
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "pixel.png"))
 
@@ -564,10 +509,10 @@ def _write_fake_pdf(path, page_count: int):
     path.write_bytes(f"%PDF-1.4\n{pages}\ntrailer << /Type /Pages >>\n%%EOF".encode("latin1"))
 
 
-def test_read_pdf_returns_base64_with_metadata(tmp_path):
+def test_read_pdf_returns_base64_with_metadata(tmp_path, make_runtime):
     pdf = tmp_path / "small.pdf"
     _write_fake_pdf(pdf, 2)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "small.pdf"))
 
@@ -579,10 +524,10 @@ def test_read_pdf_returns_base64_with_metadata(tmp_path):
     assert payload["metadata"]["pages"] is None
 
 
-def test_read_large_pdf_requires_page_range(tmp_path):
+def test_read_large_pdf_requires_page_range(tmp_path, make_runtime):
     pdf = tmp_path / "large.pdf"
     _write_fake_pdf(pdf, 11)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "large.pdf"))
 
@@ -591,10 +536,10 @@ def test_read_large_pdf_requires_page_range(tmp_path):
     assert payload["metadata"]["pageCount"] == 11
 
 
-def test_read_pdf_accepts_page_range_metadata(tmp_path):
+def test_read_pdf_accepts_page_range_metadata(tmp_path, make_runtime):
     pdf = tmp_path / "large.pdf"
     _write_fake_pdf(pdf, 11)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "large.pdf", pages="2-3"))
 
@@ -603,10 +548,10 @@ def test_read_pdf_accepts_page_range_metadata(tmp_path):
     assert payload["metadata"]["pages"] == "2-3"
 
 
-def test_read_pdf_rejects_invalid_page_range(tmp_path):
+def test_read_pdf_rejects_invalid_page_range(tmp_path, make_runtime):
     pdf = tmp_path / "small.pdf"
     _write_fake_pdf(pdf, 2)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     too_many = decode(read_v3(runtime, "small.pdf", pages="1-21"))
     assert too_many["ok"] is False
@@ -617,13 +562,13 @@ def test_read_pdf_rejects_invalid_page_range(tmp_path):
     assert "exceeds total page count" in out_of_bounds["error"]
 
 
-def test_read_limits_large_files_by_default(tmp_path):
+def test_read_limits_large_files_by_default(tmp_path, make_runtime):
     target = tmp_path / "large.txt"
     target.write_text(
         "".join(f"line {idx}\n" for idx in range(DEFAULT_LINE_LIMIT + 5)),
         encoding="utf-8",
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "large.txt"))
 
@@ -640,10 +585,10 @@ def test_read_limits_large_files_by_default(tmp_path):
     assert target.read_text(encoding="utf-8") == "changed"
 
 
-def test_read_truncates_long_lines(tmp_path):
+def test_read_truncates_long_lines(tmp_path, make_runtime):
     target = tmp_path / "long.txt"
     target.write_text("x" * (MAX_LINE_LENGTH + 5), encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "long.txt"))
 
@@ -653,10 +598,10 @@ def test_read_truncates_long_lines(tmp_path):
     assert payload["metadata"]["trackedForWrite"] is False
 
 
-def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
+def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "a.txt", start_line=2, limit=1))
     edited = decode(update_v3(runtime, "a.txt", "two", "TWO"))
@@ -667,10 +612,10 @@ def test_partial_read_does_not_unlock_existing_file_for_edit(tmp_path):
     assert target.read_text(encoding="utf-8") == "one\nTWO\nthree\n"
 
 
-def test_partial_read_returns_snippet_metadata(tmp_path):
+def test_partial_read_returns_snippet_metadata(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "a.txt", start_line=2, limit=1))
 
@@ -682,10 +627,10 @@ def test_partial_read_returns_snippet_metadata(tmp_path):
     assert payload["metadata"]["snippet"]["endLine"] == 2
 
 
-def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path):
+def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path, make_runtime):
     target = tmp_path / "near.txt"
     target.write_text("alpha\nbeta = 1\ngamma\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "near.txt"))
     payload = decode(update_v3(runtime, "near.txt", "bet = 1", "beta = 2"))
@@ -701,10 +646,10 @@ def test_edit_returns_closest_match_metadata_when_old_text_is_missing(tmp_path):
     assert "beta = 1" in closest["preview"]
 
 
-def test_edit_detects_mtime_change_after_read(tmp_path):
+def test_edit_detects_mtime_change_after_read(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "a.txt"))
     target.write_text("changed\n", encoding="utf-8")
@@ -716,10 +661,10 @@ def test_edit_detects_mtime_change_after_read(tmp_path):
     assert "changed since it was read" in payload["metadata"]["failures"][0]["error"]
 
 
-def test_edit_text_preserves_stale_protection_after_read(tmp_path):
+def test_edit_text_preserves_stale_protection_after_read(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "a.txt"))
     target.write_text("changed\n", encoding="utf-8")
@@ -732,10 +677,10 @@ def test_edit_text_preserves_stale_protection_after_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "changed\n"
 
 
-def test_write_allows_new_file_and_auto_reads_existing_file(tmp_path):
+def test_write_allows_new_file_and_auto_reads_existing_file(tmp_path, make_runtime):
     existing = tmp_path / "existing.txt"
     existing.write_text("old", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     created = decode(write_v3(runtime, "new.txt", "hello"))
     assert created["ok"] is True
@@ -747,10 +692,10 @@ def test_write_allows_new_file_and_auto_reads_existing_file(tmp_path):
     assert existing.read_text(encoding="utf-8") == "changed"
 
 
-def test_write_file_creates_new_files_and_edit_text_edits_existing_files(tmp_path):
+def test_write_file_creates_new_files_and_edit_text_edits_existing_files(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     created = decode(write_v3(runtime, "new.txt", "hello\n"))
     assert created["ok"] is True
@@ -769,10 +714,10 @@ def test_write_file_creates_new_files_and_edit_text_edits_existing_files(tmp_pat
     assert target.read_text(encoding="utf-8") == "new\n"
 
 
-def test_update_enforces_expected_count(tmp_path):
+def test_update_enforces_expected_count(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\nold\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     read_payload = decode(read_v3(runtime, "existing.txt"))
 
@@ -811,10 +756,10 @@ def test_update_enforces_expected_count(tmp_path):
     assert target.read_text(encoding="utf-8") == "new\nnew\n"
 
 
-def test_write_file_requires_overwrite_intent_for_existing_file(tmp_path):
+def test_write_file_requires_overwrite_intent_for_existing_file(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     created = decode(write_v3(runtime, "new.txt", "hello\n"))
     assert created["ok"] is True
@@ -837,10 +782,10 @@ def test_write_file_requires_overwrite_intent_for_existing_file(tmp_path):
     assert target.read_text(encoding="utf-8") == "changed\n"
 
 
-def test_read_v3_batches_targets_and_reports_per_target_failures(tmp_path):
+def test_read_v3_batches_targets_and_reports_per_target_failures(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.read(
@@ -865,10 +810,10 @@ def test_read_v3_batches_targets_and_reports_per_target_failures(tmp_path):
     assert payload["metadata"]["targets"][0]["metadata"]["trackedForWrite"] is False
 
 
-def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path):
+def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\r\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     replaced = decode(runtime.write_v3("existing.txt", "changed\n", overwrite=True))
 
@@ -879,10 +824,10 @@ def test_write_v3_replaces_existing_file_without_model_freshness_tokens(tmp_path
     assert target.read_bytes() == b"changed\r\n"
 
 
-def test_write_preflight_plans_diff_without_writing_file(tmp_path):
+def test_write_preflight_plans_diff_without_writing_file(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     planned = preflight_v3(
         runtime,
@@ -898,10 +843,10 @@ def test_write_preflight_plans_diff_without_writing_file(tmp_path):
     assert planned["metadata"]["diff"] == committed["metadata"]["diff"]
 
 
-def test_write_v3_rejects_stale_existing_file_after_read(tmp_path):
+def test_write_v3_rejects_stale_existing_file_after_read(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(runtime.read({"path": "existing.txt"}))
     target.write_text("external\n", encoding="utf-8")
@@ -914,10 +859,10 @@ def test_write_v3_rejects_stale_existing_file_after_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "external\n"
 
 
-def test_update_preflight_reuses_plan_without_writing_file(tmp_path):
+def test_update_preflight_reuses_plan_without_writing_file(tmp_path, make_runtime):
     target = tmp_path / "app.py"
     target.write_text("value = 1\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     request = {"path": "app.py", "old": "value = 1", "new": "value = 2"}
     planned = preflight_v3(runtime, "Update", request)
@@ -931,12 +876,12 @@ def test_update_preflight_reuses_plan_without_writing_file(tmp_path):
     assert target.read_text(encoding="utf-8") == "value = 2\n"
 
 
-def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path):
+def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path, make_runtime):
     first = tmp_path / "a.txt"
     second = tmp_path / "b.txt"
     first.write_text("alpha\nbeta\n", encoding="utf-8")
     second.write_text("one\none\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.update(
@@ -966,10 +911,10 @@ def test_update_v3_applies_ordered_multi_file_edits_after_preflight(tmp_path):
     assert second.read_text(encoding="utf-8") == "two\ntwo\n"
 
 
-def test_update_v3_skips_noop_edit_in_mixed_batch(tmp_path):
+def test_update_v3_skips_noop_edit_in_mixed_batch(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.update(
@@ -993,10 +938,10 @@ def test_update_v3_skips_noop_edit_in_mixed_batch(tmp_path):
     assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
 
 
-def test_update_v3_all_noop_returns_success_without_writing(tmp_path):
+def test_update_v3_all_noop_returns_success_without_writing(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("alpha\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.update(
@@ -1017,12 +962,12 @@ def test_update_v3_all_noop_returns_success_without_writing(tmp_path):
     assert target.read_text(encoding="utf-8") == "alpha\n"
 
 
-def test_update_v3_rejects_expected_count_mismatch_without_writing(tmp_path):
+def test_update_v3_rejects_expected_count_mismatch_without_writing(tmp_path, make_runtime):
     first = tmp_path / "a.txt"
     second = tmp_path / "b.txt"
     first.write_text("alpha\n", encoding="utf-8")
     second.write_text("one\none\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.update(
@@ -1048,10 +993,10 @@ def test_update_v3_rejects_expected_count_mismatch_without_writing(tmp_path):
     assert second.read_text(encoding="utf-8") == "one\none\n"
 
 
-def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path):
+def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\nold\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         update_v3(runtime, 
@@ -1069,10 +1014,10 @@ def test_edit_text_enforces_expected_occurrences_without_modify_alias(tmp_path):
     assert target.read_text(encoding="utf-8") == "old\nold\n"
 
 
-def test_update_v3_non_noop_failure_still_rolls_back_with_skipped_noop_metadata(tmp_path):
+def test_update_v3_non_noop_failure_still_rolls_back_with_skipped_noop_metadata(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.update(
@@ -1094,10 +1039,10 @@ def test_update_v3_non_noop_failure_still_rolls_back_with_skipped_noop_metadata(
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
-def test_edit_text_noop_returns_success_with_structured_metadata(tmp_path):
+def test_edit_text_noop_returns_success_with_structured_metadata(tmp_path, make_runtime):
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "existing.txt"))
     payload = decode(update_v3(runtime, "existing.txt", "old", "old"))
@@ -1107,8 +1052,8 @@ def test_edit_text_noop_returns_success_with_structured_metadata(tmp_path):
     assert payload["metadata"]["skippedEdits"][0]["error_code"] == "no_op"
 
 
-def test_mutation_rejects_workspace_escape_and_symlink_escape(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_mutation_rejects_workspace_escape_and_symlink_escape(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     outside = decode(write_v3(runtime, "../outside.txt", "no\n"))
     assert outside["ok"] is False
@@ -1124,8 +1069,8 @@ def test_mutation_rejects_workspace_escape_and_symlink_escape(tmp_path):
     assert escaped["metadata"]["error_code"] in {"path_policy", "symlink_policy"}
 
 
-def test_sensitive_file_policy_requires_approval_without_writing(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_sensitive_file_policy_requires_approval_without_writing(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     payload = decode(write_v3(runtime, ".env", "TOKEN=secret\n"))
 
@@ -1135,8 +1080,8 @@ def test_sensitive_file_policy_requires_approval_without_writing(tmp_path):
     assert not (tmp_path / ".env").exists()
 
 
-def test_bat_and_cmd_new_files_default_to_crlf_without_bom(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+def test_bat_and_cmd_new_files_default_to_crlf_without_bom(tmp_path, make_runtime):
+    runtime = make_runtime(platform_name="win32")
 
     bat = decode(write_v3(runtime, "script.bat", "echo hello\n"))
     cmd = decode(write_v3(runtime, "script.cmd", "echo hello\n"))
@@ -1147,10 +1092,10 @@ def test_bat_and_cmd_new_files_default_to_crlf_without_bom(tmp_path):
     assert (tmp_path / "script.cmd").read_bytes() == b"echo hello\r\n"
 
 
-def test_write_preserves_existing_crlf_line_endings(tmp_path):
+def test_write_preserves_existing_crlf_line_endings(tmp_path, make_runtime):
     target = tmp_path / "windows.txt"
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "windows.txt"))
     payload = decode(write_v3(runtime, "windows.txt", "one\ntwo\n"))
@@ -1160,10 +1105,10 @@ def test_write_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"one\r\ntwo\r\n"
 
 
-def test_write_does_not_double_translate_existing_crlf_bytes(tmp_path):
+def test_write_does_not_double_translate_existing_crlf_bytes(tmp_path, make_runtime):
     target = tmp_path / "windows.txt"
     target.write_bytes(b"alpha\r\nbeta\r\n")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+    runtime = make_runtime(platform_name="win32")
 
     decode(read_v3(runtime, "windows.txt"))
     payload = decode(write_v3(runtime, "windows.txt", "one\ntwo\n"))
@@ -1173,10 +1118,10 @@ def test_write_does_not_double_translate_existing_crlf_bytes(tmp_path):
     assert b"\r\r\n" not in target.read_bytes()
 
 
-def test_write_preserves_existing_utf16le_encoding(tmp_path):
+def test_write_preserves_existing_utf16le_encoding(tmp_path, make_runtime):
     target = tmp_path / "utf16.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-16")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     read_payload = decode(read_v3(runtime, "utf16.txt"))
     payload = decode(write_v3(runtime, "utf16.txt", "one\ntwo\n"))
@@ -1188,10 +1133,10 @@ def test_write_preserves_existing_utf16le_encoding(tmp_path):
     assert target.read_text(encoding="utf-16") == "one\ntwo\n"
 
 
-def test_write_preserves_existing_utf8_sig_encoding(tmp_path):
+def test_write_preserves_existing_utf8_sig_encoding(tmp_path, make_runtime):
     target = tmp_path / "utf8_sig.py"
     target.write_bytes("城市=北京\n".encode("utf-8-sig"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+    runtime = make_runtime(platform_name="win32")
 
     decode(read_v3(runtime, "utf8_sig.py"))
     payload = decode(write_v3(runtime, "utf8_sig.py", "城市=上海\n"))
@@ -1202,14 +1147,14 @@ def test_write_preserves_existing_utf8_sig_encoding(tmp_path):
     assert target.read_bytes().decode("utf-8-sig") == "城市=上海\n"
 
 
-def test_write_file_preserves_existing_windows_encodings(tmp_path):
+def test_write_file_preserves_existing_windows_encodings(tmp_path, make_runtime):
     utf16 = tmp_path / "utf16.txt"
     utf16.write_text("alpha\nbeta\n", encoding="utf-16")
     utf8_sig = tmp_path / "utf8_sig.py"
     utf8_sig.write_bytes("城市=北京\n".encode("utf-8-sig"))
     gb18030 = tmp_path / "gb18030.txt"
     gb18030.write_bytes("城市=北京\n".encode("gb18030"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+    runtime = make_runtime(platform_name="win32")
 
     decode(read_v3(runtime, "utf16.txt"))
     utf16_payload = decode(
@@ -1249,10 +1194,10 @@ def test_write_file_preserves_existing_windows_encodings(tmp_path):
     assert gb18030.read_bytes().decode("gb18030") == "城市=上海\n"
 
 
-def test_read_decodes_gbk_compatible_text(tmp_path):
+def test_read_decodes_gbk_compatible_text(tmp_path, make_runtime):
     target = tmp_path / "gbk.txt"
     target.write_bytes("城市=北京\n".encode("gb18030"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "gbk.txt"))
 
@@ -1261,10 +1206,10 @@ def test_read_decodes_gbk_compatible_text(tmp_path):
     assert payload["metadata"]["encoding"] == "gb18030"
 
 
-def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
+def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path, make_runtime):
     target = tmp_path / "utf8.txt"
     target.write_text("城市=北京\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(read_v3(runtime, "utf8.txt"))
 
@@ -1273,8 +1218,8 @@ def test_read_keeps_valid_utf8_classified_as_utf8(tmp_path):
     assert payload["metadata"]["encoding"] == "utf8"
 
 
-def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path, make_runtime):
+    runtime = make_runtime(platform_name="win32")
 
     payload = decode(write_v3(runtime, "notes.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "notes.py"
@@ -1285,8 +1230,8 @@ def test_windows_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
     assert target.read_bytes().decode("utf-8") == "# 中文注释\nprint('ok')\n"
 
 
-def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path, make_runtime):
+    runtime = make_runtime(platform_name="win32")
 
     payload = decode(write_v3(runtime, "script.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "script.py"
@@ -1298,8 +1243,8 @@ def test_windows_new_non_ascii_python_file_is_utf8_parser_safe(tmp_path):
     ast.parse(source)
 
 
-def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path, make_runtime):
+    runtime = make_runtime(platform_name="win32")
 
     payload = decode(write_v3(runtime, "notes.py", "# comment\nprint('ok')\n"))
     target = tmp_path / "notes.py"
@@ -1310,8 +1255,8 @@ def test_windows_new_ascii_text_file_stays_plain_utf8(tmp_path):
     assert target.read_bytes() == b"# comment\nprint('ok')\n"
 
 
-def test_posix_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="darwin")
+def test_posix_new_non_ascii_text_file_stays_plain_utf8(tmp_path, make_runtime):
+    runtime = make_runtime(platform_name="darwin")
 
     payload = decode(write_v3(runtime, "notes.py", "# 中文注释\nprint('ok')\n"))
     target = tmp_path / "notes.py"
@@ -1322,9 +1267,9 @@ def test_posix_new_non_ascii_text_file_stays_plain_utf8(tmp_path):
     assert target.read_bytes().decode("utf-8") == "# 中文注释\nprint('ok')\n"
 
 
-def test_write_repairs_json_object_content_for_json_files(tmp_path):
+def test_write_repairs_json_object_content_for_json_files(tmp_path, make_runtime):
     target = tmp_path / "package.json"
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(write_v3(runtime, "package.json", {"name": "demo", "private": True}))
 
@@ -1338,8 +1283,8 @@ def test_write_repairs_json_object_content_for_json_files(tmp_path):
     assert target.read_text(encoding="utf-8").startswith('{\n  "name": "demo"')
 
 
-def test_write_rejects_non_string_content_for_non_json_files(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_write_rejects_non_string_content_for_non_json_files(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     payload = decode(write_v3(runtime, "notes.txt", {"text": "demo"}))
 
@@ -1347,10 +1292,10 @@ def test_write_rejects_non_string_content_for_non_json_files(tmp_path):
     assert payload["error"] == "content must be a string."
 
 
-def test_write_file_after_out_of_band_delete_preserves_stale_protection(tmp_path):
+def test_write_file_after_out_of_band_delete_preserves_stale_protection(tmp_path, make_runtime):
     target = tmp_path / "notes.py"
     target.write_text("print('old')\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+    runtime = make_runtime(platform_name="win32")
 
     decode(read_v3(runtime, "notes.py"))
     target.unlink()
@@ -1365,10 +1310,10 @@ def test_write_file_after_out_of_band_delete_preserves_stale_protection(tmp_path
     )
 
 
-def test_edit_preserves_existing_crlf_line_endings(tmp_path):
+def test_edit_preserves_existing_crlf_line_endings(tmp_path, make_runtime):
     target = tmp_path / "windows.txt"
     target.write_text("alpha\r\nbeta\r\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "windows.txt"))
     payload = decode(update_v3(runtime, "windows.txt", "beta", "gamma"))
@@ -1378,14 +1323,14 @@ def test_edit_preserves_existing_crlf_line_endings(tmp_path):
     assert target.read_bytes() == b"alpha\r\ngamma\r\n"
 
 
-def test_edit_matches_crlf_file_with_lf_old_string(tmp_path):
+def test_edit_matches_crlf_file_with_lf_old_string(tmp_path, make_runtime):
     target = tmp_path / "unicode_demo.py"
     target.write_bytes(
         "def demo():\r\n    title = '中文和Unicode字符演示程序'\r\n    return title\r\n".encode(
             "utf-8"
         )
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "unicode_demo.py"))
     payload = decode(
@@ -1403,10 +1348,10 @@ def test_edit_matches_crlf_file_with_lf_old_string(tmp_path):
     )
 
 
-def test_edit_preserves_existing_utf16le_encoding(tmp_path):
+def test_edit_preserves_existing_utf16le_encoding(tmp_path, make_runtime):
     target = tmp_path / "utf16.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-16")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "utf16.txt"))
     payload = decode(update_v3(runtime, "utf16.txt", "beta", "gamma"))
@@ -1417,10 +1362,10 @@ def test_edit_preserves_existing_utf16le_encoding(tmp_path):
     assert target.read_text(encoding="utf-16") == "alpha\ngamma\n"
 
 
-def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path):
+def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path, make_runtime):
     target = tmp_path / "gbk.txt"
     target.write_bytes("城市=北京\n".encode("gb18030"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "gbk.txt"))
     payload = decode(update_v3(runtime, "gbk.txt", "北京", "上海"))
@@ -1430,10 +1375,10 @@ def test_edit_preserves_existing_gbk_compatible_encoding(tmp_path):
     assert target.read_bytes().decode("gb18030") == "城市=上海\n"
 
 
-def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path):
+def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path, make_runtime):
     target = tmp_path / "gbk_crlf.txt"
     target.write_bytes("标题=中文\r\n城市=北京\r\n".encode("gb18030"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "gbk_crlf.txt"))
     payload = decode(
@@ -1450,10 +1395,10 @@ def test_edit_matches_gbk_compatible_crlf_file_with_lf_old_string(tmp_path):
     assert target.read_bytes().decode("gb18030") == "Title=Chinese\r\nCity=Beijing\r\n"
 
 
-def test_edit_line_ending_tolerant_absent_text_still_reports_closest_match(tmp_path):
+def test_edit_line_ending_tolerant_absent_text_still_reports_closest_match(tmp_path, make_runtime):
     target = tmp_path / "near.txt"
     target.write_bytes(b"alpha\r\nbeta = 1\r\ngamma\r\n")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     decode(read_v3(runtime, "near.txt"))
     payload = decode(update_v3(runtime, "near.txt", "bet = 1\nextra", "beta = 2\nextra"))
@@ -1464,11 +1409,11 @@ def test_edit_line_ending_tolerant_absent_text_still_reports_closest_match(tmp_p
     assert payload["metadata"]["failures"][0]["closest_match"]["strategy"] == "fuzzy_window"
 
 
-def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
+def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("cd sub"))
 
@@ -1476,9 +1421,9 @@ def test_shell_runs_in_session_cwd_and_tracks_simple_cd(tmp_path, monkeypatch):
     assert runtime.cwd == subdir
 
 
-def test_shell_tool_returns_shell_result_name(tmp_path, monkeypatch):
+def test_shell_tool_returns_shell_result_name(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("printf ok"))
 
@@ -1487,11 +1432,11 @@ def test_shell_tool_returns_shell_result_name(tmp_path, monkeypatch):
     assert payload["output"] == "ok"
 
 
-def test_shell_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
+def test_shell_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("cd sub && pwd"))
 
@@ -1501,11 +1446,11 @@ def test_shell_tracks_cwd_after_compound_cd_command(tmp_path, monkeypatch):
     assert runtime.cwd == subdir
 
 
-def test_shell_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
+def test_shell_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
     subdir = tmp_path / "sub"
     subdir.mkdir()
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("cd sub && false"))
 
@@ -1515,9 +1460,9 @@ def test_shell_tracks_cwd_even_when_command_fails(tmp_path, monkeypatch):
     assert runtime.cwd == subdir
 
 
-def test_shell_uses_shell_compatibility_wrapper(tmp_path, monkeypatch):
+def test_shell_uses_shell_compatibility_wrapper(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("printf hidden >nul"))
 
@@ -1622,9 +1567,9 @@ def test_extract_shell_sentinel_parses_cwd_and_exit_code(tmp_path):
     assert exit_code == 7
 
 
-def test_shell_decodes_utf16le_output_before_extracting_sentinel(tmp_path, monkeypatch):
+def test_shell_decodes_utf16le_output_before_extracting_sentinel(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell(write_encoded_stdout_command("WSL 状态: 正常\n", "utf-16le")))
 
@@ -1635,9 +1580,9 @@ def test_shell_decodes_utf16le_output_before_extracting_sentinel(tmp_path, monke
     assert payload["metadata"]["stdoutEncoding"] == "utf-16le"
 
 
-def test_shell_decodes_gbk_compatible_output(tmp_path, monkeypatch):
+def test_shell_decodes_gbk_compatible_output(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell(write_encoded_stdout_command("状态: 正常\n", "gb18030")))
 
@@ -1646,9 +1591,9 @@ def test_shell_decodes_gbk_compatible_output(tmp_path, monkeypatch):
     assert payload["metadata"]["stdoutEncoding"] == "gb18030"
 
 
-def test_shell_keeps_utf8_output_decoding(tmp_path, monkeypatch):
+def test_shell_keeps_utf8_output_decoding(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell(write_encoded_stdout_command("状态: 正常\n", "utf-8")))
 
@@ -1657,9 +1602,9 @@ def test_shell_keeps_utf8_output_decoding(tmp_path, monkeypatch):
     assert payload["metadata"]["stdoutEncoding"] == "utf-8"
 
 
-def test_shell_truncates_large_output(tmp_path, monkeypatch):
+def test_shell_truncates_large_output(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell(repeat_x_command(31_000)))
 
@@ -1670,10 +1615,10 @@ def test_shell_truncates_large_output(tmp_path, monkeypatch):
     assert payload["metadata"]["outputTruncated"] is True
 
 
-def test_shell_caps_captured_output_before_formatting(tmp_path, monkeypatch):
+def test_shell_caps_captured_output_before_formatting(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.setattr("deepy.tools.builtin.MAX_BASH_CAPTURE_CHARS", 10)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell(repeat_x_command(25)))
 
@@ -1683,9 +1628,9 @@ def test_shell_caps_captured_output_before_formatting(tmp_path, monkeypatch):
     assert payload["metadata"]["outputTruncated"] is False
 
 
-def test_shell_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
+def test_shell_timeout_tracks_and_clears_process(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.shell("sleep 1", timeout_ms=20))
 
@@ -1696,9 +1641,9 @@ def test_shell_timeout_tracks_and_clears_process(tmp_path, monkeypatch):
     assert runtime.running_processes == {}
 
 
-def test_shell_interrupt_terminates_running_process(tmp_path, monkeypatch):
+def test_shell_interrupt_terminates_running_process(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), should_interrupt=lambda: True)
+    runtime = make_runtime(should_interrupt=lambda: True)
 
     started = time.monotonic()
     payload = decode(runtime.shell("sleep 5", timeout_ms=10_000))
@@ -1711,9 +1656,9 @@ def test_shell_interrupt_terminates_running_process(tmp_path, monkeypatch):
     assert elapsed < 1
 
 
-def test_shell_background_launch_returns_task_metadata(tmp_path, monkeypatch):
+def test_shell_background_launch_returns_task_metadata(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(
         runtime.shell(
@@ -1733,9 +1678,9 @@ def test_shell_background_launch_returns_task_metadata(tmp_path, monkeypatch):
     assert "ready" in output["output"]
 
 
-def test_task_list_output_and_stop_background_task(tmp_path, monkeypatch):
+def test_task_list_output_and_stop_background_task(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     launched = decode(
         runtime.shell(
             f"{shlex.quote(sys.executable)} -c \"import time; print('tick', flush=True); time.sleep(5)\"",
@@ -1761,9 +1706,9 @@ def test_task_list_output_and_stop_background_task(tmp_path, monkeypatch):
     runtime.background_tasks.stop_all(force_after_grace=True)
 
 
-def test_task_output_block_waits_for_output_not_completion(tmp_path, monkeypatch):
+def test_task_output_block_waits_for_output_not_completion(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     launched = decode(
         runtime.shell(
             f"{shlex.quote(sys.executable)} -c \"import time; print('started', flush=True); time.sleep(5)\"",
@@ -1783,8 +1728,8 @@ def test_task_output_block_waits_for_output_not_completion(tmp_path, monkeypatch
     assert elapsed < 1
 
 
-def test_task_output_and_stop_report_unknown_task_id(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_task_output_and_stop_report_unknown_task_id(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     output = decode(runtime.task_output("bg-missing"))
     stopped = decode(runtime.task_stop("bg-missing"))
@@ -1795,9 +1740,9 @@ def test_task_output_and_stop_report_unknown_task_id(tmp_path):
     assert stopped["metadata"]["error_code"] == "background_task_not_found"
 
 
-def test_shell_background_launch_limit_and_failure_are_structured(tmp_path, monkeypatch):
+def test_shell_background_launch_limit_and_failure_are_structured(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     def reject_start(**_kwargs):
         raise BackgroundTaskLimitError("Background task limit reached (1 running).")
@@ -1818,9 +1763,9 @@ def test_shell_background_launch_limit_and_failure_are_structured(tmp_path, monk
     assert failed["metadata"]["error_code"] == "background_task_launch_failed"
 
 
-def test_shell_function_tool_accepts_background_flag(tmp_path, monkeypatch):
+def test_shell_function_tool_accepts_background_flag(tmp_path, monkeypatch, make_runtime):
     monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     shell_tool = next(tool for tool in build_function_tools(runtime) if tool.name == "shell")
 
     payload = decode(
@@ -1837,8 +1782,8 @@ def test_shell_function_tool_accepts_background_flag(tmp_path, monkeypatch):
     runtime.background_tasks.stop_all(force_after_grace=True)
 
 
-def test_ask_user_question_sets_wait_flag(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_ask_user_question_sets_wait_flag(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     payload = decode(
         runtime.ask_user_question(
@@ -1872,8 +1817,8 @@ def test_ask_user_question_sets_wait_flag(tmp_path):
     assert "Waiting for user input." in payload["output"]
 
 
-def test_ask_user_question_rejects_invalid_questions(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_ask_user_question_rejects_invalid_questions(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     payload = decode(runtime.ask_user_question([]))
 
@@ -1881,14 +1826,14 @@ def test_ask_user_question_rejects_invalid_questions(tmp_path):
     assert payload["error"] == '"questions" must be a non-empty array.'
 
 
-def test_load_skill_returns_skill_body_and_root(tmp_path):
+def test_load_skill_returns_skill_body_and_root(tmp_path, make_runtime):
     skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         "---\nname: demo\ndescription: Demo skill\n---\nUse demo.",
         encoding="utf-8",
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.load_skill("demo"))
 
@@ -1897,14 +1842,14 @@ def test_load_skill_returns_skill_body_and_root(tmp_path):
     assert payload["metadata"]["root"] == str(skill_dir)
 
 
-def test_search_literal_content_default(tmp_path):
+def test_search_literal_content_default(tmp_path, make_runtime):
     tmp_path.joinpath("src").mkdir()
     tmp_path.joinpath("src", "app.py").write_text(
         "class ToolRuntime:\n    pass\n",
         encoding="utf-8",
     )
     tmp_path.joinpath("README.md").write_text("No match here\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.search("ToolRuntime", path=".", glob="src/*.py"))
 
@@ -1919,12 +1864,12 @@ def test_search_literal_content_default(tmp_path):
     assert payload["metadata"]["truncated"] is False
 
 
-def test_search_literal_mode_does_not_treat_query_as_regex(tmp_path):
+def test_search_literal_mode_does_not_treat_query_as_regex(tmp_path, make_runtime):
     tmp_path.joinpath("data.txt").write_text(
         "abcXdef\nabc.def\n",
         encoding="utf-8",
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.search("abc.def"))
 
@@ -1933,9 +1878,9 @@ def test_search_literal_mode_does_not_treat_query_as_regex(tmp_path):
     assert payload["metadata"]["totalMatches"] == 1
 
 
-def test_search_regex_mode_and_invalid_regex(tmp_path):
+def test_search_regex_mode_and_invalid_regex(tmp_path, make_runtime):
     tmp_path.joinpath("data.txt").write_text("alpha1\nalpha2\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     regex_payload = decode(runtime.search(r"alpha\d", mode="regex"))
     invalid_payload = decode(runtime.search("[", mode="regex"))
@@ -1949,14 +1894,14 @@ def test_search_regex_mode_and_invalid_regex(tmp_path):
     assert "Invalid regex pattern" in invalid_payload["error"]
 
 
-def test_search_regex_timeout_returns_structured_error(tmp_path, monkeypatch):
+def test_search_regex_timeout_returns_structured_error(tmp_path, monkeypatch, make_runtime):
     tmp_path.joinpath("data.txt").write_text("needle\n", encoding="utf-8")
 
     def timeout_count_in_line(_self, _line):
         return 0, True
 
     monkeypatch.setattr(search_module._Matcher, "count_in_line", timeout_count_in_line)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.search("needle", mode="regex"))
 
@@ -1965,10 +1910,10 @@ def test_search_regex_timeout_returns_structured_error(tmp_path, monkeypatch):
     assert payload["metadata"]["error_code"] == "regex_timeout"
 
 
-def test_search_output_modes_and_pagination(tmp_path):
+def test_search_output_modes_and_pagination(tmp_path, make_runtime):
     tmp_path.joinpath("a.txt").write_text("needle\n", encoding="utf-8")
     tmp_path.joinpath("b.txt").write_text("needle\nneedle\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     files_page = decode(runtime.search("needle", output_mode="files", limit=1))
     counts = decode(runtime.search("needle", output_mode="count"))
@@ -1983,13 +1928,13 @@ def test_search_output_modes_and_pagination(tmp_path):
     assert counts["output"].splitlines() == ["a.txt:1", "b.txt:2"]
 
 
-def test_search_respects_gitignore_and_include_ignored(tmp_path):
+def test_search_respects_gitignore_and_include_ignored(tmp_path, make_runtime):
     tmp_path.joinpath(".gitignore").write_text("ignored/\n", encoding="utf-8")
     tmp_path.joinpath("src").mkdir()
     tmp_path.joinpath("ignored").mkdir()
     tmp_path.joinpath("src", "hit.txt").write_text("needle\n", encoding="utf-8")
     tmp_path.joinpath("ignored", "hit.txt").write_text("needle\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     default_payload = decode(runtime.search("needle", output_mode="files"))
     included_payload = decode(runtime.search("needle", output_mode="files", include_ignored=True))
@@ -2000,13 +1945,13 @@ def test_search_respects_gitignore_and_include_ignored(tmp_path):
     assert included_payload["output"].splitlines() == ["ignored/hit.txt", "src/hit.txt"]
 
 
-def test_search_skips_binary_oversized_sensitive_and_unsupported_files(tmp_path):
+def test_search_skips_binary_oversized_sensitive_and_unsupported_files(tmp_path, make_runtime):
     tmp_path.joinpath("visible.txt").write_text("needle\n", encoding="utf-8")
     tmp_path.joinpath(".env").write_text("needle=secret\n", encoding="utf-8")
     tmp_path.joinpath("binary.bin").write_bytes(b"needle\x00hidden")
     tmp_path.joinpath("notebook.ipynb").write_text("needle\n", encoding="utf-8")
     tmp_path.joinpath("large.txt").write_bytes(b"needle" + b"x" * search_module.MAX_SEARCH_FILE_BYTES)
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.search("needle", output_mode="files"))
     skipped = {item["path"]: item["reason"] for item in payload["metadata"]["skipped"]}
@@ -2020,11 +1965,11 @@ def test_search_skips_binary_oversized_sensitive_and_unsupported_files(tmp_path)
     assert payload["metadata"]["sensitiveFiltered"] == 1
 
 
-def test_search_decodes_windows_text_encodings_and_crlf(tmp_path):
+def test_search_decodes_windows_text_encodings_and_crlf(tmp_path, make_runtime):
     tmp_path.joinpath("utf16.txt").write_text("needle\r\nnext\r\n", encoding="utf-16")
     tmp_path.joinpath("utf8sig.txt").write_text("needle\n", encoding="utf-8-sig")
     tmp_path.joinpath("gb18030.txt").write_bytes("中文 needle\n".encode("gb18030"))
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings(), platform_name="win32")
+    runtime = make_runtime(platform_name="win32")
 
     payload = decode(runtime.search("needle", output_mode="content"))
 
@@ -2035,10 +1980,10 @@ def test_search_decodes_windows_text_encodings_and_crlf(tmp_path):
     assert payload["metadata"]["totalMatches"] == 3
 
 
-def test_search_rejects_paths_outside_project(tmp_path):
+def test_search_rejects_paths_outside_project(tmp_path, make_runtime):
     outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
     outside.write_text("needle\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
 
     payload = decode(runtime.search("needle", path=str(outside)))
 
@@ -2047,8 +1992,8 @@ def test_search_rejects_paths_outside_project(tmp_path):
     assert payload["metadata"]["policyDecision"] == "deny"
 
 
-def test_function_tools_have_stable_names_and_descriptions(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_function_tools_have_stable_names_and_descriptions(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     tools = build_function_tools(runtime)
 
@@ -2109,8 +2054,8 @@ def test_function_tools_have_stable_names_and_descriptions(tmp_path):
     assert "available Agent Skill" in skill_tool.description
 
 
-def test_function_tool_schemas_match_shell_tool(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_function_tool_schemas_match_shell_tool(tmp_path, make_runtime):
+    runtime = make_runtime()
     tools = {tool.name: tool for tool in build_function_tools(runtime)}
 
     assert tools["shell"].params_json_schema["required"] == ["command"]
@@ -2220,10 +2165,10 @@ def test_mimo_compatible_schema_removes_nullable_required_fields_recursively():
     assert nested["additionalProperties"] is False
 
 
-def test_mimo_compatible_function_tools_keep_optional_nullable_defaults(tmp_path):
+def test_mimo_compatible_function_tools_keep_optional_nullable_defaults(tmp_path, make_runtime):
     target = tmp_path / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+    runtime = make_runtime()
     tools = {
         tool.name: tool for tool in build_function_tools(runtime, mimo_schema_compatibility=True)
     }
@@ -2246,8 +2191,8 @@ def test_mimo_compatible_function_tools_keep_optional_nullable_defaults(tmp_path
     assert "2: two" in payload["output"]
 
 
-def test_web_search_tool_description_mentions_mcp_fallback_when_preferred(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_search_tool_description_mentions_mcp_fallback_when_preferred(tmp_path, make_runtime):
+    runtime = make_runtime()
     tools = {
         tool.name: tool
         for tool in build_function_tools(
@@ -2261,8 +2206,8 @@ def test_web_search_tool_description_mentions_mcp_fallback_when_preferred(tmp_pa
     assert "Prefer those MCP tools first" in tools["WebSearch"].description
 
 
-def test_web_fetch_requires_complete_http_url(tmp_path):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_requires_complete_http_url(tmp_path, make_runtime):
+    runtime = make_runtime()
 
     missing_scheme = decode(runtime.web_fetch("www.example.com/page"))
     unsupported_scheme = decode(runtime.web_fetch("ftp://example.com/page"))
@@ -2273,8 +2218,8 @@ def test_web_fetch_requires_complete_http_url(tmp_path):
     assert "complete http or https URL" in unsupported_scheme["error"]
 
 
-def test_web_fetch_extracts_readable_html_page(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_extracts_readable_html_page(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
     requested: list[object] = []
 
     class FakeResponse:
@@ -2323,8 +2268,8 @@ def test_web_fetch_extracts_readable_html_page(tmp_path, monkeypatch):
     assert payload["metadata"]["bodyTruncated"] is False
 
 
-def test_web_fetch_uses_meta_description_when_body_text_is_empty(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_uses_meta_description_when_body_text_is_empty(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         headers = {"Content-Type": "text/html; charset=utf-8"}
@@ -2359,8 +2304,8 @@ def test_web_fetch_uses_meta_description_when_body_text_is_empty(tmp_path, monke
     assert "ignored()" not in payload["output"]
 
 
-def test_web_fetch_uses_social_description_metadata_fallbacks(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_uses_social_description_metadata_fallbacks(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         headers = {"Content-Type": "text/html; charset=utf-8"}
@@ -2391,8 +2336,8 @@ def test_web_fetch_uses_social_description_metadata_fallbacks(tmp_path, monkeypa
     assert "Twitter description text." not in payload["output"]
 
 
-def test_web_fetch_decodes_gzip_response(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_decodes_gzip_response(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
     requested: list[object] = []
 
     class FakeResponse:
@@ -2430,8 +2375,8 @@ def test_web_fetch_decodes_gzip_response(tmp_path, monkeypatch):
     assert payload["metadata"]["byteCount"] > 0
 
 
-def test_web_fetch_prefers_body_text_over_meta_description(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_prefers_body_text_over_meta_description(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         headers = {"Content-Type": "text/html; charset=utf-8"}
@@ -2462,8 +2407,8 @@ def test_web_fetch_prefers_body_text_over_meta_description(tmp_path, monkeypatch
     assert "SEO summary should not replace body." not in payload["output"]
 
 
-def test_web_fetch_unsupported_content_encoding_returns_structured_error(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_unsupported_content_encoding_returns_structured_error(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         headers = {
@@ -2492,8 +2437,8 @@ def test_web_fetch_unsupported_content_encoding_returns_structured_error(tmp_pat
     assert payload["metadata"]["url"] == "https://example.com/brotli"
 
 
-def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
-    runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
+def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         headers = {"Content-Type": "text/plain; charset=utf-8"}
@@ -2520,7 +2465,7 @@ def test_web_fetch_returns_plain_text_response(tmp_path, monkeypatch):
     assert payload["metadata"]["charset"] == "utf-8"
 
 
-def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
+def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
@@ -2531,7 +2476,7 @@ def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
             )
         ),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
     requested_urls: list[str] = []
     chat_prompts: list[str] = []
 
@@ -2583,14 +2528,14 @@ def test_web_search_uses_configured_searxng_url_first(tmp_path, monkeypatch):
     assert len(chat_prompts) == 1
 
 
-def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkeypatch):
+def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
         ),
         tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
     requested_urls: list[str] = []
 
     class FakeDuckDuckGoResponse:
@@ -2636,14 +2581,14 @@ def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(tmp_path, monkey
     assert requested_urls[1].startswith("https://html.duckduckgo.com/html/?")
 
 
-def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
+def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
         ),
         tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
     requested_urls: list[str] = []
     chat_prompts: list[str] = []
 
@@ -2694,13 +2639,13 @@ def test_web_search_reports_chinese_dominant_language(tmp_path, monkeypatch):
     assert len(chat_prompts) == 2
 
 
-def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch):
+def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
         ),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
     requested: list[object] = []
 
     class FakeResponse:
@@ -2751,11 +2696,8 @@ def test_web_search_uses_default_searxng_backend(tmp_path, monkeypatch):
     assert payload["metadata"]["providerAttempts"] == [{"provider": "searxng_json", "ok": True}]
 
 
-def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypatch):
-    runtime = ToolRuntime(
-        cwd=tmp_path,
-        settings=Settings(),
-    )
+def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime()
 
     class FakeResponse:
         def __enter__(self):
@@ -2777,14 +2719,14 @@ def test_web_search_builtin_backend_works_without_llm_config(tmp_path, monkeypat
     assert "valid LLM configuration" in payload["metadata"]["queryPreparationWarning"]
 
 
-def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path, monkeypatch):
+def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
         ),
         tools=ToolsConfig(web_search=WebSearchToolConfig(searxng_url="https://search.example")),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
     requested_urls: list[str] = []
 
     class FakeResponse:
@@ -2837,7 +2779,7 @@ def test_web_search_falls_back_to_duckduckgo_when_searxng_returns_empty(tmp_path
     assert requested_urls[1].startswith("https://html.duckduckgo.com/html/?")
 
 
-def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path, monkeypatch):
+def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path, monkeypatch, make_runtime):
     settings = Settings(
         model=ModelConfig(
             api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
@@ -2848,7 +2790,7 @@ def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path,
             )
         ),
     )
-    runtime = ToolRuntime(cwd=tmp_path, settings=settings)
+    runtime = make_runtime(settings=settings)
 
     def fake_urlopen(request, timeout):
         raise OSError("offline")
@@ -2873,9 +2815,8 @@ def test_web_search_reports_all_provider_failures_with_masked_metadata(tmp_path,
     assert "secr...alue" in attempts[0]["searchUrl"]
 
 
-def test_web_search_limits_calls_per_turn(tmp_path, monkeypatch):
-    runtime = ToolRuntime(
-        cwd=tmp_path,
+def test_web_search_limits_calls_per_turn(tmp_path, monkeypatch, make_runtime):
+    runtime = make_runtime(
         settings=Settings(
             model=ModelConfig(
                 api_key="sk-test", base_url="https://api.deepseek.com", name="deepseek-chat"
