@@ -4,6 +4,7 @@ import pytest
 
 from deepy.config import (
     DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
+    DEFAULT_LOCALHOST_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_RESERVED_CONTEXT_TOKENS,
     DEFAULT_XIAOMI_BASE_URL,
@@ -216,6 +217,98 @@ base_url = "https://api.xiaomimimo.com/v1"
     assert settings.model.name == "mimo-v2.5-pro"
     assert settings.model.base_url == DEFAULT_XIAOMI_BASE_URL
     assert settings.model.reasoning_mode == "enabled"
+
+
+def test_loads_explicit_localhost_provider_and_reasoning_effort(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+provider = "localhost"
+name = "gpt-5.6-sol"
+base_url = "http://127.0.0.1:8317/v1"
+api_key = "sk-local"
+thinking = true
+reasoning_effort = "xhigh"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "localhost"
+    assert settings.model.name == "gpt-5.6-sol"
+    assert settings.model.base_url == DEFAULT_LOCALHOST_BASE_URL
+    assert settings.model.reasoning_mode == "xhigh"
+    assert settings.model.thinking_enabled is True
+    assert provider_info_for("localhost").api == "responses"
+    assert provider_info_for("localhost").default_model == "gpt-5.6-terra"
+    assert provider_info_for("localhost").default_thinking_mode == "medium"
+    for model_name in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+        assert model_supports_image_input("localhost", model_name)
+    assert supports_image_input(
+        Settings(model=ModelConfig(provider="localhost", name="gpt-5.6-terra"))
+    )
+
+
+def test_infers_localhost_provider_from_loopback_base_url(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+name = "gpt-5.6-luna"
+base_url = "http://localhost:8317/v1"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.provider == "localhost"
+    assert settings.model.name == "gpt-5.6-luna"
+    assert settings.model.reasoning_mode == "medium"
+
+
+def test_localhost_none_reasoning_disables_thinking(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[model]
+provider = "localhost"
+name = "gpt-5.6-terra"
+base_url = "http://127.0.0.1:8317/v1"
+thinking = false
+reasoning_effort = "none"
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config, env={})
+
+    assert settings.model.reasoning_mode == "none"
+    assert settings.model.thinking_enabled is False
+
+
+def test_write_config_and_update_persist_localhost_defaults(tmp_path):
+    config = tmp_path / "config.toml"
+    write_config(
+        config,
+        api_key="sk-local",
+        provider="localhost",
+        model="gpt-5.6-terra",
+        theme="dark",
+    )
+    text = config.read_text(encoding="utf-8")
+    assert 'provider = "localhost"' in text
+    assert 'name = "gpt-5.6-terra"' in text
+    assert 'base_url = "http://127.0.0.1:8317/v1"' in text
+    assert "thinking = true" in text
+    assert 'reasoning_effort = "medium"' in text
+
+    update_config_model_settings(config, reasoning_mode="low")
+    updated = load_settings(config, env={})
+    assert updated.model.reasoning_mode == "low"
+    assert updated.model.thinking_enabled is True
 
 
 def test_unknown_base_url_without_provider_preserves_custom_model(tmp_path):

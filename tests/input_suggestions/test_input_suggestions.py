@@ -8,6 +8,7 @@ import pytest
 from deepy.config import ModelConfig, Settings
 from deepy.input_suggestions import (
     INPUT_SUGGESTION_MODEL,
+    LOCALHOST_INPUT_SUGGESTION_MODEL,
     InputSuggestionController,
     assistant_reply_count,
     generate_input_suggestion,
@@ -171,6 +172,27 @@ def test_input_suggestion_uses_current_third_party_model_non_thinking():
     assert input_suggestion_model_settings(xiaomi).extra_body == {
         "thinking": {"type": "disabled"}
     }
+
+
+def test_input_suggestion_uses_fixed_localhost_luna_non_thinking():
+    localhost = Settings(
+        model=ModelConfig(
+            provider="localhost",
+            name="gpt-5.6-terra",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="sk-local",
+            thinking=True,
+            reasoning_effort="xhigh",
+        )
+    )
+
+    assert LOCALHOST_INPUT_SUGGESTION_MODEL == "gpt-5.6-luna"
+    assert input_suggestion_model_name(localhost) == "gpt-5.6-luna"
+    assert input_suggestion_model_settings(localhost).extra_body == {
+        "reasoning_effort": "none",
+    }
+    assert input_suggestion_model_settings(localhost).include_usage is True
+    assert input_suggestion_model_settings(localhost).store is False
 
 
 @pytest.mark.asyncio

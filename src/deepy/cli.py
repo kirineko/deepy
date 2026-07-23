@@ -62,7 +62,11 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser.add_argument("--json", action="store_true", help="Print JSON instead of TOML.")
     init_parser = config_sub.add_parser("init", help="Create a TOML config file.")
     init_parser.add_argument("--api-key", help="Provider API key.")
-    init_parser.add_argument("--provider", default="deepseek", help="Provider: deepseek, openrouter, or xiaomi.")
+    init_parser.add_argument(
+        "--provider",
+        default="deepseek",
+        help="Provider: deepseek, openrouter, xiaomi, or localhost.",
+    )
     init_parser.add_argument("--model", help="Model name.")
     init_parser.add_argument("--base-url", help="OpenAI-compatible base URL.")
     init_parser.add_argument("--thinking", help="Thinking mode for the provider.")

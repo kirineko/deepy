@@ -203,7 +203,7 @@ def write_config(
     if not is_valid_ui_interface(interface):
         raise ValueError("UI interface must be one of: classic, modern.")
     if not is_supported_provider(provider):
-        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
+        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi, localhost.")
     provider_info = provider_info_for(provider)
     if not is_valid_config_model_for_provider(model, provider):
         raise ValueError(
@@ -293,7 +293,7 @@ def update_config_model_settings(
     current = ModelConfig.from_mapping(model_map)
     active_provider = provider or current.provider
     if provider is not None and not is_supported_provider(provider):
-        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi.")
+        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi, localhost.")
     provider_info = provider_info_for(active_provider)
     active_model = model or current.name
     if model is None and provider is not None and not is_supported_model_for_provider(active_model, active_provider):

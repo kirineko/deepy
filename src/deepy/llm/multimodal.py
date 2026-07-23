@@ -62,6 +62,8 @@ def model_supports_image_input(provider: str, model: str) -> bool:
         return normalized_model == "mimo-v2.5"
     if normalized_provider == "openrouter":
         return normalized_model == "xiaomi/mimo-v2.5"
+    if normalized_provider == "localhost":
+        return normalized_model in {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
     return False
 
 

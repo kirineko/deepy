@@ -53,8 +53,17 @@ def test_status_report_to_dict_is_json_ready(tmp_path):
     assert "cache_usage" in payload
 
 
-def test_status_report_includes_usage_context_and_balance(tmp_path):
+def test_status_report_includes_usage_context_and_balance(tmp_path, monkeypatch):
+    from pathlib import Path
+
     from deepy.sessions import DeepySession
+
+    # Isolate ~/.deepy/projects so reused pytest tmp paths cannot read leftover
+    # session DBs from earlier local test runs.
+    isolated_home = tmp_path / "home"
+    isolated_home.mkdir()
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated_home))
 
     session = DeepySession.create(tmp_path, session_id="s1")
     session.record_usage(

@@ -37,11 +37,20 @@ OPENROUTER_REASONING_CHOICES = (
     ("minimal", "minimal  Minimal reasoning token allocation"),
     ("none", "none     Thinking disabled"),
 )
+LOCALHOST_REASONING_CHOICES = (
+    ("none", "none    Thinking disabled"),
+    ("low", "low     Smaller reasoning token allocation"),
+    ("medium", "medium  Moderate reasoning token allocation (default)"),
+    ("high", "high    Large reasoning token allocation"),
+    ("xhigh", "xhigh   Largest reasoning token allocation"),
+)
 
 
 def thinking_mode_choices(provider: str) -> tuple[tuple[str, str], ...]:
     if provider == "openrouter":
         return OPENROUTER_REASONING_CHOICES
+    if provider == "localhost":
+        return LOCALHOST_REASONING_CHOICES
     modes = thinking_modes_for_provider(provider)
     if modes == ("disabled", "enabled"):
         return SWITCH_ONLY_THINKING_CHOICES

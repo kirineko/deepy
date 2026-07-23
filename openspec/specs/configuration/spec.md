@@ -198,6 +198,13 @@ through existing TOML fields.
 - **AND** `model.reasoning_effort` is `xhigh`, `high`, `medium`, `low`, or `minimal`
 - **THEN** Deepy SHALL expose that effort as the thinking mode
 
+#### Scenario: Localhost effort reasoning is loaded
+- **WHEN** Deepy loads config for provider `localhost`
+- **AND** `model.reasoning_effort` is `none`, `low`, `medium`, `high`, or `xhigh`
+- **THEN** Deepy SHALL expose that effort as the thinking mode
+- **AND** it SHALL treat `none` as disabled thinking
+- **AND** it SHALL treat the other efforts as enabled thinking
+
 #### Scenario: Legacy thinking fields are loaded
 - **WHEN** Deepy loads config that uses `model.thinking` and `model.reasoning_effort`
 - **THEN** Deepy SHALL resolve `thinking = false` to disabled thinking
@@ -209,6 +216,7 @@ through existing TOML fields.
 - **THEN** Deepy SHALL use provider-specific default thinking
 - **AND** DeepSeek SHALL default to reasoning mode `max`
 - **AND** OpenRouter and Xiaomi MiMo SHALL default to thinking `enabled`
+- **AND** localhost SHALL default to reasoning mode `medium`
 
 #### Scenario: Reasoning mode is saved
 - **WHEN** Deepy saves DeepSeek reasoning mode `none`, `high`, or `max`
@@ -226,6 +234,12 @@ through existing TOML fields.
 - **WHEN** Deepy saves Xiaomi MiMo thinking mode `enabled` or `disabled`
 - **THEN** it SHALL write `thinking = true` and `reasoning_effort = "enabled"` for `enabled`
 - **AND** it SHALL write `thinking = false` and `reasoning_effort = "none"` for `disabled`
+
+#### Scenario: Localhost thinking mode is saved
+- **WHEN** Deepy saves localhost thinking mode `low`, `medium`, `high`, or `xhigh`
+- **THEN** it SHALL write `thinking = true` and the selected effort to `reasoning_effort`
+- **WHEN** Deepy saves localhost thinking mode `none`
+- **THEN** it SHALL write `thinking = false` and `reasoning_effort = "none"`
 
 ### Requirement: Targeted Model Config Updates
 Deepy SHALL update provider and model-related TOML settings without discarding
@@ -386,14 +400,14 @@ default of enabled.
 Deepy SHALL support an optional provider selection in TOML model configuration.
 
 #### Scenario: Config has explicit provider
-- **WHEN** Deepy loads config with `model.provider` set to `deepseek`, `openrouter`, or `xiaomi`
+- **WHEN** Deepy loads config with `model.provider` set to `deepseek`, `openrouter`, `xiaomi`, or `localhost`
 - **THEN** Deepy SHALL resolve that provider as the active provider
 - **AND** it SHALL validate model and thinking choices against that provider's catalog
 
 #### Scenario: Config has no provider and known base URL
 - **WHEN** Deepy loads config without `model.provider`
-- **AND** `model.base_url` points at official DeepSeek, OpenRouter, or Xiaomi MiMo hosts
-- **THEN** Deepy SHALL infer `deepseek`, `openrouter`, or `xiaomi` respectively
+- **AND** `model.base_url` points at official DeepSeek, OpenRouter, Xiaomi MiMo, or loopback localhost hosts
+- **THEN** Deepy SHALL infer `deepseek`, `openrouter`, `xiaomi`, or `localhost` respectively
 
 #### Scenario: Config has no provider and unknown base URL
 - **WHEN** Deepy loads config without `model.provider`
@@ -406,6 +420,7 @@ Deepy SHALL support an optional provider selection in TOML model configuration.
 - **THEN** it SHALL use `https://api.deepseek.com` for `deepseek`
 - **AND** it SHALL use `https://openrouter.ai/api/v1` for `openrouter`
 - **AND** it SHALL use `https://api.xiaomimimo.com/v1` for `xiaomi`
+- **AND** it SHALL use `http://127.0.0.1:8317/v1` for `localhost`
 
 ### Requirement: Subagent Configuration Locations
 
@@ -563,6 +578,10 @@ Deepy SHALL expose image-input support as explicit model capability metadata.
 - **WHEN** Deepy builds the OpenRouter model catalog
 - **THEN** `xiaomi/mimo-v2.5` SHALL be marked as supporting image input
 - **AND** `xiaomi/mimo-v2.5-pro` SHALL be marked as not supporting image input
+
+#### Scenario: Localhost GPT-5.6 image-capable models are loaded
+- **WHEN** Deepy builds the localhost model catalog
+- **THEN** `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` SHALL be marked as supporting image input
 
 #### Scenario: DeepSeek models are loaded
 - **WHEN** Deepy builds the DeepSeek model catalog

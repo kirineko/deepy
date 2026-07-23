@@ -29,7 +29,8 @@ Deepy SHALL support structured image attachments on user prompts for explicitly 
 - **AND** it SHALL keep accepting text input and text-only submission
 
 ### Requirement: Supported Image Model Set
-Deepy SHALL treat image input as supported only for the initial MiMo model allowlist.
+Deepy SHALL treat image input as supported only for explicitly allowlisted
+image-capable models.
 
 #### Scenario: Xiaomi official MiMo model is active
 - **WHEN** the active provider is `xiaomi`
@@ -52,6 +53,11 @@ Deepy SHALL treat image input as supported only for the initial MiMo model allow
 - **AND** the active model is `xiaomi/mimo-v2.5-pro`
 - **THEN** Deepy SHALL treat image attachments as unsupported
 - **AND** it SHALL NOT send image content blocks to the model request
+
+#### Scenario: Localhost GPT-5.6 model is active
+- **WHEN** the active provider is `localhost`
+- **AND** the active model is `gpt-5.6-sol`, `gpt-5.6-terra`, or `gpt-5.6-luna`
+- **THEN** Deepy SHALL allow image attachments on user prompts
 
 #### Scenario: DeepSeek model is active
 - **WHEN** the active provider is `deepseek`

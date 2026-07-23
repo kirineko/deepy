@@ -24,6 +24,7 @@ DEFAULT_UI_VIEW_MODE = "concise"
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1"
+DEFAULT_LOCALHOST_BASE_URL = "http://127.0.0.1:8317/v1"
 DEEPSEEK_REASONING_EFFORTS = {"high", "max"}
 SWITCH_ONLY_REASONING_EFFORTS = {"enabled", "none"}
 OPENROUTER_REASONING_MODES = (
@@ -37,12 +38,26 @@ OPENROUTER_REASONING_MODES = (
     "none",
 )
 OPENROUTER_REASONING_EFFORTS = set(OPENROUTER_REASONING_MODES)
-REASONING_EFFORTS = DEEPSEEK_REASONING_EFFORTS | SWITCH_ONLY_REASONING_EFFORTS | OPENROUTER_REASONING_EFFORTS
+LOCALHOST_REASONING_MODES = ("none", "low", "medium", "high", "xhigh")
+LOCALHOST_REASONING_EFFORTS = set(LOCALHOST_REASONING_MODES)
+REASONING_EFFORTS = (
+    DEEPSEEK_REASONING_EFFORTS
+    | SWITCH_ONLY_REASONING_EFFORTS
+    | OPENROUTER_REASONING_EFFORTS
+    | LOCALHOST_REASONING_EFFORTS
+)
 DEEPSEEK_REASONING_MODES = ("none", "high", "max")
 SWITCH_ONLY_THINKING_MODES = ("disabled", "enabled")
 REASONING_MODES = set(DEEPSEEK_REASONING_MODES)
-THINKING_MODES = set(DEEPSEEK_REASONING_MODES) | set(SWITCH_ONLY_THINKING_MODES) | OPENROUTER_REASONING_EFFORTS
-PROVIDERS = {"deepseek", "openrouter", "xiaomi"}
+THINKING_MODES = (
+    set(DEEPSEEK_REASONING_MODES)
+    | set(SWITCH_ONLY_THINKING_MODES)
+    | OPENROUTER_REASONING_EFFORTS
+    | LOCALHOST_REASONING_EFFORTS
+)
+PROVIDERS = {"deepseek", "openrouter", "xiaomi", "localhost"}
+PROVIDER_API_CHAT_COMPLETIONS = "chat_completions"
+PROVIDER_API_RESPONSES = "responses"
 UI_THEMES = {"dark", "light"}
 UI_THEME_OPTIONS = (("1", "dark"), ("2", "light"))
 UI_INTERFACES = {"classic", "modern"}
@@ -77,6 +92,7 @@ class ProviderInfo:
     default_model: str
     default_thinking_mode: str
     sends_reasoning_effort: bool = True
+    api: str = PROVIDER_API_CHAT_COMPLETIONS
     api_key_url: str | None = None
 
 
@@ -125,6 +141,29 @@ XIAOMI_MODEL_CATALOG = (
         default_reasoning_mode="enabled",
     ),
 )
+LOCALHOST_MODEL_CATALOG = (
+    ModelInfo(
+        name="gpt-5.6-sol",
+        label="GPT-5.6 Sol",
+        description="Flagship GPT-5.6 capability via local CLIProxyAPI.",
+        supports_image_input=True,
+        default_reasoning_mode="medium",
+    ),
+    ModelInfo(
+        name="gpt-5.6-terra",
+        label="GPT-5.6 Terra",
+        description="Balanced GPT-5.6 performance and cost via local CLIProxyAPI.",
+        supports_image_input=True,
+        default_reasoning_mode="medium",
+    ),
+    ModelInfo(
+        name="gpt-5.6-luna",
+        label="GPT-5.6 Luna",
+        description="Efficient high-volume GPT-5.6 via local CLIProxyAPI.",
+        supports_image_input=True,
+        default_reasoning_mode="medium",
+    ),
+)
 PROVIDER_CATALOG = (
     ProviderInfo(
         id="deepseek",
@@ -160,6 +199,17 @@ PROVIDER_CATALOG = (
         sends_reasoning_effort=False,
         api_key_url="https://platform.xiaomimimo.com/console/api-keys",
     ),
+    ProviderInfo(
+        id="localhost",
+        label="Localhost",
+        description="Local CLIProxyAPI OpenAI Responses endpoint for GPT-5.6.",
+        default_base_url=DEFAULT_LOCALHOST_BASE_URL,
+        models=LOCALHOST_MODEL_CATALOG,
+        thinking_modes=LOCALHOST_REASONING_MODES,
+        default_model="gpt-5.6-terra",
+        default_thinking_mode="medium",
+        api=PROVIDER_API_RESPONSES,
+    ),
 )
 PROVIDER_BY_ID = {provider.id: provider for provider in PROVIDER_CATALOG}
 SUPPORTED_DEEPSEEK_MODELS = frozenset(model.name for model in DEEPSEEK_MODEL_CATALOG)
@@ -192,6 +242,8 @@ def infer_provider_from_base_url(base_url: str | None) -> str | None:
         return "openrouter"
     if host == "api.xiaomimimo.com":
         return "xiaomi"
+    if host in {"127.0.0.1", "localhost"}:
+        return "localhost"
     return None
 
 
@@ -254,6 +306,12 @@ def normalize_reasoning_effort(
         if value in OPENROUTER_REASONING_EFFORTS:
             return value
         return provider_info.default_thinking_mode
+    if provider == "localhost":
+        if thinking is False or value == "none":
+            return "none"
+        if value in LOCALHOST_REASONING_EFFORTS:
+            return value
+        return provider_info.default_thinking_mode
     if provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
         if thinking is False or value in {"none", "disabled"}:
             return "none"
@@ -268,6 +326,8 @@ def normalize_reasoning_effort(
 def thinking_enabled_for_mode(mode: str, provider: str) -> bool:
     if provider == "openrouter":
         return mode not in {"none", "disabled"}
+    if provider == "localhost":
+        return mode != "none"
     if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
         return mode != "disabled"
     return mode != "none"
@@ -280,6 +340,12 @@ def reasoning_effort_for_mode(mode: str, provider: str) -> str:
         if mode == "enabled":
             return "enabled"
         if mode in OPENROUTER_REASONING_EFFORTS:
+            return mode
+        return provider_info_for(provider).default_thinking_mode
+    if provider == "localhost":
+        if mode == "none":
+            return "none"
+        if mode in LOCALHOST_REASONING_EFFORTS:
             return mode
         return provider_info_for(provider).default_thinking_mode
     if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:

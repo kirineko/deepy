@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from agents import OpenAIResponsesModel
+
 from deepy.config.settings import ModelConfig, Settings
 from deepy.llm.provider import (
     DeepyOpenAIChatCompletionsModel,
@@ -413,6 +415,77 @@ def test_model_settings_map_xiaomi_mimo_switch_thinking_without_reasoning_effort
 
     assert enabled == {"thinking": {"type": "enabled"}}
     assert disabled == {"thinking": {"type": "disabled"}}
+
+
+def test_provider_bundle_uses_responses_model_for_localhost():
+    settings = Settings(
+        model=ModelConfig(
+            provider="localhost",
+            api_key="sk-local",
+            name="gpt-5.6-terra",
+            base_url="http://127.0.0.1:8317/v1",
+            thinking=True,
+            reasoning_effort="medium",
+        )
+    )
+
+    bundle = build_provider_bundle(settings)
+
+    assert isinstance(bundle.model, OpenAIResponsesModel)
+    assert bundle.model.model == "gpt-5.6-terra"
+    assert str(bundle.client.base_url) == "http://127.0.0.1:8317/v1/"
+
+
+def test_model_settings_map_localhost_reasoning_effort():
+    medium = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="localhost",
+                name="gpt-5.6-terra",
+                base_url="http://127.0.0.1:8317/v1",
+                api_key="sk-local",
+                thinking=True,
+                reasoning_effort="medium",
+            )
+        )
+    )
+    none = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="localhost",
+                name="gpt-5.6-luna",
+                base_url="http://127.0.0.1:8317/v1",
+                api_key="sk-local",
+                thinking=False,
+                reasoning_effort="none",
+            )
+        )
+    )
+    xhigh = build_model_settings(
+        Settings(
+            model=ModelConfig(
+                provider="localhost",
+                name="gpt-5.6-sol",
+                base_url="http://127.0.0.1:8317/v1",
+                api_key="sk-local",
+                thinking=True,
+                reasoning_effort="xhigh",
+            )
+        )
+    )
+
+    assert medium.extra_body in (None, {})
+    assert medium.include_usage is True
+    assert medium.store is False
+    assert medium.reasoning is not None
+    assert medium.reasoning.effort == "medium"
+    assert medium.reasoning.summary == "auto"
+    assert none.reasoning is not None
+    assert none.reasoning.effort == "none"
+    assert none.reasoning.summary is None
+    assert xhigh.reasoning is not None
+    assert xhigh.reasoning.effort == "xhigh"
+    assert xhigh.reasoning.summary == "auto"
 
 
 @pytest.mark.asyncio

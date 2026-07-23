@@ -25,6 +25,7 @@ from .providers import (
     DEFAULT_UI_THEME,
     DEFAULT_UI_VIEW_MODE,
     DEFAULT_WEB_SEARCH_SEARXNG_URL,
+    LOCALHOST_REASONING_EFFORTS,
     OPENROUTER_REASONING_EFFORTS,
     PROVIDERS,
     ProviderInfo,
@@ -107,6 +108,14 @@ class ModelConfig:
             return (
                 self.reasoning_effort
                 if self.reasoning_effort in OPENROUTER_REASONING_EFFORTS
+                else self.provider_info.default_thinking_mode
+            )
+        if self.provider == "localhost":
+            if not self.thinking_enabled:
+                return "none"
+            return (
+                self.reasoning_effort
+                if self.reasoning_effort in LOCALHOST_REASONING_EFFORTS
                 else self.provider_info.default_thinking_mode
             )
         if self.provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:

@@ -16,6 +16,7 @@ from deepy.utils import log_debug_event
 from deepy.utils import json as json_utils
 
 INPUT_SUGGESTION_MODEL = "deepseek-v4-flash"
+LOCALHOST_INPUT_SUGGESTION_MODEL = "gpt-5.6-luna"
 INPUT_SUGGESTION_DELAY_SECONDS = 0.3
 MIN_ASSISTANT_REPLIES = 2
 MAX_RECENT_HISTORY_ITEMS = 40
@@ -140,6 +141,8 @@ class InputSuggestionController:
 
 
 def input_suggestion_model_name(settings: Settings | None = None) -> str:
+    if settings is not None and settings.model.provider == "localhost":
+        return LOCALHOST_INPUT_SUGGESTION_MODEL
     if settings is not None and settings.model.provider != "deepseek":
         return settings.model.name
     return INPUT_SUGGESTION_MODEL

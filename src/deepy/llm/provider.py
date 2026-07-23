@@ -6,8 +6,10 @@ from urllib.parse import urlparse
 
 from agents import Model, ModelSettings
 from agents import OpenAIChatCompletionsModel
+from agents import OpenAIResponsesModel
 
 from deepy.config import Settings
+from deepy.config.providers import PROVIDER_API_RESPONSES, provider_info_for
 from deepy.config.settings import infer_provider_from_base_url
 
 from .cache_context import capture_sdk_request_shape
@@ -161,9 +163,16 @@ def build_provider_bundle(settings: Settings) -> ProviderBundle:
 
     set_tracing_disabled(disabled=True)
     client = AsyncOpenAI(base_url=settings.model.base_url, api_key=settings.model.api_key)
-    model = DeepyOpenAIChatCompletionsModel(
-        model=settings.model.name,
-        openai_client=client,
-        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
-    )
+    provider_info = provider_info_for(settings.model.provider)
+    if provider_info.api == PROVIDER_API_RESPONSES:
+        model: Model = OpenAIResponsesModel(
+            model=settings.model.name,
+            openai_client=client,
+        )
+    else:
+        model = DeepyOpenAIChatCompletionsModel(
+            model=settings.model.name,
+            openai_client=client,
+            should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
+        )
     return ProviderBundle(client=client, model=model, model_settings=build_model_settings(settings))
