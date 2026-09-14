@@ -5285,15 +5285,18 @@ async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp
         prompt = app.query_one("#prompt-input", PromptTextArea)
         attachment = app.image_attachments.attach_image(b"image", "image/png")
         prompt.text = "/model set mimo mimo-v2.5-pro enabled"
-        prompt.action_submit()
+        await pilot.press("enter")
         await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5-pro")
+        await app.workers.wait_for_complete()
         assert app.image_attachments.attachments == [attachment]
         prompt.text = "describe"
-        prompt.action_submit()
+        await pilot.press("enter")
         await pilot.pause()
         assert prompt.text == "describe"
         assert app.image_attachments.attachments == [attachment]
         prompt.text = "/model set mimo mimo-v2.5 enabled"
-        prompt.action_submit()
+        await pilot.press("enter")
         await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5")
+        # Settings change before the command finishes updating/focusing the UI.
+        await app.workers.wait_for_complete()
         assert app.image_attachments.attachments == [attachment]
