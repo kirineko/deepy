@@ -43,14 +43,14 @@ Deepy SHALL normalize token usage from DeepSeek and the OpenAI Agents SDK while 
 
 #### Scenario: Latest request context usage is reported
 
-- **WHEN** Deepy reports Context Window usage after at least one model request with known usage
+- **WHEN** Deepy reports Context Window usage after a model request with known usage and a checkpoint matching the current provider/model/API and active history view
 - **THEN** the reported used value SHALL come from the latest request context occupancy
-- **AND** the reported total value SHALL come from the configured context window
-- **AND** the reported remaining value SHALL be the configured context window minus latest request context occupancy
+- **AND** the reported total value SHALL come from the resolved effective model context window
+- **AND** the reported remaining value SHALL be the resolved effective model context window minus latest request context occupancy
 
 ### Requirement: Context And Compact Display
 
-Deepy SHALL show Context Window occupancy as the only user-facing context pressure value, and automatic compaction timing SHALL use latest request Context Window usage when available.
+Deepy SHALL show Context Window occupancy as the only user-facing context pressure value, and automatic compaction timing SHALL use the complete next-request budget with only identity-compatible usage checkpoints used for calibration.
 
 #### Scenario: A model turn completes
 
@@ -58,7 +58,7 @@ Deepy SHALL show Context Window occupancy as the only user-facing context pressu
 - **THEN** it SHALL display per-turn Token Usage details after the response
 - **AND** it SHALL update the Context Window display with latest request used tokens, total context window, remaining tokens, and percentage
 - **AND** it SHALL NOT show a separate `compact` or compaction pressure token segment
-- **AND** it SHALL use latest request Context Window usage to determine whether the next turn should auto compact when that usage is available
+- **AND** it SHALL combine compatible latest request usage with uncovered input and current request overhead when determining whether the next turn should auto compact
 
 #### Scenario: A session is compacted
 
@@ -66,7 +66,7 @@ Deepy SHALL show Context Window occupancy as the only user-facing context pressu
 - **THEN** Deepy SHALL update the persisted session history to the compacted summary plus preserved recent context
 - **AND** this explicit rewrite SHALL reset the persisted Context Window checkpoint to the compacted session estimate
 - **AND** the next Context Window display and auto-compact decision SHALL use the reset checkpoint until a newer provider usage record is available
-- **AND** any user-facing compaction summary SHALL report its before value from the same Context Window checkpoint shown in the statusline when that checkpoint is available
+- **AND** any user-facing compaction summary SHALL identify whether its before value is reported occupancy or a next-request estimate, consistently with the statusline
 
 #### Scenario: Interrupted prompt rollback preserves latest context checkpoint
 
@@ -80,7 +80,8 @@ Deepy SHALL show Context Window occupancy as the only user-facing context pressu
 
 - **WHEN** session messages have been appended after the latest precise usage checkpoint
 - **THEN** Deepy SHALL NOT show pending estimated tokens as a separate statusline pressure value
-- **AND** it SHALL NOT add pending estimated tokens to the latest request Context Window used value
+- **AND** it SHALL keep the latest reported value distinct from any labeled next-request estimate
+- **AND** automatic compaction SHALL include pending tokens even when a reported checkpoint exists
 
 #### Scenario: Provider usage is unknown
 
@@ -692,7 +693,7 @@ Deepy SHALL persist user turns with image attachments so supported image convers
 #### Scenario: Image session is resumed with unsupported model
 - **WHEN** the user resumes a session containing image prompt turns
 - **AND** the active model does not support image input
-- **THEN** Deepy SHALL block an incompatible model request with guidance to select an image-capable model or start a text-only session
+- **THEN** Deepy SHALL block an incompatible model request with guidance to select an image-capable model, start a text-only session or explicitly request a text summary for the selected model
 - **AND** it SHALL preserve the original image attachments and text context
 - **AND** it SHALL NOT silently strip image history or mutate the original session
 
@@ -736,3 +737,16 @@ Deepy SHALL attribute built-in search usage separately from conversation-provide
 - **WHEN** a session contains MiMo, Kimi or CLI conversation and DeepSeek search calls
 - **THEN** Deepy SHALL label search usage separately with its actual provider/model
 - **AND** it SHALL preserve input suggestion, compaction and subagent usage distinctions
+
+### Requirement: Context Checkpoint Identity
+Deepy SHALL associate context checkpoints with the request model, endpoint, active history revision and prompt/tool definitions.
+
+#### Scenario: Checkpoint no longer matches
+- **WHEN** model, endpoint, history view or prompt/tool definitions change
+- **THEN** Deepy SHALL stop presenting the old checkpoint as precise target-model occupancy
+- **AND** it SHALL estimate the complete target replay until matching usage is received, without altering cumulative historical usage
+
+#### Scenario: Prepared view commits
+- **WHEN** a target view is fully prepared and its source history revision still matches
+- **THEN** Deepy SHALL atomically persist its summary references, coverage and model provenance while retaining original records
+- **AND** resume SHALL recover the committed view or the previous valid view after interruption, never a partial replacement

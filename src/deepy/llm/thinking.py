@@ -15,4 +15,5 @@ def build_model_settings(settings: Settings) -> ModelSettings:
     reasoning = Reasoning.model_construct(effort=effort)
     if settings.model.provider == "cli_proxy" and effort != "none":
         reasoning.summary = "auto"
-    return ModelSettings(include_usage=True, store=False, reasoning=reasoning)
+    return ModelSettings(include_usage=True, store=False, reasoning=reasoning,
+                         max_tokens=settings.model_limits.output_tokens)

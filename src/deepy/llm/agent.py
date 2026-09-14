@@ -121,6 +121,7 @@ def build_subagent_tools(
                 provider=settings.model.provider,
                 model=definition.model,
                 openai_client=provider.client,
+                limits=replace(settings, model=replace(settings.model, name=definition.model)).model_limits,
             )
             from .thinking import build_model_settings
 

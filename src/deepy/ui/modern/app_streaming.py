@@ -65,6 +65,12 @@ class AppStreamingMixin(AppStateProto):
         except Exception as exc:
             self.post_message(TurnFailedMessage(exc))
             return
+        if summary.status == "context_compaction_failed":
+            from deepy.ui.modern.widgets import PromptTextArea, PromptPanel
+            from deepy.llm.multimodal import format_user_prompt_display
+            self.image_attachments.attachments = list(image_attachments or [])
+            self.query_one(PromptPanel).refresh_image_status()
+            self.query_one("#prompt-input", PromptTextArea).text = format_user_prompt_display(prompt, image_attachments or [])
         self.post_message(TurnCompleteMessage(summary))
 
 
@@ -86,7 +92,11 @@ class AppStreamingMixin(AppStateProto):
         self.state = reset_turn_buffers(self.state)
         if summary.pending_questions:
             await self._show_pending_question(summary.pending_questions)
-        self._update_status("Idle")
+        if summary.status == "context_compaction_failed":
+            await self._append_block(ErrorBlock(summary.output))
+            self._update_status("History not ready; draft preserved")
+        else:
+            self._update_status("Idle")
         self.run_worker(self._prepare_input_suggestion(summary), exclusive=False)
 
 

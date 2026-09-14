@@ -42,21 +42,10 @@ def estimate_tokens_for_item(item: Any) -> int:
 
 
 def _estimate_multimodal_item_tokens(item: Any) -> int:
-    if not isinstance(item, dict):
-        return estimate_tokens_for_text(str(item))
-    content = item.get("content")
-    if not isinstance(content, list):
-        return estimate_tokens_for_text(json_utils.dumps(item))
-    tokens = 0
-    for part in content:
-        if not isinstance(part, dict):
-            tokens += estimate_tokens_for_item(part)
-            continue
-        if part.get("type") in {"input_image", "image", "image_url"} or "image_url" in part:
-            tokens += 1024
-            continue
-        tokens += estimate_tokens_for_item(part)
-    return max(tokens, 1)
+    from .request_budget import estimate_request_value
+    from .response_images import normalize_response_images
+
+    return estimate_request_value(normalize_response_images([item]))
 
 
 def estimate_tokens_for_items(items: list[dict[str, Any]]) -> int:

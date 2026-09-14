@@ -70,7 +70,7 @@ class ImageAttachmentController:
 
     def collect_from_prompt_text(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
         command = remove_image_attachment_labels(text, self.attachments).strip()
-        if command == "/model" or command.startswith("/model "):
+        if command == "/model" or command.startswith("/model ") or command == "/compact --for-model":
             return command, []
         self.sync_to_prompt_text(text)
         self.validate_submission()

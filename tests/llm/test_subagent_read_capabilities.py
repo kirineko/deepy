@@ -21,7 +21,9 @@ async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_
     (tmp_path / "image.png").write_bytes(b"image")
     (tmp_path / "notes.txt").write_text("notes", encoding="utf-8")
     settings = Settings.from_mapping(
-        {"active_provider": "mimo", "providers": {"mimo": {"model": parent_model}}}
+        {"active_provider": "mimo", "providers": {"mimo": {"model": parent_model, "model_limits": {
+            "mimo-v2.5": {"context_window_tokens": 60000, "max_output_tokens": 4096},
+            "mimo-v2.5-pro": {"context_window_tokens": 100000, "max_output_tokens": 8192}}}}}
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     definitions = tuple(
@@ -54,6 +56,11 @@ async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_
                 model_settings=ModelSettings(),
             ),
         )
+        for child in children[1:]:
+            expected = 4096 if child.model.model == "mimo-v2.5" else 8192
+            assert child.model_settings.max_tokens == expected
+            assert child.model.limits.output_tokens == expected
+            assert child.model.limits.window_tokens == (60000 if expected == 4096 else 100000)
         request = (
             {"files": [{"path": "image.png"}, {"path": "notes.txt"}]}
             if batch

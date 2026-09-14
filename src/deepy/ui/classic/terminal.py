@@ -514,6 +514,9 @@ def run_interactive(
                 audit_mode=audit_state,
                 image_attachments=pasted_images,
             )
+            if summary.status == "context_compaction_failed":
+                image_attachments.attachments = list(pasted_images)
+                setattr(prompt_session, "deepy_restored_draft", format_user_prompt_display(text, pasted_images))
             session_id = summary.session_id
             _record_session_cost_start(root, session_id, cost_start)
             clarification_rounds = 0

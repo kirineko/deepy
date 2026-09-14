@@ -6,6 +6,9 @@ from typing import Any
 from agents import Model, ModelSettings, OpenAIResponsesModel
 
 from deepy.config import Settings
+from deepy.config.model_limits import ResolvedModelLimits, resolve_model_limits
+from .history_projection import model_identity, project_history, history_groups
+from .request_budget import check_request
 
 from .cache_context import capture_sdk_request_shape
 from .response_images import normalize_response_images, validate_encoded_request
@@ -26,12 +29,16 @@ class ProviderBundle:
 class DeepyResponsesModel(OpenAIResponsesModel):
     """Keep provider identity explicit even when users override the endpoint."""
 
-    def __init__(self, *, provider: str, **kwargs: Any) -> None:
+    def __init__(self, *, provider: str, limits: ResolvedModelLimits | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.provider = provider
+        self.limits = limits or resolve_model_limits(provider, self.model)
+        self.origin = model_identity(provider, self.model, str(self._client.base_url))
 
     def _tag_reasoning(self, items: list[Any]) -> None:
         for item in items:
+            if item is not None:
+                setattr(item, "deepy_origin", self.origin)
             if getattr(item, "type", None) == "reasoning":
                 setattr(item, "deepy_provider", self.provider)
 
@@ -86,17 +93,8 @@ class DeepyResponsesModel(OpenAIResponsesModel):
                     "当前模型不支持会话中的图片，请切换图片模型或开始纯文本会话。原图片已保留。"
                 )
         if isinstance(items, list):
-            prepared = []
-            for item in items:
-                if isinstance(item, dict) and item.get("type") == "reasoning":
-                    item = dict(item)
-                    origin = item.pop("deepy_provider", None)
-                    if (origin and origin != self.provider) or (
-                        not origin and item.get("encrypted_content")
-                    ):
-                        continue
-                prepared.append(item)
-            items = prepared
+            items = project_history(items, self.origin)
+            history_groups(items)
         kwargs["input"] = items
         capture_sdk_request_shape(
             system_instructions=kwargs.get("system_instructions"),
@@ -107,8 +105,11 @@ class DeepyResponsesModel(OpenAIResponsesModel):
             mcp_servers=None,
         )
         payload = super()._build_response_create_kwargs(**kwargs)
-        if self.provider == "kimi":
+        if self.provider == "kimi" and payload.get("tool_choice") != "none":
             payload["tool_choice"] = "auto"
+        if not isinstance(payload.get("max_output_tokens"), int):
+            payload["max_output_tokens"] = self.limits.output_tokens
+        check_request(payload, self.limits)
         return payload
 
 
@@ -128,6 +129,7 @@ def build_provider_bundle(settings: Settings) -> ProviderBundle:
         http_client=httpx.AsyncClient(event_hooks={"request": [validate_encoded_request]}),
     )
     model = DeepyResponsesModel(
-        provider=settings.model.provider, model=settings.model.name, openai_client=client
+        provider=settings.model.provider, model=settings.model.name, openai_client=client,
+        limits=settings.model_limits
     )
     return ProviderBundle(client=client, model=model, model_settings=build_model_settings(settings))

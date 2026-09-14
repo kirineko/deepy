@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from deepy.ui.shared.context_status import context_label
+
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,6 @@ from deepy.ui.modern.render.status_format import (
     _active_tui_audit_mode,
     _format_tui_audit_mode,
     _format_tui_cache_status,
-    _format_tui_context_window_status,
     _format_tui_status_cache_hit_rate,
 )
 from deepy.ui.modern.screens import SkillScreenEntry
@@ -94,11 +95,7 @@ def _build_tui_status_context(
     if session_entry is _SESSION_ENTRY_UNSET:
         session_entry = _tui_session_entry(project_root, session_id)
     segments.append(
-        _format_tui_context_window_status(
-            session_entry,
-            settings.context.window_tokens,
-            settings.context.resolved_compact_threshold,
-        )
+        context_label(session_entry, settings)
     )
     segments.append(_format_tui_status_cache_hit_rate(session_entry))
     return " · ".join(segments)

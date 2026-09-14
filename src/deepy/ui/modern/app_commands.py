@@ -271,6 +271,12 @@ class AppCommandsMixin(AppStateProto):
 
 
     async def _model_command(self, argument: str) -> None:
+        from deepy.llm.work_boundary import switch_error
+        error = switch_error(self.project_root, session_id=self.state.session_id, busy=self.state.busy,
+                             pending=bool(self.state.pending_tool_calls or self._pending_audit_decision))
+        if error:
+            await self._append_block(ErrorBlock(error))
+            return
         try:
             parts = argument.split()
             provider: str | None = None
@@ -341,6 +347,11 @@ class AppCommandsMixin(AppStateProto):
             if self.settings.path is None:
                 await self._append_block(ErrorBlock("Cannot persist model settings: config path is unknown."))
                 return
+            error = switch_error(self.project_root, session_id=self.state.session_id, busy=self.state.busy,
+                                 pending=bool(self.state.pending_tool_calls or self._pending_audit_decision))
+            if error:
+                await self._append_block(ErrorBlock(error))
+                return
             update_config_model_settings(
                 self.settings.path,
                 provider=provider,
@@ -362,7 +373,7 @@ class AppCommandsMixin(AppStateProto):
                 await self._append_block(
                     InfoBlock(provider_api_key_reconfiguration_message(self.settings.model.provider))
                 )
-            self._update_status("Model saved")
+            self._update_status("Model saved; history pending validation")
         finally:
             self.call_after_refresh(self._focus_prompt_input)
 

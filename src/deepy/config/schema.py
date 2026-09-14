@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Self
 
 from deepy.audit import AuditConfig
+
+from .model_limits import ResolvedModelLimits
 
 from .providers import (
     DEFAULT_BASE_URL,
@@ -91,6 +93,8 @@ class ModelConfig:
 @dataclass(frozen=True)
 class ContextConfig:
     window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
+    explicit_window_tokens: int | None = None
+    window_is_resolved: bool = False
     compact_trigger_ratio: float = DEFAULT_COMPACT_TRIGGER_RATIO
     reserved_context_tokens: int = DEFAULT_RESERVED_CONTEXT_TOKENS
     compact_preserve_recent_messages: int = DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES
@@ -98,6 +102,10 @@ class ContextConfig:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
+        from .model_limits import positive_limit
+
+        if "window_tokens" in raw:
+            positive_limit(raw["window_tokens"], "context.window_tokens")
         window_tokens = _as_int(raw.get("window_tokens"), DEFAULT_CONTEXT_WINDOW_TOKENS)
         ratio = _as_float(raw.get("compact_trigger_ratio"), DEFAULT_COMPACT_TRIGGER_RATIO)
         if ratio <= 0 or ratio > 1:
@@ -118,6 +126,7 @@ class ContextConfig:
         )
         return cls(
             window_tokens=window_tokens,
+            explicit_window_tokens=raw.get("window_tokens"),
             compact_trigger_ratio=ratio,
             reserved_context_tokens=reserved_context_tokens,
             compact_preserve_recent_messages=preserve_recent_messages,
@@ -310,6 +319,19 @@ class Settings:
         model = ModelConfig.from_mapping({**self.profiles.get(provider, {}), "provider": provider})
         return replace(model, api_key=self.provider_keys.get(provider) or model.api_key)
 
+    @property
+    def model_limits(self) -> "ResolvedModelLimits":
+        from .model_limits import resolve_model_limits
+
+        return resolve_model_limits(
+            self.model.provider, self.model.name,
+            global_cap=self.context.explicit_window_tokens or (
+                self.context.window_tokens if not self.context.window_is_resolved
+                and self.context.window_tokens != DEFAULT_CONTEXT_WINDOW_TOKENS else None),
+            overrides=self.profiles.get(self.model.provider, {}).get("model_limits", {}).get(self.model.name),
+            reserve_floor=self.context.reserved_context_tokens,
+        )
+
     @classmethod
     def from_mapping(
         cls,
@@ -327,14 +349,20 @@ class Settings:
             provider: resolve_profile_key(provider, profiles.get(provider, {}), env or {})
             for provider in ("deepseek", "mimo", "kimi", "cli_proxy")
         }
-        return cls(
+        context = ContextConfig.from_mapping(_as_mapping(raw.get("context")))
+        from .model_limits import validate_profile_limits
+
+        for provider, profile in profiles.items():
+            validate_profile_limits(provider, profile, global_cap=context.explicit_window_tokens,
+                                    reserve_floor=context.reserved_context_tokens)
+        result = cls(
             profiles=profiles,
             provider_keys=keys,
             audit=AuditConfig.from_mapping(_as_mapping(raw.get("audit"))),
             model=ModelConfig.from_mapping(
                 {**profiles.get(active, {}), "provider": active}, env=env
             ),
-            context=ContextConfig.from_mapping(_as_mapping(raw.get("context"))),
+            context=context,
             logging=LoggingConfig.from_mapping(_as_mapping(raw.get("logging"))),
             notify=NotifyConfig.from_mapping(_as_mapping(raw.get("notify"))),
             tools=ToolsConfig.from_mapping(_as_mapping(raw.get("tools"))),
@@ -342,3 +370,4 @@ class Settings:
             ui=UiConfig.from_mapping(_as_mapping(raw.get("ui"))),
             path=path,
         )
+        return replace(result, context=replace(context, window_tokens=result.model_limits.window_tokens, window_is_resolved=True))

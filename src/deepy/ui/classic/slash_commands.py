@@ -199,6 +199,11 @@ def _handle_slash_command(
             palette,
         )
     if command.name == "model":
+        from deepy.llm.work_boundary import switch_error
+        error = switch_error(project_root, session_id=current_session_id)
+        if error:
+            console.print(error)
+            return current_session_id
         return _handle_model_command(
             command,
             console,
@@ -273,6 +278,7 @@ def _handle_compact_command(
             manager.compact_session(
                 current_session_id,
                 focus_instruction=command.argument or None,
+                announce=lambda text: console.print(text),
             )
         )
     except ContextCompactionError as exc:
@@ -287,7 +293,7 @@ def _handle_compact_command(
         console.print(f"[{palette.muted}]{result.message or 'There is no context to compact.'}[/]")
         return current_session_id
     console.print(
-        f"[{palette.info}]Context compacted:[/] "
+        f"[{palette.info}]Context compacted:[/] ({getattr(result, 'before_source', 'estimated')}) "
         f"{result.before_tokens:,} -> {result.after_tokens:,} tokens · "
         f"preserved {result.preserved_item_count} items"
     )

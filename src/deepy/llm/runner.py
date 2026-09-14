@@ -33,6 +33,7 @@ from .multimodal import (
     supports_image_input,
 )
 from .provider import ProviderBundle, build_provider_bundle
+from .work_boundary import generation_boundary
 from .runner_approvals import _approval_decisions
 from .runner_errors import _api_status_error_response, format_deepseek_api_error
 from .runner_interrupt import (
@@ -60,6 +61,7 @@ class RunSummary:
     duration_ms: int = 0
 
 
+@generation_boundary
 async def run_prompt_once(
     prompt: str,
     *,
@@ -148,8 +150,16 @@ async def run_prompt_once(
             prefix_tools=list(getattr(agent, "tools", []) or []),
             prefix_mcp_servers=list(getattr(agent, "mcp_servers", []) or []),
             additional_input=build_user_input(prompt, effective_image_attachments),
+            announce=(lambda text: emit_event(DeepyStreamEvent(kind="status", text=text))) if emit_event else emit,
         )
-    except ContextCompactionError as exc:
+    except asyncio.CancelledError:
+        await _cleanup_created_mcp(created_mcp_runtime)
+        if should_interrupt and should_interrupt():
+            return RunSummary(output="History preparation cancelled; history and draft preserved.",
+                              session_id=session.session_id, complete=False, interrupted=True,
+                              status="context_compaction_failed")
+        raise
+    except (ContextCompactionError, ModelBehaviorError) as exc:
         duration_ms = int((time.time() - started_at) * 1000) if "started_at" in locals() else 0
         await _cleanup_created_mcp(created_mcp_runtime)
         return RunSummary(
@@ -315,6 +325,10 @@ async def run_prompt_once(
             duration_ms=duration_ms,
         )
     except ModelBehaviorError as exc:
+        from .request_budget import RequestBudgetError
+        if isinstance(exc, RequestBudgetError):
+            from .runner_history import preserve_completed_items
+            await preserve_completed_items(session, result, session_baseline_count)
         if prefix_token is not None:
             reset_current_cache_prefix_snapshot(prefix_token)
             prefix_token = None
@@ -385,6 +399,10 @@ async def run_prompt_once(
     if result_usage.known:
         usage = result_usage
     session.record_usage(usage)
+    if usage.known and not interrupted:
+        from deepy.sessions.history_state import record_checkpoint
+
+        record_checkpoint(session, resolved_settings, prefix_snapshot.fingerprint)
     duration_ms = int((time.time() - started_at) * 1000)
     if resolved_settings.logging.debug:
         log_debug_event(

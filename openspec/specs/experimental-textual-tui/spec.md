@@ -464,7 +464,7 @@ thinking settings as the stable terminal UI.
 - **AND** it SHALL present only thinking choices supported by the selected provider
 
 #### Scenario: User selects Textual provider model settings
-- **WHEN** a user completes provider, model, and thinking selection in the experimental TUI
+- **WHEN** a user completes provider, model, and thinking selection at a safe idle boundary in the experimental TUI
 - **THEN** the TUI SHALL merge the selected profile settings and active selection into TOML without changing other profiles
 - **AND** it SHALL reload in-memory settings for subsequent model turns
 - **AND** it SHALL show a concise confirmation with provider, model, and thinking mode
@@ -487,6 +487,20 @@ thinking settings as the stable terminal UI.
 - **AND** blank password input SHALL retain its existing saved key
 - **AND** runtime environment overrides SHALL NOT be serialized into saved credentials
 - **AND** ordinary profile editing SHALL preserve unrelated settings and SHALL NOT act as full reset
+
+#### Scenario: Model switch is requested during active work
+- **WHEN** generation, tool execution, approval or subagent work is unresolved
+- **THEN** the TUI SHALL reject the switch with recovery guidance and leave current settings unchanged
+
+#### Scenario: Selected model retains earlier history
+- **WHEN** the selected model changes while the session has earlier history
+- **THEN** the TUI SHALL preserve the session and draft, show the target window and history readiness, and validate replay before generation
+- **AND** it SHALL not report old-model usage as precise target-model occupancy
+
+#### Scenario: Textual history migration recovery
+- **WHEN** history exceeds the target budget or contains incompatible images
+- **THEN** the TUI SHALL provide the same bounded preparation, /compact --for-model opt-in and cancellation behavior as Classic UI
+- **AND** failure SHALL preserve originals and pending input
 
 ### Requirement: Textual Recoverable Tool Attempt Display
 The experimental TUI SHALL show recoverable malformed v3 file-tool attempts

@@ -85,6 +85,8 @@ COMPACT_MESSAGE_KEYS = (
     "name",
     "tool_calls",
     "tool_call_id",
+    "call_id",
+    "arguments",
     "output",
     "created_at",
 )

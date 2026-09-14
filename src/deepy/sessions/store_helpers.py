@@ -75,6 +75,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             on session_items(session_id, seq);
         """
     )
+    _ensure_column(conn, "sessions", "history_state_json", "text")
     _ensure_column(conn, "sessions", "web_search_usage_json", "text")
     _ensure_column(conn, "sessions", "cache_prefix_fingerprint", "text")
     _ensure_column(conn, "sessions", "cache_prefix_snapshot_json", "text")

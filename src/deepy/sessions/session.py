@@ -242,11 +242,24 @@ class DeepySession:
         reason: str,
         before_tokens: int,
         after_tokens: int,
+        expected_revision: str | None = None,
+        projection: dict[str, Any] | None = None,
     ) -> str:
         archive_id = uuid.uuid4().hex
         with self._transaction() as conn:
             self._ensure_session_row(conn)
             snapshot = self._load_items_conn(conn)
+            from deepy.llm.history_projection import fingerprint
+
+            if expected_revision is not None and fingerprint(snapshot) != expected_revision:
+                raise ValueError("History changed during preparation; retry. Previous history is intact.")
+            if projection is not None:
+                row = self._ensure_session_row(conn)
+                state = json_object(row["history_state_json"]) or {}
+                state["projection"] = projection
+                state.pop("checkpoint", None)
+                conn.execute("update sessions set history_state_json = ? where id = ?",
+                             (json_dumps(state), self.session_id))
             conn.execute(
                 """
                 insert into session_archives(
@@ -559,6 +572,10 @@ class DeepySession:
         active_tokens: int | None,
         cache_break_reason: str | None = None,
     ) -> None:
+        row = self._ensure_session_row(conn)
+        state = json_object(row["history_state_json"]) or {}
+        state.pop("checkpoint", None)
+        conn.execute("update sessions set history_state_json = ? where id = ?", (json_dumps(state), self.session_id))
         conn.execute("delete from session_items where session_id = ?", (self.session_id,))
         now = _now_ms()
         for index, item in enumerate(items, 1):

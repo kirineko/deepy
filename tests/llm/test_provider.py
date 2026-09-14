@@ -159,3 +159,55 @@ async def test_stream_partial_usage_precedes_recoverable_failure(monkeypatch, st
                     normalize_stream_event(SimpleNamespace(type="raw_response_event", data=event))
                 )
     assert len(observed) == 1 and observed[0].kind == "usage"
+
+
+@pytest.mark.asyncio
+async def test_tool_continuation_budget_rejects_before_second_http_and_preserves_work(tmp_path):
+    from deepy.config.model_limits import resolve_model_limits
+    from deepy.llm.request_budget import RequestBudgetError
+    from deepy.llm.runner_history import preserve_completed_items
+    from deepy.sessions import DeepySession
+
+    http_calls, tool_calls = [], []
+    def handle(request):
+        http_calls.append(json.loads(request.content))
+        item = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "large_result",
+                "arguments": "{}", "status": "completed"}
+        response = {"id": "resp_1", "object": "response", "created_at": 1,
+                    "model": "deepseek-flash", "status": "completed", "output": [item],
+                    "usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}}
+        events = [
+            {"type": "response.created", "sequence_number": 0, "response": {**response, "status": "in_progress", "output": []}},
+            {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": item},
+            {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": item},
+            {"type": "response.completed", "sequence_number": 3, "response": response},
+        ]
+        content = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+
+    @function_tool
+    def large_result() -> str:
+        tool_calls.append(1)
+        return "large " * 20000
+
+    session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home")
+    async with AsyncOpenAI(api_key="test", base_url="https://example.test/v1",
+                          http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))) as client:
+        model = DeepyResponsesModel(provider="deepseek", model="deepseek-flash", openai_client=client,
+                                    limits=resolve_model_limits("deepseek", "deepseek-flash", global_cap=60000))
+        result = Runner.run_streamed(Agent(name="test", model=model, tools=[large_result],
+                                          model_settings=build_model_settings(Settings())),
+                                     "call large_result", session=session)
+        with pytest.raises(RequestBudgetError):
+            async for _ in result.stream_events():
+                pass
+        await preserve_completed_items(session, result, 0)
+    assert len(http_calls) == 1
+    assert tool_calls == [1]
+    assert http_calls[0]["max_output_tokens"] == 32768
+    outputs = [item for item in await session.get_items() if item.get("type") == "function_call_output"]
+    assert len(outputs) == 1
+    assert outputs[0]["output"].startswith("large ")
+    # Reapplying the recovery helper is idempotent.
+    await preserve_completed_items(session, result, 0)
+    assert len([item for item in await session.get_items() if item.get("type") == "function_call_output"]) == 1

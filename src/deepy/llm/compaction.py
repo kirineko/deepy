@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from deepy.config import Settings
-from deepy.prompts.compact import build_compact_prompt, build_compact_summary_message
+from deepy.prompts.compact import build_compact_summary_message
 from deepy.sessions import DeepySession
 from deepy.todos import todo_state_prompt_text
 from deepy.usage import TokenUsage, usage_from_run_result
 
-from .context import estimate_tokens_for_item, estimate_tokens_for_items
+from .context import estimate_tokens_for_items
 from .cache_context import (
     CachePrefixSnapshot,
 )
@@ -34,6 +34,7 @@ class CompactionResult:
     archive_id: str | None = None
     usage: TokenUsage | None = None
     message: str = ""
+    before_source: str = "estimated"
 
 
 @dataclass(frozen=True)
@@ -55,20 +56,34 @@ async def compact_session(
     prefix_snapshot: CachePrefixSnapshot | None = None,
     prefix_tools: list[Any] | None = None,
     prefix_mcp_servers: list[Any] | None = None,
+    announce: Any = None,
+    additional_input: Any = None,
 ) -> CompactionResult:
+    from .history_projection import fingerprint, model_identity, history_groups
+    from .history_migration import summarize_bounded
+    from .request_budget import estimate_request_value
+
     items = await session.get_items()
-    before_estimated_tokens = session.context_token_state().active_tokens
-    before_context_usage = session.latest_context_window_usage()
-    before_tokens = (
-        before_context_usage.used_tokens
-        if before_context_usage is not None
-        else before_estimated_tokens
-    )
+    revision = fingerprint(items)
+    history_groups(items)
+    for_model = focus_instruction == "--for-model"
+    from deepy.sessions.history_state import read_history_state
+    before_tokens = estimate_request_value(items)
+    before_source = "estimated"
+    state = read_history_state(session).get("checkpoint", {})
+    usage_checkpoint = session.latest_context_window_usage()
+    if (usage_checkpoint is not None and state.get("revision") == revision
+            and state.get("target") == model_identity(settings.model.provider, settings.model.name, settings.model.base_url)
+            and prefix_snapshot is not None and state.get("prefix") == prefix_snapshot.fingerprint):
+        before_tokens = usage_checkpoint.used_tokens
+        before_source = "reported"
     prepared = prepare_compaction_items(
         items,
         preserve_recent_messages=settings.context.compact_preserve_recent_messages,
         preserve_recent_tokens=settings.context.compact_preserve_recent_tokens,
     )
+    if for_model and items:
+        prepared = (items, [])
     if prepared is None:
         return CompactionResult(
             session_id=session.session_id,
@@ -88,18 +103,28 @@ async def compact_session(
         model_kwargs["prefix_tools"] = prefix_tools
     if prefix_mcp_servers is not None:
         model_kwargs["prefix_mcp_servers"] = prefix_mcp_servers
-    summary, usage = await run_compaction_model(
+    summary, usage = await summarize_bounded(
         to_compact,
         settings,
+        session=session, summarize=run_compaction_model,
+        allow_image_reduction=for_model, announce=announce,
         provider=provider,
-        focus_instruction=focus_instruction,
-        todo_state=session.todo_state(),
+        focus=None if for_model else focus_instruction,
         **model_kwargs,
     )
     replacement = sanitize_sdk_items_for_replay(
         [build_compact_summary_message(summary), *to_preserve]
     )
-    after_tokens = _estimate_compacted_tokens(replacement, usage)
+    if for_model:
+        replacement[0]["content"] = "Potentially lossy text summary; original images and messages remain archived.\n" + replacement[0]["content"]
+    after_tokens = estimate_request_value(replacement)
+    limits = settings.model_limits
+    overhead = estimate_request_value(getattr(prefix_snapshot, "system_instructions", ""))
+    overhead += estimate_request_value(getattr(prefix_snapshot, "tools", ()))
+    overhead += estimate_request_value(getattr(prefix_snapshot, "mcp_tools", ()))
+    overhead += estimate_request_value(additional_input or "")
+    if after_tokens + overhead + limits.reserve_tokens >= limits.window_tokens:
+        raise ContextCompactionError("Summary and recent history still exceed target budget; original history preserved.")
     try:
         archive_id = await session.archive_and_replace_items(
             replacement,
@@ -107,6 +132,12 @@ async def compact_session(
             reason=reason,
             before_tokens=before_tokens,
             after_tokens=after_tokens,
+            expected_revision=revision,
+            projection={"source_revision": revision, "target": model_identity(settings.model.provider, settings.model.name, settings.model.base_url),
+                        "adapter_version": 1, "covered_items": len(to_compact),
+                        "preserved_items": len(to_preserve), "lossy_images": for_model,
+                        "tool_group_sizes": [len(group) for group in history_groups(to_compact)],
+                        "summary_requests": read_history_state(session).get("summary_requests", [])},
         )
     except Exception as exc:
         raise ContextCompactionError(f"Failed to write compacted session: {exc}") from exc
@@ -121,6 +152,7 @@ async def compact_session(
         archive_id=archive_id,
         usage=usage,
         message="Context compacted.",
+        before_source=before_source,
     )
 
 
@@ -133,46 +165,55 @@ async def ensure_context_ready(
     prefix_tools: list[Any] | None = None,
     prefix_mcp_servers: list[Any] | None = None,
     additional_input: Any | None = None,
+    announce: Any = None,
 ) -> ContextReadiness:
-    additional_tokens = estimate_tokens_for_item(additional_input or "")
-    state = session.context_token_state()
-    before_tokens = state.active_tokens + additional_tokens
-    latest_context_usage = session.latest_context_window_usage()
-    trigger_tokens = (
-        latest_context_usage.used_tokens if latest_context_usage is not None else before_tokens
-    )
-    compacted: CompactionResult | None = None
-    if trigger_tokens >= settings.context.resolved_compact_threshold:
-        compaction_kwargs: dict[str, Any] = {}
-        if prefix_snapshot is not None:
-            compaction_kwargs["prefix_snapshot"] = prefix_snapshot
-        if prefix_tools is not None:
-            compaction_kwargs["prefix_tools"] = prefix_tools
-        if prefix_mcp_servers is not None:
-            compaction_kwargs["prefix_mcp_servers"] = prefix_mcp_servers
-        compacted = await compact_session(
-            session,
-            settings,
-            provider=provider,
-            reason="auto",
-            **compaction_kwargs,
-        )
+    from .history_projection import model_identity, project_history, history_groups
+    from .request_budget import request_budget
+    from .response_images import normalize_response_images
+    from .multimodal import items_contain_image_content, supports_image_input
 
-    after_state = session.context_token_state()
-    after_tokens = after_state.active_tokens + additional_tokens
-    if compacted and compacted.compacted:
-        fit_tokens = after_tokens
-    else:
-        after_context_usage = session.latest_context_window_usage()
-        fit_tokens = (
-            after_context_usage.used_tokens if after_context_usage is not None else after_tokens
-        )
-    if fit_tokens + settings.context.reserved_context_tokens >= settings.context.window_tokens:
-        raise ContextCompactionError(
-            "Context exceeds the configured window and could not be compacted enough "
-            f"({fit_tokens:,} tokens + {settings.context.reserved_context_tokens:,} reserved "
-            f">= {settings.context.window_tokens:,} window)."
-        )
+    limits = settings.model_limits
+    target = model_identity(settings.model.provider, settings.model.name, settings.model.base_url)
+
+    async def budget():
+        items = project_history(await session.get_items(), target)
+        history_groups(items)
+        combined = normalize_response_images([*items, *(
+            additional_input if isinstance(additional_input, list)
+            else [{"role": "user", "content": additional_input}] if additional_input else []
+        )])
+        if items_contain_image_content(combined) and not supports_image_input(settings):
+            raise ContextCompactionError("Image history is preserved. Switch back, start a text session, or explicitly use /compact --for-model.")
+        estimated = request_budget({"input": combined,
+            "instructions": getattr(prefix_snapshot, "system_instructions", ""),
+            "tools": [*getattr(prefix_snapshot, "tools", ()), *getattr(prefix_snapshot, "mcp_tools", ())],
+        }, limits)
+        from deepy.sessions.history_state import read_history_state
+        from .history_projection import fingerprint
+        state = read_history_state(session).get("checkpoint", {})
+        count = state.get("count", 0)
+        originals = await session.get_items()
+        usage = session.latest_context_window_usage()
+        if (usage is not None and state.get("target") == target
+                and prefix_snapshot is not None and state.get("prefix") == prefix_snapshot.fingerprint
+                and count <= len(originals) and state.get("revision") == fingerprint(originals[:count])):
+            from .request_budget import estimate_request_value
+            pending = estimate_request_value(normalize_response_images(originals[count:]))
+            pending += estimate_request_value(additional_input or "")
+            estimated = replace(estimated, input_tokens=max(estimated.input_tokens, usage.used_tokens + pending))
+        return estimated
+
+    before = await budget()
+    before_tokens = before.input_tokens
+    compacted = None
+    if before.needs_compaction(settings.context.compact_trigger_ratio):
+        compacted = await compact_session(session, settings, provider=provider, reason="auto",
+            prefix_snapshot=prefix_snapshot, prefix_tools=prefix_tools,
+            prefix_mcp_servers=prefix_mcp_servers, additional_input=additional_input, announce=announce)
+    after = await budget()
+    after_tokens = after.input_tokens
+    if not after.fits:
+        raise ContextCompactionError("Context still exceeds the target request budget. Original history is retained; reduce input or switch models.")
     return ContextReadiness(
         session_id=session.session_id,
         before_tokens=before_tokens,
@@ -204,8 +245,12 @@ def prepare_compaction_items(
     to_compact = items[:preserve_start]
     to_preserve = items[preserve_start:]
     if preserve_recent_tokens is not None:
-        while to_preserve and estimate_tokens_for_items(to_preserve) > preserve_recent_tokens:
-            to_compact.append(to_preserve.pop(0))
+        from .history_projection import history_groups
+
+        groups = history_groups(to_preserve)
+        while groups and estimate_tokens_for_items(to_preserve) > preserve_recent_tokens:
+            to_compact.extend(groups.pop(0))
+            to_preserve = [item for group in groups for item in group]
     if not to_compact:
         return None
     return sanitize_sdk_items_for_replay(to_compact), sanitize_sdk_items_for_replay(to_preserve)
@@ -225,25 +270,23 @@ async def run_compaction_model(
     from agents import Agent, RunConfig, Runner
 
     resolved_provider = provider or build_provider_bundle(settings)
-    prompt = build_compact_prompt(
-        items,
-        focus_instruction=focus_instruction,
-        todo_context=todo_state_prompt_text(todo_state or []),
-    )
-    instructions = "Create a compact continuation summary. Do not call tools."
-    if prefix_snapshot is not None and prefix_snapshot.system_instructions:
-        instructions = (
-            f"{prefix_snapshot.system_instructions}\n\n"
-            "Deepy context compaction task: create a compact continuation summary. "
-            "Do not call tools."
-        )
+    from .provider import DeepyResponsesModel
+    if isinstance(resolved_provider.model, DeepyResponsesModel):
+        client = resolved_provider.model._client.with_options(max_retries=0)
+        resolved_provider = replace(resolved_provider, model=DeepyResponsesModel(
+            provider=settings.model.provider, model=settings.model.name,
+            openai_client=client, limits=settings.model_limits))
+    from .history_migration import summary_input
+    prompt = summary_input(items, focus_instruction, todo_state_prompt_text(todo_state or []))
+    from .summary_size import summary_instructions
+    instructions = summary_instructions(prefix_snapshot)
     agent = Agent(
         name="Deepy Context Compactor",
         instructions=instructions,
         model=resolved_provider.model,
-        model_settings=resolved_provider.model_settings,
-        tools=list(prefix_tools or []),
-        mcp_servers=list(prefix_mcp_servers or []),
+        model_settings=replace(resolved_provider.model_settings, max_tokens=min(8192, settings.model_limits.output_tokens), tool_choice="auto" if settings.model.provider == "kimi" else "none"),
+        tools=[] if settings.model.provider == "kimi" else list(prefix_tools or []),
+        mcp_servers=[] if settings.model.provider == "kimi" else list(prefix_mcp_servers or []),
         mcp_config={"include_server_in_tool_names": True},
     )
     result = await Runner.run(

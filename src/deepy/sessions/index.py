@@ -28,6 +28,7 @@ class SessionEntry:
     created_at: int
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
+    history_state: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     web_search_usage: dict[str, Any] | None = None
     input_suggestion_usage: dict[str, Any] | None = None
@@ -68,6 +69,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 created_at=coerce_int(row["created_at"], 0),
                 updated_at=coerce_int(row["updated_at"], 0),
                 processes=normalize_processes(json_loads_or_none(row["processes_json"])),
+                history_state=json_object(row["history_state_json"]),
                 usage=json_object(row["usage_json"]),
                 web_search_usage=json_object(row["web_search_usage_json"]),
                 input_suggestion_usage=json_object(row["input_suggestion_usage_json"]),

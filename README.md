@@ -303,7 +303,7 @@ base_url = "https://api.deepseek.com"
 reasoning = "max"
 
 [context]
-window_tokens = 1048576
+# window_tokens = 900000  # Optional global cap / 可选全局上限
 compact_trigger_ratio = 0.8
 reserved_context_tokens = 50000
 compact_preserve_recent_messages = 2
@@ -360,3 +360,5 @@ uv build
 
 The Python package is built from `src/deepy`. GitHub Pages files and screenshot
 assets live outside the package directory and are not included in the wheel.
+
+[Model-specific context limits, smaller caps, history switching and recovery](docs/model-context.md).

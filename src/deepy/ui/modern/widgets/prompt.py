@@ -407,8 +407,10 @@ class PromptPanel(Vertical):
     def collect_image_prompt(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
         if self.image_attachments is None:
             return text, []
-        if text == "/model" or text.startswith("/model "):
-            return text, []
+        from deepy.ui.shared.input.image_input import remove_image_attachment_labels
+        command = remove_image_attachment_labels(text, self.image_attachments.attachments).strip()
+        if command == "/model" or command.startswith("/model ") or command == "/compact --for-model":
+            return command, []
         attachments = self.image_attachments.collect_and_reset()
         self.refresh_image_status()
         return text, attachments

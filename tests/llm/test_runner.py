@@ -429,7 +429,7 @@ async def test_run_prompt_once_session_input_callback_does_not_trim(monkeypatch,
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(
-                window_tokens=10_000,
+                window_tokens=100_000,
                 compact_trigger_ratio=0.5,
                 reserved_context_tokens=100,
             )

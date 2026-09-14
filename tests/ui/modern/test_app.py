@@ -2019,7 +2019,7 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
     app = DeepyTuiApp(
         settings=settings.__class__(
             model=settings.model,
-            context=settings.context.__class__(window_tokens=1000, compact_trigger_ratio=0.8),
+            context=settings.context.__class__(window_tokens=100_000, compact_trigger_ratio=0.8),
             logging=settings.logging,
             notify=settings.notify,
             tools=settings.tools,
@@ -2047,9 +2047,9 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         assert "cwd" in left
         assert "mcp 1" in left
         assert "bg 1" in left
-        assert "ctx 900/1K (90.0%)" in left
+        assert "ctx ~" in left
         assert "left" not in left
-        assert "compact next" in left
+        assert "compact next" not in left
         assert "cache 80%" in left
         assert "cache gen 2" not in left
         assert "80.0% hit" not in left
@@ -2078,7 +2078,7 @@ def test_tui_status_context_falls_back_when_session_metadata_fails(
         settings=Settings(path=tmp_path / "config.toml"),
     )
 
-    assert "ctx unknown/" in context
+    assert "ctx -/" in context
     assert "cache --" in context
 
 
@@ -2151,7 +2151,7 @@ async def test_tui_stream_status_updates_reuse_cached_session_metadata(
 
         assert calls == 1
         left = str(app.query_one("#status-left", Label).content)
-        assert "ctx 100/" in left
+        assert "ctx ~" in left
         assert "cache 50%" in left
         app.exit()
 
@@ -4595,7 +4595,7 @@ async def test_tui_compact_command_reports_result(tmp_path, monkeypatch) -> None
         preserved_item_count = 2
         message = ""
 
-    async def fake_compact(self, session_id: str, *, focus_instruction: str | None = None):
+    async def fake_compact(self, session_id: str, *, focus_instruction: str | None = None, announce=None, should_interrupt=None):
         assert session_id == "s1"
         assert focus_instruction == "keep decisions"
         return Result()

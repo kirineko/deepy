@@ -66,7 +66,9 @@ async def test_run_compaction_model_uses_active_model_settings_and_prefix(monkey
     assert summary == "<summary>summary</summary>"
     assert usage.known is False
     assert captured["model"] == "active-model"
-    assert captured["settings"] is active_settings
+    assert captured["settings"].max_tokens == 8192
+    assert captured["settings"].tool_choice == "none"
+    assert captured["settings"].store == active_settings.store
     assert "stable prefix" in captured["instructions"]
     assert captured["tools"] == [tool]
     assert captured["prompt"].index("```jsonl") < captured["prompt"].index("Your task is")
@@ -119,7 +121,8 @@ async def test_compact_session_generates_summary_archives_and_rewrites(monkeypat
 
     items = await session.get_items()
     assert result.compacted is True
-    assert result.before_tokens == 24_000
+    assert result.before_tokens < 24_000
+    assert result.before_source == "estimated"
     assert result.archive_id is not None
     assert "Important summary." in items[0]["content"]
     assert "hidden" not in items[0]["content"]
@@ -183,14 +186,14 @@ async def test_compact_session_restores_archive_when_rewrite_fails(monkeypatch, 
 @pytest.mark.asyncio
 async def test_ensure_context_ready_blocks_when_auto_compaction_cannot_fit(tmp_path):
     session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
-    await session.add_items([{"role": "user", "content": "x" * 1000}])
+    await session.add_items([{"role": "user", "content": "x " * 60000}])
 
-    with pytest.raises(ContextCompactionError, match="could not be compacted enough"):
+    with pytest.raises(ContextCompactionError, match="still exceeds"):
         await ensure_context_ready(
             session,
             Settings(
                 context=ContextConfig(
-                    window_tokens=50,
+                    window_tokens=60_000,
                     compact_trigger_ratio=0.8,
                     reserved_context_tokens=10,
                 )
@@ -206,7 +209,7 @@ async def test_ensure_context_ready_does_not_compact_after_short_latest_context_
 ):
     compact_calls = 0
 
-    async def fake_compact_session(session, settings, *, provider=None, reason):
+    async def fake_compact_session(session, settings, *, provider=None, reason, **kwargs):
         nonlocal compact_calls
         compact_calls += 1
         return type(
@@ -232,7 +235,7 @@ async def test_ensure_context_ready_does_not_compact_after_short_latest_context_
         session,
         Settings(
             context=ContextConfig(
-                window_tokens=1_000,
+                window_tokens=100_000,
                 compact_trigger_ratio=0.8,
                 reserved_context_tokens=50,
             )
@@ -242,7 +245,7 @@ async def test_ensure_context_ready_does_not_compact_after_short_latest_context_
 
     assert compact_calls == 0
     assert readiness.compacted is False
-    assert readiness.before_tokens >= 900
+    assert readiness.before_tokens < 900  # Unproven old usage cannot calibrate target history.
 
 
 @pytest.mark.asyncio
@@ -252,7 +255,7 @@ async def test_ensure_context_ready_compacts_when_latest_context_usage_reaches_t
 ):
     compact_calls = 0
 
-    async def fake_compact_session(session, settings, *, provider=None, reason):
+    async def fake_compact_session(session, settings, *, provider=None, reason, **kwargs):
         nonlocal compact_calls
         compact_calls += 1
         await session.replace_items([{"role": "user", "content": "summary"}], active_tokens=100)
@@ -269,18 +272,23 @@ async def test_ensure_context_ready_compacts_when_latest_context_usage_reaches_t
     monkeypatch.setattr("deepy.llm.compaction.compact_session", fake_compact_session)
     session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home", session_id="s1")
     await session.add_items([{"role": "user", "content": "large prompt"}])
-    session.record_usage({"prompt_tokens": 850, "completion_tokens": 5, "total_tokens": 855})
+    session.record_usage({"prompt_tokens": 85_000, "completion_tokens": 5, "total_tokens": 85_005})
+    from deepy.sessions.history_state import record_checkpoint
+    settings = Settings(context=ContextConfig(window_tokens=100_000, reserved_context_tokens=50))
+    prefix = build_cache_prefix_snapshot(settings, system_instructions="system")
+    record_checkpoint(session, settings, prefix.fingerprint)
 
     readiness = await ensure_context_ready(
         session,
         Settings(
             context=ContextConfig(
-                window_tokens=1_000,
+                window_tokens=100_000,
                 compact_trigger_ratio=0.8,
                 reserved_context_tokens=50,
             )
         ),
         additional_input="continue",
+        prefix_snapshot=prefix,
     )
 
     assert compact_calls == 1

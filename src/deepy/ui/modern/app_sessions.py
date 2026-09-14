@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+from deepy.ui.modern.state import set_busy
+
 from collections.abc import Sequence
 
 from deepy.background_tasks import BackgroundTaskSnapshot
@@ -141,6 +145,10 @@ class AppSessionsMixin(AppStateProto):
         if not self.state.session_id:
             await self._append_block(InfoBlock("No active session to compact."))
             return
+        if self.state.busy:
+            await self._append_block(ErrorBlock("Finish or cancel active work before compacting."))
+            return
+        self.state = set_busy(self.state, True, "Compacting")
         await self._append_block(InfoBlock("Compacting context..."))
         self._update_status("Compacting")
         manager = _resolve("DeepySessionManager")(
@@ -152,18 +160,26 @@ class AppSessionsMixin(AppStateProto):
             result = await manager.compact_session(
                 self.state.session_id,
                 focus_instruction=focus_instruction,
+                announce=self._update_status,
+                should_interrupt=lambda: self.state.interrupt_requested,
             )
+        except asyncio.CancelledError:
+            await self._append_block(InfoBlock("History preparation cancelled; original history and draft preserved."))
+            self._update_status("Compact cancelled")
+            return
         except Exception as exc:
             await self._append_block(ErrorBlock(f"Compact failed: {exc}"))
             self._update_status("Compact failed")
             return
+        finally:
+            self.state = set_busy(self.state, False, "Idle")
         if not result.compacted:
             await self._append_block(InfoBlock(result.message or "There is no context to compact."))
             self._update_status("Idle")
             return
         await self._append_block(
             InfoBlock(
-                "Context compacted: "
+                f"Context compacted ({getattr(result, 'before_source', 'estimated')}): "
                 f"{result.before_tokens:,} -> {result.after_tokens:,} tokens; "
                 f"preserved {result.preserved_item_count} items."
             )

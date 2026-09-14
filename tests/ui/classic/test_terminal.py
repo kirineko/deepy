@@ -1297,7 +1297,7 @@ def test_terminal_stream_renderer_restores_status_for_silent_text_generation(tmp
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1337,7 +1337,7 @@ def test_terminal_stream_renderer_accumulates_stream_tokens_across_reasoning_and
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1375,7 +1375,7 @@ def test_terminal_stream_renderer_counts_silent_tool_arguments_with_short_units(
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1417,7 +1417,7 @@ def test_terminal_stream_renderer_throttles_inline_stream_token_repaints(tmp_pat
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1457,7 +1457,7 @@ def test_terminal_stream_renderer_refresh_restores_status_after_reasoning_pause(
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1497,7 +1497,7 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
@@ -1535,7 +1535,7 @@ def test_terminal_stream_renderer_shows_tool_status_without_call_id(tmp_path):
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1570,7 +1570,7 @@ def test_terminal_stream_renderer_shows_mcp_tool_status_without_arguments(tmp_pa
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
     )
     renderer = terminal.TerminalStreamRenderer(
         console,
@@ -1666,9 +1666,9 @@ def test_status_slash_command_does_not_fetch_balance_for_third_party_provider(tm
         "s1",
         settings=Settings(
             model=ModelConfig(
-                provider="openrouter",
-                name="xiaomi/mimo-v2.5-pro",
-                base_url="https://openrouter.ai/api/v1",
+                provider="mimo",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )
         ),
@@ -2255,7 +2255,7 @@ def test_compact_slash_command_without_active_session(tmp_path):
 
 
 def test_compact_slash_command_runs_manager_and_reports_success(monkeypatch, tmp_path):
-    async def fake_compact_session(self, session_id, *, focus_instruction=None):
+    async def fake_compact_session(self, session_id, *, focus_instruction=None, announce=None):
         assert session_id == "s1"
         assert focus_instruction == "focus paths"
         return SimpleNamespace(
@@ -2616,7 +2616,7 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
         active_work="thinking",
@@ -2640,7 +2640,7 @@ def test_local_command_status_text_preserves_compact_footer(tmp_path):
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=200_000, compact_trigger_ratio=0.8)),
         active_work="running local command",
     )
 
@@ -2663,7 +2663,7 @@ def test_runtime_status_text_uses_segmented_foreground_styles(tmp_path):
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=200_000, compact_trigger_ratio=0.8)),
     )
 
     rendered = _working_status_text(
@@ -3142,7 +3142,7 @@ def test_status_display_writes_runtime_status_in_output_flow_without_scroll_regi
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
@@ -3177,7 +3177,7 @@ def test_status_display_clears_inline_runtime_status_before_output(tmp_path, mon
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
@@ -3216,7 +3216,7 @@ def test_status_display_keeps_inline_runtime_status_for_nonprinting_events(tmp_p
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
@@ -3432,7 +3432,7 @@ def test_print_usage_footer_only_shows_turn_usage(tmp_path):
                 requests=2,
             ),
         ),
-        settings=Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
     )
 
@@ -3451,7 +3451,7 @@ def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_pa
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
@@ -3460,7 +3460,7 @@ def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_pa
     assert "model deepseek-flash " not in toolbar
     assert "thinking high" not in toolbar
     assert f"cwd {tmp_path}" in toolbar
-    assert "ctx unknown/1K" in toolbar
+    assert "ctx ~" in toolbar
     assert "ctx win" not in toolbar
     assert "compact ~" not in toolbar
     assert "Enter send" not in toolbar
@@ -3477,7 +3477,7 @@ def test_format_context_footer_marks_loaded_agents_md(tmp_path):
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
@@ -3493,7 +3493,7 @@ def test_format_context_footer_ignores_empty_agents_md(tmp_path):
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
@@ -3513,12 +3513,12 @@ def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(t
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
-    assert "ctx unknown/1K" in toolbar
+    assert "ctx ~" in toolbar
     assert "ctx win" not in toolbar
     assert "910" not in toolbar
 
@@ -3538,12 +3538,12 @@ def test_format_context_footer_shows_latest_request_context_window_only(tmp_path
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
-    assert "ctx 4K/10K (35.1%)" in toolbar
+    assert "ctx ~" in toolbar
     assert "left" not in toolbar
     assert "ctx win" not in toolbar
     assert "compact ~" not in toolbar
@@ -3568,7 +3568,7 @@ def test_format_context_footer_shows_cache_health(tmp_path):
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
@@ -3587,15 +3587,15 @@ def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_p
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
-    assert "ctx 9K/10K (85.1%)" in toolbar
+    assert "ctx ~" in toolbar
     assert "left" not in toolbar
     assert "ctx win" not in toolbar
-    assert "compact next" in toolbar
+    assert "compact next" not in toolbar
 
 
 @pytest.mark.asyncio
@@ -3608,12 +3608,12 @@ async def test_format_context_footer_uses_compacted_context_window_checkpoint(tm
         "s1",
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
-    assert "ctx 100/10K (1.0%)" in toolbar
+    assert "ctx ~100/100K~" in toolbar
     assert "left" not in toolbar
     assert "ctx win" not in toolbar
     assert "compact next" not in toolbar
@@ -3627,7 +3627,7 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
         None,
         project_root=tmp_path,
         settings=Settings(
-            context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
+            context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8),
             model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
         mcp_runtime=runtime,
@@ -3656,7 +3656,7 @@ def test_build_status_footer_shows_startup_ghosts_and_completed_mcp_count(tmp_pa
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000)),
         mcp_runtime=runtime,
         startup_state=startup_state,
     )
@@ -3670,7 +3670,7 @@ def test_build_status_footer_shows_startup_ghosts_and_completed_mcp_count(tmp_pa
     footer = _build_status_footer(
         None,
         project_root=tmp_path,
-        settings=Settings(context=ContextConfig(window_tokens=1_000)),
+        settings=Settings(context=ContextConfig(window_tokens=100_000)),
         mcp_runtime=runtime,
         startup_state=startup_state,
     )
@@ -3709,7 +3709,7 @@ def test_run_interactive_renders_welcome_and_prompt_before_delayed_mcp_connect(t
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=1_000)),
+        Settings(context=ContextConfig(window_tokens=100_000)),
         project_root=tmp_path,
         console=console,
         version_update_checker=None,
@@ -3843,7 +3843,7 @@ def test_run_interactive_local_command_does_not_wait_for_pending_mcp(tmp_path, m
     monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=1_000)),
+        Settings(context=ContextConfig(window_tokens=100_000)),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -3956,7 +3956,7 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8)),
+        Settings(context=ContextConfig(window_tokens=100_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -3980,9 +3980,9 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "model deepseek-flash " not in str(toolbar_texts)
     assert "thinking max" not in str(toolbar_texts)
     assert f"cwd {tmp_path}" in str(toolbar_texts)
-    assert "ctx 900/1K (90.0%) · compact next" in toolbar_texts[1]
-    assert "ctx unknown/1K" in toolbar_texts[2]
-    assert "ctx 50/1K (5.0%)" in toolbar_texts[3]
+    assert "ctx ~" in toolbar_texts[1]
+    assert "ctx -/100K~" in toolbar_texts[2]
+    assert "ctx ~50/100K~" in toolbar_texts[3]
     assert "left" not in str(toolbar_texts)
     assert "ctx win" not in str(toolbar_texts)
     assert "compact ~" not in str(toolbar_texts)
@@ -4029,7 +4029,7 @@ def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_p
     monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        Settings(context=ContextConfig(window_tokens=200_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -4048,7 +4048,7 @@ def test_run_interactive_local_command_bypasses_model_and_persists_context(tmp_p
     assert items[1]["name"] == "shell"
     assert items[2]["type"] == "function_call_output"
     assert "ok" in rendered
-    assert "ctx unknown/2K" in _toolbar_text(toolbars[0])
+    assert "ctx -/200K~" in _toolbar_text(toolbars[0])
     assert "ctx " in _toolbar_text(toolbars[1])
     assert "ctx win" not in "".join(_toolbar_text(toolbar) for toolbar in toolbars)
 
@@ -4083,7 +4083,7 @@ def test_run_interactive_local_command_renders_sanitized_windows_output(tmp_path
     monkeypatch.setattr(terminal, "run_local_command", fake_run_local_command)
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        Settings(context=ContextConfig(window_tokens=200_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
         console=console,
         version_update_checker=None,
@@ -4108,7 +4108,7 @@ def test_run_interactive_empty_local_command_does_not_append_or_call_model(tmp_p
     monkeypatch.setattr(terminal, "prompt_for_input", lambda session, **kwargs: next(prompts))
 
     result = terminal.run_interactive(
-        Settings(context=ContextConfig(window_tokens=2_000, compact_trigger_ratio=0.8)),
+        Settings(context=ContextConfig(window_tokens=200_000, compact_trigger_ratio=0.8)),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -4565,9 +4565,9 @@ def test_run_interactive_exit_summary_marks_third_party_cost_unsupported(tmp_pat
     result = terminal.run_interactive(
         Settings(
             model=ModelConfig(
-                provider="openrouter",
-                name="xiaomi/mimo-v2.5-pro",
-                base_url="https://openrouter.ai/api/v1",
+                provider="mimo",
+                name="mimo-v2.5-pro",
+                base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )
         ),

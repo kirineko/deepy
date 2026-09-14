@@ -87,7 +87,8 @@ def test_status_report_includes_usage_context_and_balance(tmp_path, monkeypatch)
 
     assert report.active_session_usage is not None
     assert report.project_usage is not None
-    assert report.latest_context_window_tokens == 120
+    assert report.latest_context_window_tokens == 100
+    assert report.context_estimator == "estimated / pending validation"
     assert report.cache_prefix_generation == 1
     assert report.cache_break_reason == "prefix changed: tools"
     assert report.cache_usage is not None

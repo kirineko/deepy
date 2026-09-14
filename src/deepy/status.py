@@ -14,7 +14,7 @@ from deepy.mcp import mcp_policy_to_dict
 from deepy.prompts.runtime_context import build_runtime_context
 from deepy.sessions import list_session_entries
 from deepy.skills import discover_skills
-from deepy.usage import context_window_usage, format_usage_line, merge_usage, normalize_usage
+from deepy.usage import format_usage_line, merge_usage, normalize_usage
 from deepy.utils import json as json_utils
 
 
@@ -67,6 +67,8 @@ class StatusReport:
     cache_break_reason: str | None = None
     cache_usage: dict[str, Any] | None = None
     balance: BalanceStatus | None = None
+    model_limits: dict[str, Any] | None = None
+    context_estimator: str = "estimated"
 
 
 def build_status_report(
@@ -80,21 +82,17 @@ def build_status_report(
     entries = list_session_entries(root)
     active_entry = next((entry for entry in entries if entry.id == current_session_id), None)
     project_usage = merge_usage(*(entry.usage for entry in entries if entry.usage)).to_dict()
-    latest_context_tokens = None
-    if active_entry is not None:
-        latest_context_tokens = active_entry.latest_context_window_tokens
-        if latest_context_tokens is None and active_entry.usage:
-            active_context_usage = context_window_usage(active_entry.usage)
-            latest_context_tokens = (
-                active_context_usage.used_tokens if active_context_usage is not None else None
-            )
+    from deepy.ui.shared.context_status import context_display
+    latest_context_tokens, estimator = context_display(active_entry, settings)
     return StatusReport(
         project_root=root,
         provider=settings.model.provider,
         model=settings.model.name,
         reasoning_mode=settings.model.reasoning_mode,
         api_key_configured=bool(settings.model.api_key),
-        context_window_tokens=settings.context.window_tokens,
+        context_window_tokens=settings.model_limits.window_tokens,
+        model_limits=settings.model_limits.to_dict(),
+        context_estimator=estimator,
         compact_threshold_tokens=settings.context.resolved_compact_threshold,
         reserved_context_tokens=settings.context.reserved_context_tokens,
         ui_interface=settings.ui.interface,
@@ -127,7 +125,7 @@ def format_status_report(report: StatusReport) -> str:
             f"Model: {report.model}",
             f"Thinking: {report.reasoning_mode}",
             f"API key: {'configured' if report.api_key_configured else 'missing'}",
-            f"Context: {report.context_window_tokens} tokens",
+            f"Context: {report.context_window_tokens} tokens ({report.context_estimator}; {(report.model_limits or {}).get('source', 'unknown')})",
             f"Compact threshold: {report.compact_threshold_tokens} tokens",
             f"Reserved context: {report.reserved_context_tokens} tokens",
             f"UI: {report.ui_interface}",
@@ -159,6 +157,8 @@ def status_report_to_dict(report: StatusReport) -> dict[str, Any]:
         "reasoning_mode": report.reasoning_mode,
         "api_key_configured": report.api_key_configured,
         "context_window_tokens": report.context_window_tokens,
+        "model_limits": report.model_limits,
+        "context_estimator": report.context_estimator,
         "compact_threshold_tokens": report.compact_threshold_tokens,
         "reserved_context_tokens": report.reserved_context_tokens,
         "ui_interface": report.ui_interface,
@@ -339,7 +339,7 @@ def _format_context_window_status(report: StatusReport) -> str:
     )
     if report.compact_threshold_tokens > 0 and used >= report.compact_threshold_tokens:
         status = f"{status} · compact next"
-    return status
+    return f"{status} [{report.context_estimator}; {(report.model_limits or {}).get('source', 'unknown')}]"
 
 
 def _simple_box(title: str, rows: list[tuple[str, str]]) -> str:

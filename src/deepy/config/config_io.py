@@ -67,6 +67,9 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
     for profile in data["providers"].values():
         if profile.get("api_key") and not reveal_secret:
             profile["api_key"] = mask_secret(profile["api_key"])
+    data["context"].pop("explicit_window_tokens", None)
+    data["context"].pop("window_is_resolved", None)
+    data["resolved_model_limits"] = settings.model_limits.to_dict()
     if "ui" in data:
         data["ui"].pop("theme_configured", None)
     if "audit" in data:
@@ -377,6 +380,7 @@ def _read_toml_mapping(path: Path) -> dict[str, Any]:
 
 
 def _write_private_toml(path: Path, raw: Mapping[str, Any]) -> None:
+    Settings.from_mapping(raw, env=os.environ)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".deepy-config-", dir=path.parent)
     try:

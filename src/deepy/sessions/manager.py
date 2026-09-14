@@ -9,6 +9,7 @@ from typing import Any
 from deepy.config import Settings, load_settings
 from deepy.llm.compaction import CompactionResult, compact_session
 from deepy.llm.provider import ProviderBundle
+from deepy.llm.work_boundary import generation_boundary
 from deepy.llm.runner import RunSummary, run_prompt_once
 
 from .index import clear_session_processes, list_session_entries
@@ -70,11 +71,14 @@ class DeepySessionManager:
         )
         await session.add_items(items)
 
+    @generation_boundary
     async def compact_session(
         self,
         session_id: str,
         *,
         focus_instruction: str | None = None,
+        announce: Any = None,
+        should_interrupt: Any = None,
     ) -> CompactionResult:
         session = DeepySession.open(
             self.project_root,
@@ -87,6 +91,7 @@ class DeepySessionManager:
             provider=self.provider,
             reason="manual",
             focus_instruction=focus_instruction,
+            announce=announce,
         )
 
     def interrupt_active_session(self) -> InterruptSummary | None:

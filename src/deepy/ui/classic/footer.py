@@ -5,6 +5,7 @@ from pathlib import Path
 
 from deepy.audit import AuditModeState
 from deepy.background_tasks import BackgroundTaskManager
+from deepy.ui.shared.context_status import context_label
 from deepy.config import Settings
 from deepy.format_tokens import format_token_count_short as _format_token_count_short
 from deepy.llm.cache_context import format_cache_hit_rate, format_cache_usage
@@ -140,11 +141,7 @@ def _build_status_footer(
     segments.extend(
         [
             StatusFooterSegment(
-                _format_context_window_status(
-                    session_entry,
-                    settings.context.window_tokens,
-                    settings.context.resolved_compact_threshold,
-                ),
+                context_label(session_entry, settings),
                 "context",
             ),
             StatusFooterSegment(_format_session_cache_hit_rate(session_entry), "context"),
