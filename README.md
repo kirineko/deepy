@@ -26,6 +26,15 @@ Agent Skills, MCP, subagents, sessions, and visible UI to read code, edit files,
 run commands, search the web, and resume long tasks. It is DeepSeek-first while
 also supporting OpenAI-compatible providers.
 
+## Release 0.2.33
+
+DeepSeek Flash, MiMo 2.5 / 2.5 Pro, Kimi K3 and CLI Proxy use the Responses API
+for main conversations, with independently saved provider credentials. Built-in
+WebSearch uses DeepSeek native search (requires a DeepSeek key); existing MCP
+search remains supported. Model switches preserve original history and attachments,
+with target-specific budgets and compact K/M context status. See the
+[context and history guide](docs/model-context.md).
+
 ## Why Use It
 
 - **DeepSeek-first agent loop**: tuned for DeepSeek V4 thinking mode while still

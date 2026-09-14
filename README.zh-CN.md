@@ -25,13 +25,20 @@ Deepy 是面向真实项目工作的 Python CLI 编程 Agent。它在终端里�
 修改文件、运行命令、检索网页，并恢复长任务。Deepy 以 DeepSeek 为优先，同时支持
 OpenAI 兼容 provider。
 
+## 0.2.33 更新
+
+DeepSeek Flash、MiMo 2.5 / 2.5 Pro、Kimi K3 和 CLI Proxy 的主对话统一使用 Responses API，
+各 provider 密钥独立保存。内置 WebSearch 使用 DeepSeek 原生联网搜索（需配置 DeepSeek 密钥），
+现有 MCP 搜索继续可用。切换模型保留原始历史和附件，按目标模型预算准备上下文，底栏使用 K/M 简洁显示。
+详见[上下文与历史恢复指南](docs/model-context.zh-CN.md)。
+
 ## 为什么使用 Deepy
 
 - **DeepSeek-first agent loop**：针对 DeepSeek V4 thinking 模式优化，同时支持
   DeepSeek、MiMo、Kimi 和 CLI Proxy 的 Responses API。
 - **透明的终端执行过程**：thinking、工具调用、文件 diff、shell 输出、usage
   和上下文压力都显示在 transcript 中。
-- **项目记忆与连续性**：`AGENTS.md` Rules、JSONL sessions、`/resume`、`/compact`、
+- **项目记忆与连续性**：`AGENTS.md` Rules、本地 SQLite sessions、`/resume`、`/compact`、
   自动 compact 和上下文窗口状态，让长任务可以恢复和延续。
 - **可扩展 Agent 生态**：Agent Skills、MCP servers、subagents 和 skill 市场，
   让 Deepy 可以复用超出内置工具的工作流。

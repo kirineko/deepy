@@ -192,3 +192,13 @@ Deepy SHALL document model-specific windows, output budgets and history migratio
 - **THEN** it SHALL distinguish official nominal limits, conservative values and unverified proxy limits, explain overrides and output reserve, and show history-preserving model switching
 - **AND** it SHALL describe /compact --for-model, image-summary information loss, usage attribution and failure recovery
 - **AND** it SHALL not claim maximum-context live validation from short smoke tests
+
+### Requirement: Current Release Landing Copy
+The project landing page SHALL describe shipped provider, search and context capabilities and show the package release version.
+
+#### Scenario: Users review the release features
+- **WHEN** users open the project landing page
+- **THEN** they SHALL see DeepSeek, MiMo, Kimi and CLI Proxy support, independently stored provider credentials and history preservation across model selection
+- **AND** built-in search SHALL be described as DeepSeek-backed while MCP search remains supported
+- **AND** compact K/M context status and bilingual context-guide links SHALL be available
+- **AND** the displayed release version SHALL match package metadata
