@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import concurrent.futures
-from typing import cast
+from typing import Any, cast
 
+from deepy.config import ModelConfig
+from deepy.llm.response_images import MAX_IMAGES_PER_TURN
 from deepy.utils import json as json_utils
 
 from ..constants import DEFAULT_LINE_LIMIT, MAX_LINE_LENGTH
@@ -32,6 +34,7 @@ class ReadToolsMixin(ToolRuntimeState):
         pages: str | None = None,
         *,
         name: str = "Read",
+        model_config: ModelConfig | None = None,
     ) -> str:
         target, error = _resolve_read_target(self.cwd, path)
         if error is not None:
@@ -73,6 +76,21 @@ class ReadToolsMixin(ToolRuntimeState):
 
         mime = _image_mime_type(target.suffix.lower())
         if mime is not None:
+            from deepy.llm.multimodal import (
+                model_supports_image_input,
+                validate_image_attachment,
+                ImageAttachmentError,
+            )
+
+            model = model_config or self.settings.model
+            if not model_supports_image_input(model.provider, model.name):
+                return ToolResult.error_result(
+                    name, "当前模型不支持图片，请切换图片模型。"
+                ).to_json()
+            try:
+                validate_image_attachment(mime_type=mime, byte_size=target.stat().st_size)
+            except ImageAttachmentError as exc:
+                return ToolResult.error_result(name, str(exc)).to_json()
             data = target.read_bytes()
             return ToolResult(
                 ok=True,
@@ -136,7 +154,8 @@ class ReadToolsMixin(ToolRuntimeState):
             numbered,
             metadata=metadata,
         ).to_json()
-    def read(self, request: object) -> str:
+
+    def read(self, request: object, *, model_config: ModelConfig | None = None) -> str:
         targets, error = _parse_v3_read_targets(request)
         if error is not None:
             return ToolResult.error_result(
@@ -159,6 +178,7 @@ class ReadToolsMixin(ToolRuntimeState):
                 limit=limit,
                 pages=pages,
                 name="Read",
+                model_config=model_config,
             )
 
         results: list[dict[str, object]] = []
@@ -173,6 +193,7 @@ class ReadToolsMixin(ToolRuntimeState):
                     limit=cast(int | None, target["limit"]),
                     pages=cast(str | None, target["pages"]),
                     name="Read",
+                    model_config=model_config,
                 )
                 future_by_index[future] = index
             for future in concurrent.futures.as_completed(future_by_index):
@@ -206,6 +227,7 @@ class ReadToolsMixin(ToolRuntimeState):
                         "output": str(payload.get("output") or ""),
                         "error": payload.get("error"),
                         "metadata": metadata_dict,
+                        "followUpMessages": payload.get("followUpMessages", []),
                     }
                 )
         results.sort(key=lambda item: int(item["index"]))
@@ -220,9 +242,29 @@ class ReadToolsMixin(ToolRuntimeState):
             else:
                 lines.append(str(item.get("error") or "Read failed."))
             lines.append("")
-        return ToolResult.ok_result(
-            "Read",
-            "\n".join(lines).rstrip(),
+        follow_ups = [
+            message
+            for item in results
+            for message in cast(list[dict[str, Any]], item.pop("followUpMessages", []))
+        ]
+        image_count = sum(
+            1
+            for message in follow_ups
+            for part in message.get("content", [])
+            if isinstance(part, dict) and part.get("type") == "input_image"
+        )
+        if image_count > MAX_IMAGES_PER_TURN:
+            return ToolResult.error_result(
+                "Read",
+                f"Read supports at most {MAX_IMAGES_PER_TURN} images per batch; "
+                f"received {image_count}. Retry with a smaller image batch.",
+                metadata={"imageCount": image_count, "imageLimit": MAX_IMAGES_PER_TURN},
+            ).to_json()
+        return ToolResult(
+            ok=True,
+            name="Read",
+            output="\n".join(lines).rstrip(),
+            followUpMessages=follow_ups or None,
             metadata={
                 "kind": "batch",
                 "targetCount": len(results),

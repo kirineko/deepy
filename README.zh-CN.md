@@ -28,7 +28,7 @@ OpenAI 兼容 provider。
 ## 为什么使用 Deepy
 
 - **DeepSeek-first agent loop**：针对 DeepSeek V4 thinking 模式优化，同时支持
-  OpenRouter、小米 MiMo 等 OpenAI 兼容 provider。
+  DeepSeek、MiMo、Kimi 和 CLI Proxy 的 Responses API。
 - **透明的终端执行过程**：thinking、工具调用、文件 diff、shell 输出、usage
   和上下文压力都显示在 transcript 中。
 - **项目记忆与连续性**：`AGENTS.md` Rules、JSONL sessions、`/resume`、`/compact`、
@@ -264,13 +264,14 @@ Deepy 使用 `~/.deepy/config.toml` 保存配置。大多数用户通过首次�
 最小配置形态：
 
 ```toml
-[model]
-api_key = "sk-..."
-provider = "deepseek"
-name = "deepseek-v4-pro"
+config_version = 2
+active_provider = "deepseek"
+
+[providers.deepseek]
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
-thinking = true
-reasoning_effort = "max"
+reasoning = "max"
 
 [context]
 window_tokens = 1048576
@@ -287,30 +288,28 @@ theme = "dark" # dark or light
 
 ```bash
 deepy config setup
-deepy config init --api-key sk-... --provider deepseek --model deepseek-v4-pro
-deepy config init --api-key sk-or-... --provider openrouter --model xiaomi/mimo-v2.5-pro
-deepy config init --api-key sk-or-... --provider openrouter --model anthropic/claude-sonnet-4.5 --thinking minimal
-deepy config init --api-key sk-... --provider xiaomi --model mimo-v2.5-pro
+deepy config init --provider deepseek --model deepseek-flash
 deepy config theme light
 ```
 
-当前 UI 支持的 provider/model 组合：
+| Provider | Model IDs | Thinking |
+|---|---|---|
+| DeepSeek | `deepseek-flash` (V4.1 Flash) | `none`, `high`, `max` |
+| MiMo | `mimo-v2.5`, `mimo-v2.5-pro` | `disabled`, `enabled` |
+| Kimi | `kimi-k3` | `low`, `high`, `max` |
+| CLI Proxy | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` |
 
-- `deepseek`：`deepseek-v4-pro`、`deepseek-v4-flash`；thinking 模式为
-  `none`、`high`、`max`。
-- `openrouter`：UI 模型选择提供 `xiaomi/mimo-v2.5-pro`、
-  `xiaomi/mimo-v2.5`；setup/init 也可以使用从 OpenRouter 模型页复制的模型
-  id。thinking 模式为 `enabled`、`disabled`、`xhigh`、`high`、`medium`、`low`、
-  `minimal`、`none`。
-- `xiaomi`：`mimo-v2.5-pro`、`mimo-v2.5`；thinking 模式为 `enabled`、
-  `disabled`。
+各 provider 独立保存 key、URL、model 和 thinking。`/model provider <id>` 恢复该 provider 的配置，setup 中密码留空保留原 key。默认环境变量为 `DEEPSEEK_API_KEY`、`MIMO_API_KEY`、`KIMI_API_KEY`（备用 `MOONSHOT_API_KEY`）、`CLI_PROXY_API_KEY`；环境密钥优先但不会写回文件。不再支持通用 `DEEPY_API_KEY` 覆盖。
 
-WebSearch 默认使用 Deepy 托管的 SearXNG endpoint。你也可以改成自己的实例：
+旧共享 `[model]` 配置需要重新 setup；请先保留旧文件用于手动恢复，不会自动迁移或覆盖。完整 reset 会重建配置。
 
-```toml
-[tools.web_search]
-searxng_url = "https://your-searxng.example/"
-```
+主对话、subagent、输入建议和压缩统一使用 Responses。内置 WebSearch 独立调用 DeepSeek Messages 的原生搜索工具，所有聊天 provider 都需要单独的 DeepSeek key 才能使用它。保留 Tavily 等 MCP 的优先策略，WebFetch 仍由本地 HTTP 抓取。搜索 usage 单独显示并计入 session API 总量。
+
+上述模型除 MiMo 2.5 Pro 外均支持图片。两套 UI 支持粘贴多图和仅图片提交；PNG/JPEG/WebP/GIF 单图最多 10 MiB、每轮最多 8 图，完整编码请求最多 32 MiB。切到纯文本模型时不会丢弃已有图片，会提示移除草稿附件、切回图片模型或开始纯文本会话。本次不支持原生音频、视频、PDF 输入或媒体生成。
+
+批量 `Read` 最多返回八张图片；超限时返回工具错误，agent 可以缩小批次后重试。
+
+输入建议固定使用当前 provider 的 `deepseek-flash`/none、`mimo-v2.5`/disabled、`kimi-k3`/low 或 `gpt-5.6-luna`/none，独立统计 usage。
 
 ## 开发
 

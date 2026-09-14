@@ -4,6 +4,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from deepy.background_tasks import BackgroundTaskManager
 from deepy.config import Settings
@@ -25,7 +26,6 @@ from .runtime.shell import ShellToolsMixin
 from .runtime.tasks import TaskToolsMixin
 from .runtime.web import WebToolsMixin
 from .shell_command import _build_shell_command, _extract_bash_sentinel
-from .web.query import _web_search_chat
 
 __all__ = [
     "DEFAULT_LINE_LIMIT",
@@ -37,7 +37,6 @@ __all__ = [
     "ToolRuntime",
     "_build_shell_command",
     "_extract_bash_sentinel",
-    "_web_search_chat",
 ]
 
 
@@ -57,6 +56,7 @@ class ToolRuntime(
     running_processes: dict[str, dict[str, str]] = field(default_factory=dict)
     background_tasks: BackgroundTaskManager = field(default_factory=BackgroundTaskManager)
     should_interrupt: Callable[[], bool] | None = None
+    record_search_usage: Callable[[dict[str, Any]], None] | None = None
     web_search_calls: int = 0
     todo_items: list[TodoItem] = field(default_factory=list)
     test_shell_approvals: dict[str, str] = field(default_factory=dict)

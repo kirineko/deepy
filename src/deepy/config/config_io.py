@@ -2,31 +2,19 @@ from __future__ import annotations
 
 import os
 import tomllib
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
 import tomli_w
 
-from deepy.audit import AuditMode, DEFAULT_AUDIT_MODE, is_valid_audit_mode
+from deepy.audit import AuditMode, is_valid_audit_mode
 
 from .providers import (
-    DEEPSEEK_REASONING_MODES,
-    DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
-    DEFAULT_COMPACT_TRIGGER_RATIO,
-    DEFAULT_CONTEXT_WINDOW_TOKENS,
-    DEFAULT_INPUT_SUGGESTIONS_ENABLED,
-    DEFAULT_MCP_CACHE_TOOLS_LIST,
-    DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS,
-    DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
-    DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS,
-    DEFAULT_MCP_ENABLED,
     DEFAULT_PROVIDER,
-    DEFAULT_RESERVED_CONTEXT_TOKENS,
     DEFAULT_UI_INTERFACE,
     DEFAULT_UI_THEME,
-    DEFAULT_UI_VIEW_MODE,
-    DEFAULT_WEB_SEARCH_SEARXNG_URL,
     REASONING_MODES,
     SUPPORTED_DEEPSEEK_MODELS,
     THINKING_MODES,
@@ -43,8 +31,6 @@ from .providers import (
     is_valid_thinking_mode_for_provider,
     mask_secret,
     provider_info_for,
-    reasoning_effort_for_mode,
-    thinking_enabled_for_mode,
 )
 from .schema import (
     ModelConfig,
@@ -60,7 +46,7 @@ def load_settings(
     config_path = Path(path).expanduser() if path is not None else default_config_path()
     if config_path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
-    env = env or os.environ
+    env = os.environ if env is None else env
     if not config_path.exists():
         return Settings.from_mapping({}, path=config_path, env=env)
 
@@ -72,6 +58,15 @@ def load_settings(
 def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) -> dict[str, Any]:
     data = _drop_empty(asdict(settings))
     data.pop("path", None)
+    data.pop("provider_keys", None)
+    data.pop("profiles", None)
+    data.pop("model", None)
+    data["config_version"] = 2
+    data["active_provider"] = settings.model.provider
+    data["providers"] = {key: dict(value) for key, value in settings.profiles.items()}
+    for profile in data["providers"].values():
+        if profile.get("api_key") and not reveal_secret:
+            profile["api_key"] = mask_secret(profile["api_key"])
     if "ui" in data:
         data["ui"].pop("theme_configured", None)
     if "audit" in data:
@@ -82,10 +77,6 @@ def settings_to_toml_dict(settings: Settings, *, reveal_secret: bool = False) ->
             data["audit"]["mcp_safe_tools"] = [
                 {"server": item.server, "tool": item.tool} for item in settings.audit.mcp_safe_tools
             ]
-    api_key = settings.model.api_key
-    if api_key:
-        data["model"]["api_key"] = api_key if reveal_secret else mask_secret(api_key)
-    data["model"]["thinking"] = settings.model.thinking_enabled
     return _drop_empty(data)
 
 
@@ -182,7 +173,11 @@ def ui_setup_from_selection(
     if not normalized:
         return fallback
     for number, option_interface, option_theme in UI_SETUP_OPTIONS:
-        if normalized in {number, f"{option_interface}-{option_theme}", f"{option_interface} {option_theme}"}:
+        if normalized in {
+            number,
+            f"{option_interface}-{option_theme}",
+            f"{option_interface} {option_theme}",
+        }:
             return option_interface, option_theme
     return fallback
 
@@ -203,77 +198,39 @@ def write_config(
     if not is_valid_ui_interface(interface):
         raise ValueError("UI interface must be one of: classic, modern.")
     if not is_supported_provider(provider):
-        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi, localhost.")
+        raise ValueError("Provider must be one of: deepseek, mimo, kimi, cli_proxy.")
     provider_info = provider_info_for(provider)
     if not is_valid_config_model_for_provider(model, provider):
         raise ValueError(
-            "Model must be one of: " + ", ".join(model_info.name for model_info in provider_info.models)
+            "Model must be one of: "
+            + ", ".join(model_info.name for model_info in provider_info.models)
         )
     mode = thinking_mode or provider_info.default_thinking_mode
     if not is_valid_thinking_mode_for_provider(mode, provider):
-        raise ValueError(
-            "Thinking mode must be one of: " + ", ".join(provider_info.thinking_modes)
-        )
+        raise ValueError("Thinking mode must be one of: " + ", ".join(provider_info.thinking_modes))
     path = config_path.expanduser()
     if path.suffix == ".json":
         raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
-    resolved_base_url = base_url or provider_info.default_base_url
-    payload = {
-        "model": {
-            "provider": provider,
-            "name": model,
-            "base_url": resolved_base_url,
-            "api_key": api_key,
-            "thinking": thinking_enabled_for_mode(mode, provider),
-            "reasoning_effort": reasoning_effort_for_mode(mode, provider),
-        },
-        "audit": {
-            "mode": DEFAULT_AUDIT_MODE.value,
-            "mcp_safe_tools": [],
-        },
-        "context": {
-            "window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
-            "compact_trigger_ratio": DEFAULT_COMPACT_TRIGGER_RATIO,
-            "reserved_context_tokens": DEFAULT_RESERVED_CONTEXT_TOKENS,
-            "compact_preserve_recent_messages": DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
-        },
-        "logging": {
-            "debug": False,
-        },
-        "notify": {
-            "enabled": False,
-            "command": "",
-        },
-        "tools": {
-            "web_search": {
-                "searxng_url": DEFAULT_WEB_SEARCH_SEARXNG_URL,
-            },
-        },
-        "mcp": {
-            "enabled": DEFAULT_MCP_ENABLED,
-            "connect_timeout_seconds": DEFAULT_MCP_CONNECT_TIMEOUT_SECONDS,
-            "cleanup_timeout_seconds": DEFAULT_MCP_CLEANUP_TIMEOUT_SECONDS,
-            "client_session_timeout_seconds": DEFAULT_MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
-            "cache_tools_list": DEFAULT_MCP_CACHE_TOOLS_LIST,
-            "allow_project_config": False,
-            "prefer_mcp_web_search": True,
-            "web_search": {
-                "prefer_mcp": True,
-                "preferred_server": "",
-                "preferred_tools": [],
-                "fallback_to_builtin": True,
-            },
-        },
-        "ui": {
-            "interface": interface,
-            "theme": theme,
-            "input_suggestions_enabled": DEFAULT_INPUT_SUGGESTIONS_ENABLED,
-            "view_mode": DEFAULT_UI_VIEW_MODE,
-        },
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(payload), encoding="utf-8")
-    os.chmod(path, 0o600)
+    from .profiles import KEY_ENVIRONMENTS
+
+    raw = _read_toml_mapping(path)
+    # Explicit setup may replace a legacy format, but ordinary v2 setup is a merge.
+    if "model" in raw or raw.get("config_version", 2) != 2:
+        raw.pop("model", None)
+        raw.pop("providers", None)
+    profiles = dict(raw.get("providers", {}))
+    profile = dict(profiles.get(provider, {}))
+    profile.update(model=model, reasoning=mode)
+    profile["base_url"] = base_url or profile.get("base_url") or provider_info.default_base_url
+    profile.setdefault("api_key_env", KEY_ENVIRONMENTS[provider])
+    if api_key.strip():
+        profile["api_key"] = api_key.strip()
+    profiles[provider] = profile
+    raw.update(config_version=2, active_provider=provider, providers=profiles)
+    ui = dict(raw.get("ui", {}))
+    ui.update(theme=theme, interface=interface)
+    raw["ui"] = ui
+    _write_private_toml(path, raw)
 
 
 def update_config_model_settings(
@@ -284,50 +241,28 @@ def update_config_model_settings(
     base_url: str | None = None,
     reasoning_mode: str | None = None,
 ) -> None:
+    from .profiles import parse_profiles
+
     path = config_path.expanduser()
     if path.suffix == ".json":
-        raise ValueError("Deepy only supports TOML config files; JSON config is not supported.")
+        raise ValueError("Deepy only supports TOML config files.")
     raw = _read_toml_mapping(path)
-    model_section = raw.get("model")
-    model_map = dict(model_section) if isinstance(model_section, Mapping) else {}
-    current = ModelConfig.from_mapping(model_map)
-    active_provider = provider or current.provider
-    if provider is not None and not is_supported_provider(provider):
-        raise ValueError("Provider must be one of: deepseek, openrouter, xiaomi, localhost.")
-    provider_info = provider_info_for(active_provider)
-    active_model = model or current.name
-    if model is None and provider is not None and not is_supported_model_for_provider(active_model, active_provider):
-        active_model = provider_info.default_model
-    # `/model` updates intentionally stay within Deepy's curated provider model catalog.
-    if not is_supported_model_for_provider(active_model, active_provider):
-        raise ValueError(
-            "Model must be one of: " + ", ".join(model_info.name for model_info in provider_info.models)
-        )
-    active_mode = reasoning_mode or (
-        current.reasoning_mode
-        if is_valid_thinking_mode_for_provider(current.reasoning_mode, active_provider)
-        else provider_info.default_thinking_mode
-    )
-    if not is_valid_thinking_mode_for_provider(active_mode, active_provider):
-        if provider_info.thinking_modes == DEEPSEEK_REASONING_MODES:
-            raise ValueError("Reasoning mode must be one of: none, high, max.")
-        raise ValueError(
-            "Thinking mode must be one of: " + ", ".join(provider_info.thinking_modes)
-        )
-    if provider is not None:
-        model_map["provider"] = active_provider
-        if base_url is None:
-            model_map["base_url"] = provider_info.default_base_url
-    if base_url is not None:
-        model_map["base_url"] = base_url
+    profiles, active = parse_profiles(raw)
+    target = provider or active
+    provider_info_for(target)
+    profile = dict(profiles.get(target, {}))
     if model is not None:
-        model_map["name"] = active_model
-    elif provider is not None:
-        model_map["name"] = active_model
-    if reasoning_mode is not None or provider is not None:
-        model_map["thinking"] = thinking_enabled_for_mode(active_mode, active_provider)
-        model_map["reasoning_effort"] = reasoning_effort_for_mode(active_mode, active_provider)
-    raw["model"] = model_map
+        profile["model"] = model
+    if base_url is not None:
+        profile["base_url"] = base_url
+    if reasoning_mode is not None:
+        profile["reasoning"] = reasoning_mode
+    current = ModelConfig.from_mapping({**profile, "provider": target})
+    profile.setdefault("model", current.name)
+    profile.setdefault("base_url", current.base_url)
+    profile.setdefault("reasoning", current.reasoning_mode)
+    profiles[target] = profile
+    raw.update(config_version=2, active_provider=target, providers=profiles)
     _write_private_toml(path, raw)
 
 
@@ -443,8 +378,15 @@ def _read_toml_mapping(path: Path) -> dict[str, Any]:
 
 def _write_private_toml(path: Path, raw: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(raw), encoding="utf-8")
-    os.chmod(path, 0o600)
+    descriptor, temporary = tempfile.mkstemp(prefix=".deepy-config-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(tomli_w.dumps(raw))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _drop_empty(value: Any) -> Any:

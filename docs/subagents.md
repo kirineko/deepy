@@ -91,6 +91,8 @@ Supported tools for custom subagents:
 Mutation tools such as `edit_text`, `write_file`, `apply_patch`, and raw
 `shell` are not supported for subagents in this version.
 
+A custom `model` override selects a model within the active provider. Image validation in `Read` follows that subagent model, including batch reads, while runtime state and audit policy remain shared with the main agent.
+
 ## MCP Search Inheritance
 
 The built-in `explore` subagent may inherit MCP tools that Deepy identified as

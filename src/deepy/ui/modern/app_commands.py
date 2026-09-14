@@ -5,9 +5,7 @@ import asyncio
 from deepy.config import (
     PROVIDER_CATALOG,
     UI_SETUP_OPTIONS,
-    allows_custom_model_for_provider,
     default_base_url_for_provider,
-    default_model_for_provider,
     is_supported_model_for_provider,
     is_supported_provider,
     is_valid_thinking_mode_for_provider,
@@ -282,7 +280,7 @@ class AppCommandsMixin(AppStateProto):
                 provider = await self._choose_inline(
                     "Select provider",
                     [
-                        Choice(item.id, item.id, item.description)
+                        Choice(f"{item.label} ({item.id})", item.id, item.description)
                         for item in PROVIDER_CATALOG
                     ],
                     restore_prompt_focus=False,
@@ -294,7 +292,7 @@ class AppCommandsMixin(AppStateProto):
                 model = await self._choose_inline(
                     "Select model",
                     [
-                        Choice(item.name, item.name, item.description)
+                        Choice(f"{item.label} ({item.name})", item.name, _reset_choice_description(item.description, default=item.name == self.settings.model_for_provider(provider).name))
                         for item in provider_info_for(provider).models
                     ],
                     restore_prompt_focus=False,
@@ -343,7 +341,6 @@ class AppCommandsMixin(AppStateProto):
             if self.settings.path is None:
                 await self._append_block(ErrorBlock("Cannot persist model settings: config path is unknown."))
                 return
-            previous_provider = self.settings.model.provider
             update_config_model_settings(
                 self.settings.path,
                 provider=provider,
@@ -361,7 +358,7 @@ class AppCommandsMixin(AppStateProto):
                 )
             )
             self.query_one("#prompt-input", PromptTextArea).focus()
-            if self.settings.model.provider != previous_provider:
+            if not self.settings.model.api_key:
                 await self._append_block(
                     InfoBlock(provider_api_key_reconfiguration_message(self.settings.model.provider))
                 )
@@ -563,26 +560,12 @@ class AppCommandsMixin(AppStateProto):
     async def _choose_reset_model(self, provider: str) -> str | None:
         provider_info = provider_info_for(provider)
         model_default = (
-            self.settings.model.name
-            if (
-                self.settings.model.provider == provider
-                and is_supported_model_for_provider(self.settings.model.name, provider)
-            )
-            else default_model_for_provider(provider)
+            self.settings.model_for_provider(provider).name
         )
         choices = [
             Choice(model.name, model.name, _reset_choice_description(model.description, default=model.name == model_default))
             for model in provider_info.models
         ]
-        custom_value = "__custom_model__"
-        if allows_custom_model_for_provider(provider):
-            choices.append(
-                Choice(
-                    "Custom model",
-                    custom_value,
-                    "Paste any model name copied from the OpenRouter models page",
-                )
-            )
         selected = await self._choose_inline(
             "Reset: select model",
             choices,
@@ -590,13 +573,8 @@ class AppCommandsMixin(AppStateProto):
         )
         if not selected:
             return None
-        if selected != custom_value:
-            return selected
-        return await self._prompt_reset_value(
-            "Reset: custom model",
-            value=self.settings.model.name if self.settings.model.provider == provider else "",
-            placeholder="provider/model-name",
-        )
+        return selected
+
 
 
     async def _prompt_reset_value(
@@ -661,5 +639,3 @@ class AppCommandsMixin(AppStateProto):
             self.state = set_busy(reset_turn_buffers(self.state), False, "Error")
             await self._append_block(ErrorBlock(f"Local command failed: {exc}"))
             self._update_status("Error")
-
-

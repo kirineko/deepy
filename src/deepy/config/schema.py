@@ -7,7 +7,6 @@ from typing import Any, Mapping, Self
 from deepy.audit import AuditConfig
 
 from .providers import (
-    DEEPSEEK_REASONING_EFFORTS,
     DEFAULT_BASE_URL,
     DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
     DEFAULT_COMPACT_TRIGGER_RATIO,
@@ -24,12 +23,7 @@ from .providers import (
     DEFAULT_UI_INTERFACE,
     DEFAULT_UI_THEME,
     DEFAULT_UI_VIEW_MODE,
-    DEFAULT_WEB_SEARCH_SEARXNG_URL,
-    LOCALHOST_REASONING_EFFORTS,
-    OPENROUTER_REASONING_EFFORTS,
-    PROVIDERS,
     ProviderInfo,
-    SWITCH_ONLY_THINKING_MODES,
     UI_INTERFACES,
     UI_THEMES,
     UI_VIEW_MODES,
@@ -40,89 +34,54 @@ from .providers import (
     _as_optional_str,
     _as_str,
     _as_string_tuple,
-    _raw_provider_value,
-    infer_provider_from_base_url,
     is_valid_config_model_for_provider,
-    normalize_reasoning_effort,
     provider_info_for,
     resolve_provider,
 )
+
 
 @dataclass(frozen=True)
 class ModelConfig:
     provider: str = DEFAULT_PROVIDER
     name: str = DEFAULT_MODEL
     base_url: str = DEFAULT_BASE_URL
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     thinking: bool | None = None
     reasoning_effort: str = "max"
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -> Self:
-        env = env or {}
-        base_url = _as_str(
-            env.get("DEEPY_BASE_URL"),
-            _as_str(raw.get("base_url"), DEFAULT_BASE_URL),
-        )
-        raw_provider = _raw_provider_value(raw, env)
-        inferred_provider = infer_provider_from_base_url(base_url)
-        provider = resolve_provider(raw_provider, base_url)
-        provider_was_explicit_or_inferred = raw_provider in PROVIDERS or inferred_provider is not None
-        provider_info = provider_info_for(provider)
-        name = _as_str(env.get("DEEPY_MODEL"), _as_str(raw.get("name"), provider_info.default_model))
-        if (
-            provider_was_explicit_or_inferred
-            and provider in PROVIDERS
-            and not is_valid_config_model_for_provider(name, provider)
-        ):
-            name = provider_info.default_model
-        api_key = _as_str(env.get("DEEPY_API_KEY"), _as_str(raw.get("api_key"), "")) or None
-        thinking_value = raw.get("thinking")
-        thinking = thinking_value if isinstance(thinking_value, bool) else None
-        effort = normalize_reasoning_effort(
-            _as_str(raw.get("reasoning_effort"), provider_info.default_thinking_mode),
-            provider=provider,
-            thinking=thinking,
-        )
+        from .profiles import resolve_profile_key
+        from .providers import is_valid_thinking_mode_for_provider, reasoning_effort_for_mode
 
+        provider = resolve_provider(_as_str(raw.get("provider"), DEFAULT_PROVIDER), None)
+        info = provider_info_for(provider)
+        name = _as_str(raw.get("model"), _as_str(raw.get("name"), info.default_model))
+        if not is_valid_config_model_for_provider(name, provider):
+            raise ValueError(f"Unsupported model {name} for {provider}.")
+        mode = _as_str(raw.get("reasoning"), info.default_thinking_mode)
+        if not is_valid_thinking_mode_for_provider(mode, provider):
+            raise ValueError(f"Unsupported reasoning mode {mode} for {provider}.")
         return cls(
             provider=provider,
             name=name,
-            base_url=base_url,
-            api_key=api_key,
-            thinking=thinking,
-            reasoning_effort=effort,
+            base_url=_as_str(raw.get("base_url"), info.default_base_url),
+            api_key=resolve_profile_key(provider, raw, env or {}),
+            thinking=mode not in {"none", "disabled"},
+            reasoning_effort=reasoning_effort_for_mode(mode, provider),
         )
 
     @property
     def thinking_enabled(self) -> bool:
         if self.thinking is not None:
             return self.thinking
-        return self.provider_info.default_thinking_mode != "none"
+        return self.reasoning_effort not in {"none", "disabled"}
 
     @property
     def reasoning_mode(self) -> str:
-        if self.provider == "openrouter":
-            if not self.thinking_enabled:
-                return "none"
-            return (
-                self.reasoning_effort
-                if self.reasoning_effort in OPENROUTER_REASONING_EFFORTS
-                else self.provider_info.default_thinking_mode
-            )
-        if self.provider == "localhost":
-            if not self.thinking_enabled:
-                return "none"
-            return (
-                self.reasoning_effort
-                if self.reasoning_effort in LOCALHOST_REASONING_EFFORTS
-                else self.provider_info.default_thinking_mode
-            )
-        if self.provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
+        if self.provider == "mimo":
             return "enabled" if self.thinking_enabled else "disabled"
-        if not self.thinking_enabled:
-            return "none"
-        return self.reasoning_effort if self.reasoning_effort in DEEPSEEK_REASONING_EFFORTS else "max"
+        return self.reasoning_effort if self.thinking_enabled else "none"
 
     @property
     def provider_info(self) -> ProviderInfo:
@@ -192,13 +151,9 @@ class NotifyConfig:
 
 @dataclass(frozen=True)
 class WebSearchToolConfig:
-    searxng_url: str | None = DEFAULT_WEB_SEARCH_SEARXNG_URL
-
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> Self:
-        return cls(
-            searxng_url=_as_str(raw.get("searxng_url"), DEFAULT_WEB_SEARCH_SEARXNG_URL),
-        )
+        return cls()
 
 
 @dataclass(frozen=True)
@@ -335,6 +290,8 @@ class UiConfig:
 
 @dataclass(frozen=True)
 class Settings:
+    profiles: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    provider_keys: dict[str, str | None] = field(default_factory=dict, repr=False)
     audit: AuditConfig = field(default_factory=AuditConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
@@ -345,6 +302,14 @@ class Settings:
     ui: UiConfig = field(default_factory=UiConfig)
     path: Path | None = None
 
+    def model_for_provider(self, provider: str) -> ModelConfig:
+        from dataclasses import replace
+
+        if provider == self.model.provider:
+            return self.model
+        model = ModelConfig.from_mapping({**self.profiles.get(provider, {}), "provider": provider})
+        return replace(model, api_key=self.provider_keys.get(provider) or model.api_key)
+
     @classmethod
     def from_mapping(
         cls,
@@ -353,9 +318,22 @@ class Settings:
         path: Path | None = None,
         env: Mapping[str, str] | None = None,
     ) -> Self:
+        from .profiles import parse_profiles, resolve_profile_key
+
+        profiles, active = parse_profiles(raw)
+        for provider, profile in profiles.items():
+            ModelConfig.from_mapping({**profile, "provider": provider}, env=env)
+        keys = {
+            provider: resolve_profile_key(provider, profiles.get(provider, {}), env or {})
+            for provider in ("deepseek", "mimo", "kimi", "cli_proxy")
+        }
         return cls(
+            profiles=profiles,
+            provider_keys=keys,
             audit=AuditConfig.from_mapping(_as_mapping(raw.get("audit"))),
-            model=ModelConfig.from_mapping(_as_mapping(raw.get("model")), env=env),
+            model=ModelConfig.from_mapping(
+                {**profiles.get(active, {}), "provider": active}, env=env
+            ),
             context=ContextConfig.from_mapping(_as_mapping(raw.get("context"))),
             logging=LoggingConfig.from_mapping(_as_mapping(raw.get("logging"))),
             notify=NotifyConfig.from_mapping(_as_mapping(raw.get("notify"))),

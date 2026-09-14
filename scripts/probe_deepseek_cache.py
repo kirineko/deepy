@@ -9,7 +9,7 @@ import urllib.request
 from typing import Any
 
 
-API_URL = "https://api.deepseek.com/chat/completions"
+API_URL = "https://api.deepseek.com/responses"
 
 
 def main() -> int:
@@ -17,7 +17,7 @@ def main() -> int:
     if not api_key:
         print("DEEPSEEK_API_KEY is required.", file=sys.stderr)
         return 2
-    model = os.environ.get("DEEPSEEK_PROBE_MODEL") or os.environ.get("DEEPY_MODEL") or "deepseek-v4-pro"
+    model = os.environ.get("DEEPSEEK_PROBE_MODEL") or os.environ.get("DEEPY_MODEL") or "deepseek-flash"
 
     stable_messages = [
         {"role": "system", "content": "You are a cache probe. Answer briefly."},
@@ -49,9 +49,9 @@ def _chat(api_key: str, model: str, messages: list[dict[str, str]]) -> dict[str,
     body = json.dumps(
         {
             "model": model,
-            "messages": messages,
+            "input": messages,
             "stream": False,
-            "thinking": {"type": "disabled"},
+            "reasoning": {"effort": "none"}, "store": False,
         },
         separators=(",", ":"),
     ).encode("utf-8")
@@ -72,10 +72,10 @@ def _chat(api_key: str, model: str, messages: list[dict[str, str]]) -> dict[str,
 def _cache_line(usage: Any) -> str:
     if not isinstance(usage, dict):
         return "usage=unknown"
-    hit = _int_field(usage.get("prompt_cache_hit_tokens"))
+    hit = _int_field((usage.get("input_tokens_details") or {}).get("cached_tokens"))
     miss = _int_field(usage.get("prompt_cache_miss_tokens"))
     if miss == 0:
-        prompt_tokens = _int_field(usage.get("prompt_tokens"))
+        prompt_tokens = _int_field(usage.get("input_tokens"))
         if prompt_tokens and hit:
             miss = max(prompt_tokens - hit, 0)
     total = hit + miss

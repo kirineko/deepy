@@ -8,13 +8,13 @@ log provider payloads, authorization headers, or API keys.
 The optional cache probe is for local diagnostics only:
 
 ```bash
-DEEPSEEK_API_KEY=... DEEPSEEK_PROBE_MODEL=deepseek-v4-pro uv run python scripts/probe_deepseek_cache.py
+DEEPSEEK_API_KEY=... DEEPSEEK_PROBE_MODEL=deepseek-flash uv run python scripts/probe_deepseek_cache.py
 ```
 
 To probe the same OpenAI Agents SDK path used by Deepy's runtime model wrapper:
 
 ```bash
-DEEPSEEK_API_KEY=... DEEPSEEK_PROBE_MODEL=deepseek-v4-pro uv run python scripts/probe_agents_sdk_cache.py
+DEEPSEEK_API_KEY=... DEEPSEEK_PROBE_MODEL=deepseek-flash uv run python scripts/probe_agents_sdk_cache.py
 ```
 
 The scripts send DeepSeek request sequences with the selected probe model and

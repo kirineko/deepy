@@ -2,9 +2,10 @@
 
 ## Purpose
 
-Deepy stores project conversations as local JSONL sessions, keeps usage visible,
-and estimates context pressure for compaction.
+Deepy stores project conversations locally, preserves replayable history and images, separates auxiliary usage, and estimates context pressure for compaction.
+
 ## Requirements
+
 ### Requirement: Session Commands
 Deepy SHALL keep the user-facing session commands available.
 
@@ -691,9 +692,14 @@ Deepy SHALL persist user turns with image attachments so supported image convers
 #### Scenario: Image session is resumed with unsupported model
 - **WHEN** the user resumes a session containing image prompt turns
 - **AND** the active model does not support image input
-- **THEN** Deepy SHALL ignore image content blocks for that model turn
-- **AND** it SHALL preserve and send the remaining text context
-- **AND** it SHALL NOT block the model request with an incompatibility message
+- **THEN** Deepy SHALL block an incompatible model request with guidance to select an image-capable model or start a text-only session
+- **AND** it SHALL preserve the original image attachments and text context
+- **AND** it SHALL NOT silently strip image history or mutate the original session
+
+#### Scenario: Compacted image context
+- **WHEN** retained model context contains only a text summary after compaction
+- **THEN** Deepy SHALL permit that text context for a text-only model
+- **AND** it SHALL preserve original attachments in persisted session history
 
 ### Requirement: Image Attachment Preview Redaction
 Deepy SHALL keep image session previews readable by redacting raw image data in normal user-facing displays.
@@ -713,3 +719,20 @@ Deepy SHALL keep image session previews readable by redacting raw image data in 
 - **THEN** it SHALL account for image content conservatively
 - **AND** it SHALL avoid expanding redacted display labels back into raw base64 for user-facing context summaries
 
+### Requirement: Independent Web Search Usage
+Deepy SHALL attribute built-in search usage separately from conversation-provider usage and context occupancy.
+
+#### Scenario: Search usage known
+- **WHEN** a DeepSeek search call returns token usage or search request counts
+- **THEN** Deepy SHALL record actual input/output/cache usage and server search request counts with purpose web_search, provider deepseek and model deepseek-flash
+- **AND** session totals SHALL include this consumption exactly once
+- **AND** it SHALL NOT update the active conversation Context Window checkpoint from search-side tokens
+
+#### Scenario: Unknown usage
+- **WHEN** a search call fails without usage or returns incomplete usage metadata
+- **THEN** Deepy SHALL keep unavailable values unknown rather than inventing zero usage
+
+#### Scenario: Usage display
+- **WHEN** a session contains MiMo, Kimi or CLI conversation and DeepSeek search calls
+- **THEN** Deepy SHALL label search usage separately with its actual provider/model
+- **AND** it SHALL preserve input suggestion, compaction and subagent usage distinctions

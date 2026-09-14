@@ -241,7 +241,7 @@ async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -272,7 +272,7 @@ async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tui_rejects_image_paste_for_unsupported_model_without_clearing_text(tmp_path):
-    app = DeepyTuiApp(settings=Settings(), project_root=tmp_path, run_once=_idle_run_once)
+    app = DeepyTuiApp(settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro")), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
         app.image_attachments.clipboard_reader = lambda: ClipboardImage(
@@ -300,7 +300,7 @@ async def test_tui_deleting_image_label_removes_attachment(tmp_path):
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -332,7 +332,7 @@ async def test_tui_keyboard_deletes_selected_attachment_without_prompt_text(tmp_
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -394,7 +394,7 @@ async def test_tui_keyboard_deletes_selected_attachment_without_prompt_text(tmp_
 
 @pytest.mark.asyncio
 async def test_tui_attachment_state_stays_outside_prompt_text(tmp_path):
-    settings = Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -703,7 +703,7 @@ async def test_tui_exit_summary_marks_third_party_cost_unsupported(tmp_path, mon
     app = DeepyTuiApp(
         settings=Settings(
             model=ModelConfig(
-                provider="xiaomi",
+                provider="mimo",
                 name="mimo-v2.5-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
@@ -728,7 +728,7 @@ def test_tui_runner_prints_exit_summary_after_app_closes(tmp_path, monkeypatch, 
     run_kwargs: list[dict[str, object]] = []
 
     class FakeApp:
-        exit_summary_text = "Deepy Session Summary\nmodel deepseek-v4-pro"
+        exit_summary_text = "Deepy Session Summary\nmodel deepseek-flash"
 
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -1260,7 +1260,7 @@ async def test_tui_reset_flow_writes_config_and_reloads_settings(tmp_path) -> No
         assert "Provider selected: deepseek" in rendered_info
         assert "https://platform.deepseek.com/api_keys" in rendered_info
         await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
-        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _choose_inline_option(app, pilot, "Reset: select model")
         await _submit_text_input(app, pilot, "Reset: base URL", "https://example.test")
         await _choose_inline_option(app, pilot, "Reset: select thinking", down=2)
         await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
@@ -1269,7 +1269,7 @@ async def test_tui_reset_flow_writes_config_and_reloads_settings(tmp_path) -> No
         saved = load_settings(config_path)
         assert saved.model.api_key == "sk-test"
         assert saved.model.provider == "deepseek"
-        assert saved.model.name == "deepseek-v4-flash"
+        assert saved.model.name == "deepseek-flash"
         assert saved.model.base_url == "https://example.test"
         assert saved.model.reasoning_mode == "max"
         assert saved.ui.interface == "modern"
@@ -1319,19 +1319,19 @@ async def test_tui_reset_flow_writes_third_party_provider_settings(tmp_path) -> 
         prompt.text = "/reset"
         await pilot.press("enter")
 
-        await _choose_inline_option(app, pilot, "Reset: select provider", down=2)
+        await _choose_inline_option(app, pilot, "Reset: select provider", down=1)
         rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
-        assert "Provider selected: xiaomi" in rendered_info
+        assert "Provider selected: mimo" in rendered_info
         assert "https://platform.xiaomimimo.com/console/api-keys" in rendered_info
         await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
-        await _choose_inline_option(app, pilot, "Reset: select model", down=1)
+        await _choose_inline_option(app, pilot, "Reset: select model")
         await _submit_text_input(app, pilot, "Reset: base URL", "https://api.xiaomimimo.com/v1")
         await _choose_inline_option(app, pilot, "Reset: select thinking")
         await _choose_inline_option(app, pilot, "Reset: select UI", down=1)
-        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "xiaomi")
+        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "mimo")
 
         saved = load_settings(config_path)
-        assert saved.model.provider == "xiaomi"
+        assert saved.model.provider == "mimo"
         assert saved.model.name == "mimo-v2.5"
         assert saved.model.reasoning_mode == "disabled"
         assert saved.model.reasoning_effort == "none"
@@ -1341,44 +1341,9 @@ async def test_tui_reset_flow_writes_third_party_provider_settings(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_tui_reset_flow_accepts_openrouter_custom_model_and_effort(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    app = DeepyTuiApp(settings=Settings(path=config_path), project_root=tmp_path, run_once=_idle_run_once)
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause(0.01)
-        prompt = app.query_one("#prompt-input", PromptTextArea)
-        prompt.text = "/reset"
-        await pilot.press("enter")
-
-        await _choose_inline_option(app, pilot, "Reset: select provider", down=1)
-        await _submit_text_input(app, pilot, "Reset: API key", "sk-test")
-        await _choose_inline_option(app, pilot, "Reset: select model", down=2)
-        await _submit_text_input(
-            app,
-            pilot,
-            "Reset: custom model",
-            "anthropic/claude-sonnet-4.5",
-        )
-        await _submit_text_input(app, pilot, "Reset: base URL", "https://openrouter.ai/api/v1")
-        await _choose_inline_option(app, pilot, "Reset: select thinking", down=6)
-        await _choose_inline_option(app, pilot, "Reset: select UI", down=3)
-        await _wait_for(pilot, lambda: load_settings(config_path).model.provider == "openrouter")
-
-        saved = load_settings(config_path)
-        assert saved.model.provider == "openrouter"
-        assert saved.model.name == "anthropic/claude-sonnet-4.5"
-        assert saved.model.reasoning_mode == "minimal"
-        assert saved.model.reasoning_effort == "minimal"
-        assert saved.ui.interface == "modern"
-        assert saved.ui.theme == "light"
-        app.exit()
-
-
-@pytest.mark.asyncio
 async def test_tui_reset_flow_cancellation_preserves_config(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[model]\nname = \"deepseek-v4-pro\"\n", encoding="utf-8")
+    config_path.write_text("[providers.deepseek]\nname = \"deepseek-flash\"\n", encoding="utf-8")
     settings = load_settings(config_path)
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
@@ -1395,8 +1360,8 @@ async def test_tui_reset_flow_cancellation_preserves_config(tmp_path) -> None:
         await pilot.press("escape")
         await _wait_for(pilot, lambda: any("Reset cancelled" in block.body for block in app.query(InfoBlock)))
 
-        assert config_path.read_text(encoding="utf-8") == "[model]\nname = \"deepseek-v4-pro\"\n"
-        assert app.settings.model.name == "deepseek-v4-pro"
+        assert config_path.read_text(encoding="utf-8") == "[providers.deepseek]\nname = \"deepseek-flash\"\n"
+        assert app.settings.model.name == "deepseek-flash"
         app.exit()
 
 
@@ -2078,7 +2043,7 @@ async def test_tui_status_bar_shows_context_and_compact_next(tmp_path, monkeypat
         await pilot.pause(0.1)
 
         left = str(app.query_one("#status-left", Label).content)
-        assert "model deepseek-v4-pro[max]" in left
+        assert "model deepseek-flash[max]" in left
         assert "cwd" in left
         assert "mcp 1" in left
         assert "bg 1" in left
@@ -2223,7 +2188,7 @@ async def test_tui_status_surfaces_show_runtime_audit_mode(tmp_path, monkeypatch
 
         left = str(app.query_one("#status-left", Label).content)
         assert "audit normal" in left
-        assert "model deepseek-v4-pro[max]" in left
+        assert "model deepseek-flash[max]" in left
         assert "cwd" in left
 
         await pilot.press("shift+tab")
@@ -4338,7 +4303,7 @@ async def test_tui_status_command_does_not_fetch_balance_for_third_party_provide
     app = DeepyTuiApp(
         settings=Settings(
             model=ModelConfig(
-                provider="xiaomi",
+                provider="mimo",
                 name="mimo-v2.5-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
@@ -4394,22 +4359,22 @@ async def test_tui_theme_and_model_direct_commands_persist_settings(tmp_path) ->
         prompt.text = "/theme light"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        prompt.text = "/model set deepseek-v4-flash high"
+        prompt.text = "/model set deepseek-flash high"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        prompt.text = "/model set openrouter xiaomi/mimo-v2.5 high"
+        prompt.text = "/model set mimo mimo-v2.5 enabled"
         await pilot.press("enter")
         await pilot.pause(0.2)
 
         saved = load_settings(config_path)
         assert saved.ui.theme == "light"
-        assert saved.model.provider == "openrouter"
-        assert saved.model.name == "xiaomi/mimo-v2.5"
-        assert saved.model.reasoning_mode == "high"
+        assert saved.model.provider == "mimo"
+        assert saved.model.name == "mimo-v2.5"
+        assert saved.model.reasoning_mode == "enabled"
         rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
-        assert "Provider switched to openrouter" in rendered_info
+        assert "API key missing for mimo" in rendered_info
         assert "Reconfigure the API key" in rendered_info
-        assert "https://openrouter.ai/workspaces/default/keys" in rendered_info
+        assert "https://platform.xiaomimimo.com/console/api-keys" in rendered_info
         app.exit()
 
 
@@ -4547,7 +4512,7 @@ async def test_tui_model_picker_refocuses_prompt_after_save(tmp_path) -> None:
             for index in range(provider_options.option_count)
         ]
         assert any("deepseek" in label for label in provider_labels)
-        assert any("openrouter" in label for label in provider_labels)
+        assert any("kimi" in label for label in provider_labels)
         assert provider_options.region.height >= min(3, provider_options.option_count)
         assert provider_options.has_focus
 
@@ -4562,7 +4527,7 @@ async def test_tui_model_picker_refocuses_prompt_after_save(tmp_path) -> None:
             _option_prompt_text(model_options.get_option_at_index(index))
             for index in range(model_options.option_count)
         ]
-        assert any("deepseek-v4-pro" in label for label in model_labels)
+        assert any("deepseek-flash" in label for label in model_labels)
         assert model_options.region.height >= 1
         assert model_options.has_focus
         await pilot.press("enter")
@@ -4575,7 +4540,7 @@ async def test_tui_model_picker_refocuses_prompt_after_save(tmp_path) -> None:
         await _wait_for(pilot, lambda: app.query_one("#prompt-input", PromptTextArea).has_focus)
         saved = load_settings(config_path)
         assert saved.model.provider == "deepseek"
-        assert saved.model.name == "deepseek-v4-pro"
+        assert saved.model.name == "deepseek-flash"
         app.exit()
 
 
@@ -5304,3 +5269,31 @@ async def test_tui_prompt_arrow_keys_still_move_inside_multiline_input(tmp_path)
         await pilot.press("down")
         assert prompt.cursor_location == (1, 0)
         app.exit()
+
+
+@pytest.mark.asyncio
+async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp_path):
+    from deepy.config import write_config, load_settings
+
+    config = tmp_path / "config.toml"
+    write_config(config, provider="mimo", model="mimo-v2.5", api_key="test", theme="dark")
+    async def no_model_call(*args, **kwargs):
+        raise AssertionError("Incompatible draft must not start a model turn")
+
+    app = DeepyTuiApp(settings=load_settings(config), project_root=tmp_path, run_once=no_model_call)
+    async with app.run_test(size=(100, 32)) as pilot:
+        prompt = app.query_one("#prompt-input", PromptTextArea)
+        attachment = app.image_attachments.attach_image(b"image", "image/png")
+        prompt.text = "/model set mimo mimo-v2.5-pro enabled"
+        prompt.action_submit()
+        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5-pro")
+        assert app.image_attachments.attachments == [attachment]
+        prompt.text = "describe"
+        prompt.action_submit()
+        await pilot.pause()
+        assert prompt.text == "describe"
+        assert app.image_attachments.attachments == [attachment]
+        prompt.text = "/model set mimo mimo-v2.5 enabled"
+        prompt.action_submit()
+        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5")
+        assert app.image_attachments.attachments == [attachment]

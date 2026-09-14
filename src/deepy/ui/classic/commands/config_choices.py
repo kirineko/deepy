@@ -34,41 +34,13 @@ def _print_model_choices(console: Console) -> None:
 def _print_model_usage(console: Console, palette: UiPalette) -> None:
     console.print(
         f"[{palette.error}]Usage:[/] /model | /model list | "
-        "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
-        "/model set openrouter xiaomi/mimo-v2.5-pro none|minimal|low|medium|high|xhigh | "
-        "/model set xiaomi mimo-v2.5-pro enabled|disabled | "
-        "/model set localhost gpt-5.6-terra none|low|medium|high|xhigh | "
-        "/model provider deepseek|openrouter|xiaomi|localhost | "
+        "/model set deepseek-flash [none|high|max] | "
+        "/model set kimi kimi-k3 low|high|max | "
+        "/model set mimo mimo-v2.5-pro enabled|disabled | "
+        "/model set cli_proxy gpt-5.6-terra none|low|medium|high|xhigh | "
+        "/model provider deepseek|mimo|kimi|cli_proxy | "
         "/model thinking <mode>"
     )
-
-
-def _openrouter_thinking_state_from_selection(value: str, *, default: str) -> str:
-    normalized = value.strip().lower()
-    if normalized in {"1", "enabled", "enable", "on", "true", "yes"}:
-        return "enabled"
-    if normalized in {"2", "disabled", "disable", "off", "false", "no", "none"}:
-        return "disabled"
-    return default
-
-
-def _openrouter_effort_from_selection(value: str, *, default: str) -> str:
-    normalized = value.strip().lower()
-    by_number = {
-        "1": "enabled",
-        "2": "xhigh",
-        "3": "high",
-        "4": "medium",
-        "5": "low",
-        "6": "minimal",
-    }
-    if normalized in by_number:
-        return by_number[normalized]
-    if normalized in {"default", "enabled"}:
-        return "enabled"
-    if normalized in {"xhigh", "high", "medium", "low", "minimal"}:
-        return normalized
-    return default if default in {"enabled", "xhigh", "high", "medium", "low", "minimal"} else "enabled"
 
 
 def _provider_from_selection(value: str) -> str | None:

@@ -8,7 +8,7 @@ import pytest
 from deepy.config import ModelConfig, Settings
 from deepy.input_suggestions import (
     INPUT_SUGGESTION_MODEL,
-    LOCALHOST_INPUT_SUGGESTION_MODEL,
+    CLI_PROXY_INPUT_SUGGESTION_MODEL,
     InputSuggestionController,
     assistant_reply_count,
     generate_input_suggestion,
@@ -134,50 +134,18 @@ def test_parse_suggestion_text_supports_plain_and_json_payloads():
 def test_input_suggestion_model_settings_are_fixed_deepseek_flash_non_thinking():
     settings = input_suggestion_model_settings(Settings(model=ModelConfig(api_key="sk-test")))
 
-    assert INPUT_SUGGESTION_MODEL == "deepseek-v4-flash"
-    assert input_suggestion_model_name(Settings(model=ModelConfig(name="deepseek-v4-pro"))) == "deepseek-v4-flash"
+    assert INPUT_SUGGESTION_MODEL == "deepseek-flash"
+    assert input_suggestion_model_name(Settings(model=ModelConfig(name="deepseek-flash"))) == "deepseek-flash"
     assert settings.include_usage is True
     assert settings.store is False
-    assert settings.extra_body == {"thinking": {"type": "disabled"}}
-    assert "reasoning_effort" not in settings.extra_body
-
-
-def test_input_suggestion_uses_current_third_party_model_non_thinking():
-    openrouter = Settings(
-        model=ModelConfig(
-            provider="openrouter",
-            name="xiaomi/mimo-v2.5-pro",
-            base_url="https://openrouter.ai/api/v1",
-            api_key="sk-test",
-            thinking=True,
-            reasoning_effort="high",
-        )
-    )
-    xiaomi = Settings(
-        model=ModelConfig(
-            provider="xiaomi",
-            name="mimo-v2.5-pro",
-            base_url="https://api.xiaomimimo.com/v1",
-            api_key="sk-test",
-            thinking=True,
-            reasoning_effort="high",
-        )
-    )
-
-    assert input_suggestion_model_name(openrouter) == "xiaomi/mimo-v2.5-pro"
-    assert input_suggestion_model_settings(openrouter).extra_body == {
-        "reasoning": {"enabled": False},
-    }
-    assert input_suggestion_model_name(xiaomi) == "mimo-v2.5-pro"
-    assert input_suggestion_model_settings(xiaomi).extra_body == {
-        "thinking": {"type": "disabled"}
-    }
+    assert settings.reasoning.effort == "none"
+    assert settings.extra_body is None
 
 
 def test_input_suggestion_uses_fixed_localhost_luna_non_thinking():
     localhost = Settings(
         model=ModelConfig(
-            provider="localhost",
+            provider="cli_proxy",
             name="gpt-5.6-terra",
             base_url="http://127.0.0.1:8317/v1",
             api_key="sk-local",
@@ -186,11 +154,9 @@ def test_input_suggestion_uses_fixed_localhost_luna_non_thinking():
         )
     )
 
-    assert LOCALHOST_INPUT_SUGGESTION_MODEL == "gpt-5.6-luna"
+    assert CLI_PROXY_INPUT_SUGGESTION_MODEL == "gpt-5.6-luna"
     assert input_suggestion_model_name(localhost) == "gpt-5.6-luna"
-    assert input_suggestion_model_settings(localhost).extra_body == {
-        "reasoning_effort": "none",
-    }
+    assert input_suggestion_model_settings(localhost).reasoning.effort == "none"
     assert input_suggestion_model_settings(localhost).include_usage is True
     assert input_suggestion_model_settings(localhost).store is False
 
@@ -203,14 +169,17 @@ async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monk
         async def create(self, **kwargs):
             calls.append(kwargs)
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="run tests"))],
+                output_text="run tests",
                 usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2, total_tokens=11),
             )
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
             calls.append({"client": kwargs})
-            self.chat = SimpleNamespace(completions=FakeCompletions())
+            self.responses = FakeCompletions()
+
+        async def close(self):
+            pass
 
     monkeypatch.setattr("deepy.input_suggestions.AsyncOpenAI", FakeAsyncOpenAI)
     settings = Settings(model=ModelConfig(api_key="sk-test", base_url="https://api.example/v1"))
@@ -228,58 +197,10 @@ async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monk
     assert suggestion.usage.prompt_tokens == 9
     assert suggestion.usage.completion_tokens == 2
     assert calls[0] == {"client": {"base_url": "https://api.example/v1", "api_key": "sk-test"}}
-    assert calls[1]["model"] == "deepseek-v4-flash"
-    assert calls[1]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert calls[1]["model"] == "deepseek-flash"
+    assert calls[1]["reasoning"] == {"effort": "none"}
     assert calls[1]["store"] is False
     assert "reasoning_effort" not in calls[1]
-
-
-@pytest.mark.asyncio
-async def test_generate_input_suggestion_uses_current_third_party_model_and_records_usage(monkeypatch):
-    calls: list[dict[str, object]] = []
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="run tests"))],
-                usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2, total_tokens=11),
-            )
-
-    class FakeAsyncOpenAI:
-        def __init__(self, **kwargs):
-            calls.append({"client": kwargs})
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setattr("deepy.input_suggestions.AsyncOpenAI", FakeAsyncOpenAI)
-    settings = Settings(
-        model=ModelConfig(
-            provider="openrouter",
-            name="xiaomi/mimo-v2.5-pro",
-            base_url="https://openrouter.ai/api/v1",
-            api_key="sk-test",
-            thinking=True,
-            reasoning_effort="high",
-        )
-    )
-    items = [
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "hi"},
-        {"role": "user", "content": "next?"},
-        {"role": "assistant", "content": "try running tests"},
-    ]
-
-    suggestion = await generate_input_suggestion(settings, items, timeout_seconds=1)
-
-    assert suggestion is not None
-    assert suggestion.model == "xiaomi/mimo-v2.5-pro"
-    assert calls[0] == {
-        "client": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-test"}
-    }
-    assert calls[1]["model"] == "xiaomi/mimo-v2.5-pro"
-    assert calls[1]["extra_body"] == {
-        "reasoning": {"enabled": False},
-    }
 
 
 @pytest.mark.asyncio

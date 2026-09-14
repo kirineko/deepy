@@ -1,7 +1,9 @@
 # skill-market Specification
 
 ## Purpose
-TBD - created by archiving change add-agent-skill-market. Update Purpose after archive.
+
+Define skill catalog discovery, package installation, protected removal and market service metadata.
+
 ## Requirements
 ### Requirement: Market Catalog Query
 Deepy SHALL query a configured skill market endpoint to browse and search installable skills.

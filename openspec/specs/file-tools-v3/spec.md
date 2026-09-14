@@ -1,7 +1,9 @@
 # file-tools-v3 Specification
 
 ## Purpose
-TBD - created by archiving change rewrite-file-tools-read-write-update. Update Purpose after archive.
+
+Define the Read, Write and Update file-tool interfaces, argument recovery, result metadata and mutation preflight behavior.
+
 ## Requirements
 ### Requirement: V3 File Tool Surface
 Deepy SHALL expose a breaking v3 model-facing file tool surface consisting of

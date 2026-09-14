@@ -15,8 +15,6 @@ from rich.prompt import Prompt
 
 from deepy.config import (
     Settings,
-    allows_custom_model_for_provider,
-    default_model_for_provider,
     is_supported_model_for_provider,
     is_supported_provider,
     is_valid_thinking_mode_for_provider,
@@ -27,8 +25,6 @@ from deepy.config import (
 )
 from deepy.ui.classic.commands.config_choices import (
     _model_from_selection,
-    _openrouter_effort_from_selection,
-    _openrouter_thinking_state_from_selection,
     _print_model_choices,
     _print_model_usage,
     _print_provider_choices,
@@ -171,7 +167,7 @@ def _handle_interactive_model_selection(
         console.print("Model unchanged.")
         return current_session_id
     selected_model = _prompt_for_model_selection(
-        settings.model.name if settings.model.provider == selected_provider else default_model_for_provider(selected_provider),
+        settings.model_for_provider(selected_provider).name,
         provider=selected_provider,
         console=console,
         input_func=input_func,
@@ -180,7 +176,7 @@ def _handle_interactive_model_selection(
         console.print("Model unchanged.")
         return current_session_id
     selected_reasoning = _prompt_for_reasoning_mode_selection(
-        settings.model.reasoning_mode,
+        settings.model_for_provider(selected_provider).reasoning_mode,
         provider=selected_provider,
         console=console,
         input_func=input_func,
@@ -219,7 +215,7 @@ def _save_model_settings(
             model=model,
             reasoning_mode=reasoning_mode,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         console.print(f"[{palette.error}]{exc}[/]")
         return current_session_id
     saved_settings = load_settings(settings.path)
@@ -228,7 +224,7 @@ def _save_model_settings(
         f"model: {saved_settings.model.name} · "
         f"thinking: {saved_settings.model.reasoning_mode}"
     )
-    if saved_settings.model.provider != settings.model.provider:
+    if not saved_settings.model.api_key:
         console.print(provider_api_key_reconfiguration_message(saved_settings.model.provider))
     return current_session_id
 
@@ -259,8 +255,6 @@ def _prompt_for_model_selection(
     if input_func is None:
         return pick_model(default, provider=provider)
     _print_provider_model_choices(console, provider)
-    if allow_custom_model and allows_custom_model_for_provider(provider):
-        console.print("Or paste any model name copied from the OpenRouter models page.")
     value = input_func("Model number or name").strip()
     if not value:
         return None
@@ -277,42 +271,11 @@ def _prompt_for_reasoning_mode_selection(
 ) -> str | None:
     if input_func is None:
         return pick_reasoning_mode(default, provider=provider)
-    if setup_flow and provider == "openrouter":
-        return _prompt_for_openrouter_reasoning_setup(default, console=console, input_func=input_func)
     _print_reasoning_choices(console, provider)
     value = input_func("Thinking number or name").strip()
     if not value:
         return None
     return _reasoning_mode_from_selection(value, provider=provider)
-
-
-def _prompt_for_openrouter_reasoning_setup(
-    default: str,
-    *,
-    console: Console,
-    input_func: InputFunc,
-) -> str | None:
-    current_enabled = default not in {"none", "disabled"}
-    console.print("Thinking:")
-    console.print("1. enabled - Reasoning enabled")
-    console.print("2. disabled - Reasoning disabled")
-    state_value = input_func("Thinking number or name").strip()
-    if not state_value:
-        return None
-    state = _openrouter_thinking_state_from_selection(
-        state_value,
-        default="enabled" if current_enabled else "disabled",
-    )
-    if state == "disabled":
-        return "none"
-    console.print("Reasoning effort:")
-    console.print("1. default - Use the model default reasoning strength")
-    for index, effort in enumerate(("xhigh", "high", "medium", "low", "minimal"), 2):
-        console.print(f"{index}. {effort}")
-    effort_value = input_func("Reasoning effort number or name").strip()
-    if not effort_value:
-        return "enabled"
-    return _openrouter_effort_from_selection(effort_value, default=default)
 
 
 def _prompt_for_ui_selection(

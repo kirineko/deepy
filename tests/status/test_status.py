@@ -45,7 +45,7 @@ def test_status_report_to_dict_is_json_ready(tmp_path):
 
     assert payload["project_root"] == str(tmp_path)
     assert payload["provider"] == "deepseek"
-    assert payload["model"] == "deepseek-v4-pro"
+    assert payload["model"] == "deepseek-flash"
     assert payload["reasoning_mode"] == "max"
     assert payload["reserved_context_tokens"] == 50000
     assert payload["input_suggestions_enabled"] is True

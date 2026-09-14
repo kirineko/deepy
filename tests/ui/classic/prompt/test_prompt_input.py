@@ -828,7 +828,7 @@ def test_prompt_toolbar_uses_cross_platform_newline_help():
 def test_build_prompt_toolbar_renders_structured_status_without_exit_help():
     status = StatusFooter(
         (
-            StatusFooterSegment("model deepseek-v4-pro[max]", "identity"),
+            StatusFooterSegment("model deepseek-flash[max]", "identity"),
             StatusFooterSegment("cwd ~/repo", "metadata"),
             StatusFooterSegment("ctx 100/1K (10.0%, 900 left)", "context"),
         )
@@ -838,7 +838,7 @@ def test_build_prompt_toolbar_renders_structured_status_without_exit_help():
     assert isinstance(toolbar, list)
     assert toolbar == [
         ("class:toolbar.title", "model"),
-        ("class:toolbar.metadata", " deepseek-v4-pro[max]"),
+        ("class:toolbar.metadata", " deepseek-flash[max]"),
         ("class:toolbar.separator", " · "),
         ("class:toolbar.title", "cwd"),
         ("class:toolbar.metadata", " ~/repo"),

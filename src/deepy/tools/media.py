@@ -117,7 +117,7 @@ def _image_mime_type(suffix: str) -> str | None:
 def _build_image_follow_up_message(path: Path, mime: str, data: bytes) -> dict[str, object]:
     encoded = base64.b64encode(data).decode("ascii")
     return {
-        "role": "system",
+        "role": "user",
         "content": [
             {
                 "type": "input_text",

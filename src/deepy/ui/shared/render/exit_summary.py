@@ -78,7 +78,13 @@ def build_exit_summary_text(
     if usage.has_usage:
         rows.append(
             (
-                "model usage",
+                "session API usage"
+                if (
+                    session.get("web_search_usage")
+                    if isinstance(session, Mapping)
+                    else getattr(session, "web_search_usage", None)
+                )
+                else "model usage",
                 _usage_summary(
                     usage,
                     requests=assistant_count,
@@ -86,20 +92,55 @@ def build_exit_summary_text(
             )
         )
     if input_suggestion_usage.has_usage:
+        breakdown = (
+            raw_input_suggestion_usage.get("by_model")
+            if isinstance(raw_input_suggestion_usage, Mapping)
+            else None
+        )
+        buckets = (
+            breakdown.items()
+            if isinstance(breakdown, Mapping) and breakdown
+            else [
+                (
+                    _get_input_suggestion_model(raw_input_suggestion_usage),
+                    raw_input_suggestion_usage,
+                )
+            ]
+        )
+        for identity, bucket in buckets:
+            rows.append(
+                (
+                    "suggestions",
+                    _usage_summary(
+                        extract_usage_fields(bucket), requests=_get_requests(bucket), model=identity
+                    ),
+                )
+            )
+    search_usage = (
+        session.get("web_search_usage")
+        if isinstance(session, Mapping)
+        else getattr(session, "web_search_usage", None)
+    )
+    if search_usage:
         rows.append(
             (
-                "suggestions",
+                "web search",
                 _usage_summary(
-                    input_suggestion_usage,
-                    requests=_get_requests(raw_input_suggestion_usage),
-                    model=_get_input_suggestion_model(raw_input_suggestion_usage),
+                    extract_usage_fields(search_usage),
+                    requests=_get_requests(search_usage),
+                    model="deepseek/deepseek-flash",
                 ),
             )
         )
-    cost = "unsupported" if session_cost_unsupported else format_session_cost(_get_session_cost(session))
+    cost = (
+        "unsupported"
+        if session_cost_unsupported
+        else format_session_cost(_get_session_cost(session))
+    )
     if cost:
         rows.append(("session cost", cost))
     return _simple_box("Deepy Session Summary", rows)
+
 
 def _usage_summary(
     usage: UsageFields,

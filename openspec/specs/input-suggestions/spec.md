@@ -1,8 +1,11 @@
 # input-suggestions Specification
 
 ## Purpose
-TBD - created by archiving change add-input-suggestions. Update Purpose after archive.
+
+Deepy offers cancellable, filtered input suggestions using fixed provider-local Responses models and reports their usage separately from conversation requests.
+
 ## Requirements
+
 ### Requirement: Input Suggestion Eligibility
 Deepy SHALL generate input suggestions only for eligible interactive sessions
 after completed model replies.
@@ -112,24 +115,24 @@ the prompt.
 - **AND** input suggestion acceptance SHALL NOT override them
 
 ### Requirement: Input Suggestion Model
-Deepy SHALL use a fixed non-thinking DeepSeek model for input suggestions.
+Deepy SHALL use a fixed provider-local Responses model for suggestions without exposing custom suggestion model configuration.
 
 #### Scenario: Suggestion model call is created
-- **WHEN** Deepy creates a model request for input suggestion generation
-- **THEN** it SHALL use `deepseek-v4-flash`
-- **AND** it SHALL explicitly disable DeepSeek thinking
-- **AND** it SHALL enable provider usage reporting
-- **AND** it SHALL disable provider-side storage
+- **WHEN** a suggestion request is created
+- **THEN** Deepy SHALL use DeepSeek deepseek-flash with none, MiMo mimo-v2.5 with disabled, Kimi kimi-k3 with low, or CLI Proxy gpt-5.6-luna with none according to the active provider
+- **AND** it SHALL use that provider credentials, request usage and disable storage
 
 #### Scenario: Active model is changed
-- **WHEN** the user changes the main conversation model or reasoning mode
-- **THEN** input suggestion generation SHALL continue using
-  `deepseek-v4-flash` with thinking disabled
+- **WHEN** the main model or reasoning changes within a provider
+- **THEN** the suggestion model and reasoning SHALL remain fixed for that provider
+
+#### Scenario: Provider changed
+- **WHEN** the active provider changes
+- **THEN** subsequent suggestions SHALL use the new provider fixed model without requiring another provider key
 
 #### Scenario: User requests suggestion model customization
-- **WHEN** a user attempts to configure a custom input suggestion model
-- **THEN** Deepy SHALL reject or ignore the customization
-- **AND** it SHALL continue using the fixed suggestion model
+- **WHEN** a user attempts to configure a custom suggestion model
+- **THEN** Deepy SHALL reject or ignore that customization and retain the fixed provider-local model
 
 ### Requirement: Input Suggestion Usage Accounting
 Deepy SHALL account for input suggestion model usage separately from ordinary
@@ -146,5 +149,4 @@ model-turn usage.
 - **WHEN** Deepy displays accumulated interactive usage that includes input
   suggestion calls
 - **THEN** it SHALL label suggestion usage separately from ordinary model usage
-- **AND** it SHALL identify the suggestion model as `deepseek-v4-flash`
-
+- **AND** it SHALL identify the actual suggestion provider and model

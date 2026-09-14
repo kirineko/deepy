@@ -41,11 +41,11 @@ def _model_list_text() -> str:
 def _model_usage_text() -> str:
     return (
         "Usage: /model | /model list | "
-        "/model set deepseek-v4-pro|deepseek-v4-flash [none|high|max] | "
-        "/model set openrouter xiaomi/mimo-v2.5-pro none|minimal|low|medium|high|xhigh | "
-        "/model set xiaomi mimo-v2.5-pro enabled|disabled | "
-        "/model set localhost gpt-5.6-terra none|low|medium|high|xhigh | "
-        "/model provider deepseek|openrouter|xiaomi|localhost | "
+        "/model set deepseek-flash [none|high|max] | "
+        "/model set kimi kimi-k3 low|high|max | "
+        "/model set mimo mimo-v2.5-pro enabled|disabled | "
+        "/model set cli_proxy gpt-5.6-terra none|low|medium|high|xhigh | "
+        "/model provider deepseek|mimo|kimi|cli_proxy | "
         "/model thinking <mode>"
     )
 

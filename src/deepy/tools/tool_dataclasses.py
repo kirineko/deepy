@@ -101,54 +101,6 @@ class PlannedUpdateFile:
 
 
 @dataclass(frozen=True)
-class WebSearchPreparation:
-    original_query: str
-    resolved_query: str
-    dominant_language: str
-    language_reason: str
-    translated: bool = False
-
-    def metadata(self) -> dict[str, object]:
-        return {
-            "query": self.resolved_query,
-            "originalQuery": self.original_query,
-            "resolvedQuery": self.resolved_query,
-            "translated": self.translated,
-            "dominantLanguage": self.dominant_language,
-            "languageReason": self.language_reason,
-        }
-
-
-@dataclass(frozen=True)
-class WebSearchResult:
-    title: str
-    url: str
-    snippet: str = ""
-
-
-@dataclass(frozen=True)
-class WebSearchProviderFailure:
-    provider: str
-    error: str
-    search_url: str | None = None
-
-    def metadata(self) -> dict[str, str]:
-        from .web.search_parse import _mask_url_secrets
-
-        payload = {"provider": self.provider, "error": self.error}
-        if self.search_url:
-            payload["searchUrl"] = _mask_url_secrets(self.search_url)
-        return payload
-
-
-@dataclass(frozen=True)
-class WebSearchProviderResult:
-    provider: str
-    search_url: str
-    results: list[WebSearchResult]
-
-
-@dataclass(frozen=True)
 class ShellInvocation:
     shell_path: str
     args: list[str]

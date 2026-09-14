@@ -71,11 +71,11 @@ def test_build_exit_summary_text_shows_usage_and_reasoning_tokens():
 
 
 def test_build_exit_summary_text_omits_usage_table_without_usage():
-    summary = build_exit_summary_text(model="deepseek-v4-pro")
+    summary = build_exit_summary_text(model="deepseek-flash")
 
     assert "Deepy Session Summary" in summary
     assert "model" in summary
-    assert "deepseek-v4-pro" in summary
+    assert "deepseek-flash" in summary
     assert "model usage" not in summary
 
 
@@ -98,12 +98,12 @@ def test_build_exit_summary_text_shows_input_suggestion_usage_separately():
             {"role": "assistant", "content": "one"},
             {"role": "assistant", "content": "two"},
         ],
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
 
     assert "model usage" in summary
     assert "suggestions" in summary
-    assert "deepseek-v4-flash" in summary
+    assert "deepseek-flash" in summary
     assert "12" in summary
     assert "3" in summary
 
@@ -141,7 +141,7 @@ def test_build_exit_summary_text_shows_session_cost_delta():
                 ],
             }
         },
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
 
     assert "session cost" in summary
@@ -152,7 +152,7 @@ def test_build_exit_summary_text_shows_session_cost_delta():
 def test_build_exit_summary_text_shows_unavailable_session_cost():
     summary = build_exit_summary_text(
         session={"sessionCost": {"attempted": True, "unavailableReason": "end timeout"}},
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
 
     assert "session cost" in summary

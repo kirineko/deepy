@@ -55,7 +55,7 @@ def normalize_stream_event(event: Any) -> DeepyStreamEvent | None:
                 text=delta,
                 payload={"raw": data},
             )
-        if data_type == "response.completed":
+        if data_type in {"response.completed", "response.incomplete", "response.failed"}:
             usage = _response_usage(data)
             return DeepyStreamEvent(
                 kind="usage",

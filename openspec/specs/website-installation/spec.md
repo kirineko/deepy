@@ -1,7 +1,9 @@
 # website-installation Specification
 
 ## Purpose
-TBD - created by archiving change add-deepy-website-installers. Update Purpose after archive.
+
+Define the static installation website, operating-system-specific commands and transparent installer scripts.
+
 ## Requirements
 ### Requirement: Static Website Packaging
 

@@ -76,10 +76,8 @@ def build_deepy_agent(
 def uses_mimo_tool_schema_compatibility(provider: str, model: str) -> bool:
     normalized_provider = provider.strip().lower()
     normalized_model = model.strip().lower()
-    if normalized_provider == "xiaomi":
+    if normalized_provider == "mimo":
         return normalized_model in {"mimo-v2.5", "mimo-v2.5-pro"}
-    if normalized_provider == "openrouter":
-        return normalized_model in {"xiaomi/mimo-v2.5", "xiaomi/mimo-v2.5-pro"}
     return False
 
 
@@ -100,17 +98,46 @@ def build_subagent_tools(
     discovery = discover_subagents(project_root)
     tools: list[Any] = []
     for definition in discovery.definitions:
+        from dataclasses import replace
+        from deepy.config import is_supported_model_for_provider
+        from .provider import DeepyResponsesModel
+
+        child_model = provider.model
+        child_settings = provider.model_settings
+        child_model_config = settings.model
+        if definition.model:
+            if not is_supported_model_for_provider(definition.model, settings.model.provider):
+                if emit_event:
+                    from .events import DeepyStreamEvent
+
+                    emit_event(
+                        DeepyStreamEvent(
+                            kind="status",
+                            text=f"Subagent {definition.name} skipped: unsupported model {definition.model} for {settings.model.provider}.",
+                        )
+                    )
+                continue
+            child_model = DeepyResponsesModel(
+                provider=settings.model.provider,
+                model=definition.model,
+                openai_client=provider.client,
+            )
+            from .thinking import build_model_settings
+
+            child_model_config = replace(settings.model, name=definition.model)
+            child_settings = build_model_settings(replace(settings, model=child_model_config))
         subagent = Agent(
             name=f"Deepy {definition.name}",
             instructions=_subagent_instructions(definition, preferred_mcp_web_search_tools),
-            model=definition.model or provider.model,
-            model_settings=provider.model_settings,
+            model=child_model,
+            model_settings=child_settings,
             tools=build_function_tools(
                 runtime,
                 mimo_schema_compatibility=mimo_schema_compatibility,
                 preferred_mcp_web_search_tools=preferred_mcp_web_search_tools,
                 include_tools=set(definition.tools),
                 audit_policy=audit_policy,
+                read_model_config=child_model_config,
             ),
             mcp_servers=_search_mcp_servers_for_subagent(
                 definition,

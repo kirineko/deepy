@@ -42,7 +42,7 @@ def test_cache_prefix_snapshot_is_deterministic_and_changes_by_component():
         runtime_context_key="/repo",
     )
     changed = build_cache_prefix_snapshot(
-        Settings(model=ModelConfig(api_key="sk-test", name="deepseek-v4-flash")),
+        Settings(model=ModelConfig(api_key="sk-test", name="future-model")),
         system_instructions="system",
         tools=[tool],
         model_settings=ModelSettings(include_usage=True, store=False),
@@ -92,7 +92,7 @@ def test_cache_prefix_diagnostics_capture_shape_without_secrets():
             capture_sdk_request_shape(
                 system_instructions="system",
                 input=[{"role": "user", "content": "hi"}],
-                model="deepseek-v4-pro",
+                model="deepseek-flash",
                 model_settings=ModelSettings(
                     include_usage=True,
                     store=False,
@@ -107,6 +107,6 @@ def test_cache_prefix_diagnostics_capture_shape_without_secrets():
     assert diagnostics
     payload = diagnostics[0]
     assert payload.prefix_snapshot is not None
-    assert payload.sdk_request_shape["model"] == "deepseek-v4-pro"
+    assert payload.sdk_request_shape["model"] == "deepseek-flash"
     assert "sk-secret" not in str(payload.sdk_request_shape)
     assert "Authorization" not in str(payload.sdk_request_shape)

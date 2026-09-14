@@ -85,6 +85,8 @@ Do not modify files or run commands.
 
 `edit_text`、`write_file`、`apply_patch` 和 raw `shell` 这类修改工具在当前版本不支持给 subagent 使用。
 
+自定义 `model` 覆盖只能选择当前 provider 内的模型。`Read`（包括批量读取）按子 agent 的实际模型校验图片能力，运行状态和审计策略仍与主 agent 共享。
+
 ## MCP 搜索继承
 
 内置 `explore` subagent 可以继承 Deepy 识别为优先 web/search 的 MCP tools。

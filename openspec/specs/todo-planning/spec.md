@@ -1,7 +1,9 @@
 # todo-planning Specification
 
 ## Purpose
-TBD - created by archiving change add-todo-tool-and-board. Update Purpose after archive.
+
+Define session-scoped todo planning and readable progress semantics for complex requests.
+
 ## Requirements
 ### Requirement: Session Todo Planning
 

@@ -27,41 +27,20 @@ SWITCH_ONLY_THINKING_CHOICES = (
     ("disabled", "disabled  Thinking disabled"),
     ("enabled", "enabled   Thinking enabled"),
 )
-OPENROUTER_REASONING_CHOICES = (
-    ("enabled", "enabled  Reasoning enabled with model default settings"),
-    ("disabled", "disabled Reasoning disabled"),
-    ("xhigh", "xhigh    Largest reasoning token allocation"),
-    ("high", "high     Large reasoning token allocation"),
-    ("medium", "medium   Moderate reasoning token allocation"),
-    ("low", "low      Smaller reasoning token allocation"),
-    ("minimal", "minimal  Minimal reasoning token allocation"),
-    ("none", "none     Thinking disabled"),
-)
-LOCALHOST_REASONING_CHOICES = (
-    ("none", "none    Thinking disabled"),
-    ("low", "low     Smaller reasoning token allocation"),
-    ("medium", "medium  Moderate reasoning token allocation (default)"),
-    ("high", "high    Large reasoning token allocation"),
-    ("xhigh", "xhigh   Largest reasoning token allocation"),
-)
 
 
 def thinking_mode_choices(provider: str) -> tuple[tuple[str, str], ...]:
-    if provider == "openrouter":
-        return OPENROUTER_REASONING_CHOICES
-    if provider == "localhost":
-        return LOCALHOST_REASONING_CHOICES
-    modes = thinking_modes_for_provider(provider)
-    if modes == ("disabled", "enabled"):
-        return SWITCH_ONLY_THINKING_CHOICES
-    return REASONING_MODE_CHOICES
+    return tuple(
+        (mode, f"{mode}  Thinking {'disabled' if mode in {'none', 'disabled'} else 'enabled'}")
+        for mode in thinking_modes_for_provider(provider)
+    )
 
 
 def provider_api_key_reconfiguration_message(provider: str) -> str:
     provider_info = provider_info_for(provider)
     message = (
-        f"Provider switched to {provider}. "
-        "Reconfigure the API key for this provider with /reset or `deepy config setup`."
+        f"API key missing for {provider}. "
+        "Reconfigure the API key for this provider with `deepy config setup`."
     )
     if provider_info.api_key_url:
         message += f" Create an API key at {provider_info.api_key_url}"
@@ -82,7 +61,9 @@ def pick_reasoning_mode(current: str, *, provider: str = "deepseek") -> str | No
 
 class ProviderPicker:
     def __init__(self, current: str) -> None:
-        default = current if current in {provider.id for provider in PROVIDER_CATALOG} else "deepseek"
+        default = (
+            current if current in {provider.id for provider in PROVIDER_CATALOG} else "deepseek"
+        )
         self._radio_list = RadioList[str](
             values=[
                 (provider.id, f"{provider.id}\n  {provider.description}")

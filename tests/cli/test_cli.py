@@ -13,7 +13,7 @@ from deepy.usage import TokenUsage
 
 def test_config_show_json_masks_secret(tmp_path, capsys):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-1234567890"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-1234567890"\n', encoding="utf-8")
 
     code = main(["--config", str(config), "config", "show", "--json"])
 
@@ -25,13 +25,13 @@ def test_config_show_json_masks_secret(tmp_path, capsys):
 
 def test_config_show_toml_omits_none_values(tmp_path, capsys):
     config = tmp_path / "config.toml"
-    config.write_text("[model]\nname = \"deepseek-v4-flash\"\n", encoding="utf-8")
+    config.write_text("[providers.deepseek]\nname = \"deepseek-flash\"\n", encoding="utf-8")
 
     code = main(["--config", str(config), "config", "show"])
 
     assert code == 0
     out = capsys.readouterr().out
-    assert "[model]" in out
+    assert "[providers.deepseek]" in out
     assert "None" not in out
 
 
@@ -45,73 +45,12 @@ def test_config_init_writes_toml_with_private_permissions(tmp_path, capsys):
     assert config.stat().st_mode & 0o777 == 0o600
     text = config.read_text(encoding="utf-8")
     assert 'api_key = "sk-test"' in text
-    assert "reserved_context_tokens = 50000" in text
-    assert "compact_preserve_recent_messages = 2" in text
-    assert "compact_prompt_token_threshold" not in text
-    assert "[logging]" in text
-    assert "[notify]" in text
-    assert "[tools.web_search]" in text
-    assert 'searxng_url = "https://s.kirineko.tech/"' in text
+    assert "config_version = 2" in text
+    from deepy.config import load_settings
+    assert load_settings(config, env={}).context.compact_preserve_recent_messages == 2
+    assert "searxng_url" not in text
     assert "[ui]" in text
     assert 'theme = "dark"' in text
-
-
-def test_config_init_accepts_openrouter_provider_defaults(tmp_path, capsys):
-    config = tmp_path / "config.toml"
-
-    code = main(
-        [
-            "--config",
-            str(config),
-            "config",
-            "init",
-            "--api-key",
-            "sk-test",
-            "--provider",
-            "openrouter",
-            "--model",
-            "xiaomi/mimo-v2.5-pro",
-            "--thinking",
-            "disabled",
-        ]
-    )
-
-    assert code == 0
-    assert "Wrote" in capsys.readouterr().out
-    text = config.read_text(encoding="utf-8")
-    assert 'provider = "openrouter"' in text
-    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
-    assert 'base_url = "https://openrouter.ai/api/v1"' in text
-    assert 'thinking = false' in text
-    assert 'reasoning_effort = "none"' in text
-
-
-def test_config_init_accepts_openrouter_custom_model_and_effort(tmp_path):
-    config = tmp_path / "config.toml"
-
-    code = main(
-        [
-            "--config",
-            str(config),
-            "config",
-            "init",
-            "--api-key",
-            "sk-test",
-            "--provider",
-            "openrouter",
-            "--model",
-            "anthropic/claude-sonnet-4.5",
-            "--thinking",
-            "minimal",
-        ]
-    )
-
-    assert code == 0
-    text = config.read_text(encoding="utf-8")
-    assert 'provider = "openrouter"' in text
-    assert 'name = "anthropic/claude-sonnet-4.5"' in text
-    assert 'thinking = true' in text
-    assert 'reasoning_effort = "minimal"' in text
 
 
 def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypatch):
@@ -135,93 +74,13 @@ def test_config_setup_writes_toml_with_secure_prompt(tmp_path, capsys, monkeypat
     text = config.read_text(encoding="utf-8")
     assert 'provider = "deepseek"' in text
     assert 'api_key = "sk-live"' in text
-    assert 'name = "deepseek-v4-flash"' in text
+    assert 'model = "deepseek-flash"' in text
     assert 'theme = "light"' in text
-
-
-def test_config_setup_prints_openrouter_api_key_guidance(tmp_path, capsys, monkeypatch):
-    config = tmp_path / "config.toml"
-    answers = iter(["2", "sk-or-live", "1", "", "1", "1", "2"])
-
-    class FakePromptSession:
-        def prompt(self, prompt, default="", is_password=False):
-            return next(answers)
-
-    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
-
-    code = main(["--config", str(config), "config", "setup"])
-
-    assert code == 0
-    assert "https://openrouter.ai/workspaces/default/keys" in capsys.readouterr().out
-    text = config.read_text(encoding="utf-8")
-    assert 'provider = "openrouter"' in text
-    assert 'api_key = "sk-or-live"' in text
-    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
-    assert 'reasoning_effort = "enabled"' in text
-
-
-def test_config_setup_accepts_openrouter_custom_model_and_effort(tmp_path, capsys, monkeypatch):
-    config = tmp_path / "config.toml"
-    answers = iter([
-        "2",
-        "sk-or-live",
-        "anthropic/claude-sonnet-4.5",
-        "",
-        "1",
-        "minimal",
-        "3",
-    ])
-
-    class FakePromptSession:
-        def prompt(self, prompt, default="", is_password=False):
-            return next(answers)
-
-    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
-
-    code = main(["--config", str(config), "config", "setup"])
-
-    output = capsys.readouterr().out
-    assert code == 0
-    assert "paste any model name copied from the OpenRouter models page" in output
-    assert "Reasoning effort:" in output
-    assert "default" in output
-    assert "minimal" in output
-    text = config.read_text(encoding="utf-8")
-    assert 'provider = "openrouter"' in text
-    assert 'name = "anthropic/claude-sonnet-4.5"' in text
-    assert 'reasoning_effort = "minimal"' in text
-
-
-def test_config_setup_openrouter_disabled_skips_effort_prompt(tmp_path, capsys, monkeypatch):
-    config = tmp_path / "config.toml"
-    answers = iter([
-        "2",
-        "sk-or-live",
-        "anthropic/claude-sonnet-4.5",
-        "",
-        "2",
-        "3",
-    ])
-
-    class FakePromptSession:
-        def prompt(self, prompt, default="", is_password=False):
-            return next(answers)
-
-    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
-
-    code = main(["--config", str(config), "config", "setup"])
-
-    output = capsys.readouterr().out
-    assert code == 0
-    assert "Reasoning effort:" not in output
-    text = config.read_text(encoding="utf-8")
-    assert 'thinking = false' in text
-    assert 'reasoning_effort = "none"' in text
 
 
 def test_config_setup_cancellation_preserves_existing_config(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    original = '[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
     config.write_text(original, encoding="utf-8")
     answers = iter(["2"])
 
@@ -243,7 +102,7 @@ def test_config_setup_cancellation_preserves_existing_config(tmp_path, capsys, m
 
 def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     answers = iter(["1", "sk-reset", "1", "https://api.deepseek.com", "3", "2"])
 
     class FakePromptSession:
@@ -269,7 +128,7 @@ def test_config_reset_removes_existing_config_and_runs_setup(tmp_path, capsys, m
 
 def test_config_reset_cancellation_restores_existing_config(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    original = '[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
     config.write_text(original, encoding="utf-8")
     answers = iter(["2", "sk-or-reset", "anthropic/claude-sonnet-4.5", "", "1"])
 
@@ -313,7 +172,7 @@ def test_config_reset_cancellation_removes_partial_config_when_none_existed(tmp_
 
 def test_config_theme_shows_and_updates_theme(tmp_path, capsys):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
 
     show_code = main(["--config", str(config), "config", "theme"])
     update_code = main(["--config", str(config), "config", "theme", "light"])
@@ -373,7 +232,7 @@ def test_tui_requires_tty(monkeypatch, capsys):
 
 def test_tui_dispatches_to_modern_runner(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     calls: list[object] = []
 
     def fake_run_tui(settings, *, project_root):
@@ -396,7 +255,7 @@ def test_tui_dispatches_to_modern_runner(tmp_path, monkeypatch):
 def test_default_command_dispatches_to_configured_modern_ui(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "sk-test"\n\n[ui]\ninterface = "modern"\ntheme = "dark"\n',
+        '[providers.deepseek]\napi_key = "sk-test"\n\n[ui]\ninterface = "modern"\ntheme = "dark"\n',
         encoding="utf-8",
     )
     calls: list[object] = []
@@ -419,7 +278,7 @@ def test_default_command_dispatches_to_configured_modern_ui(tmp_path, monkeypatc
 
 def test_default_command_dispatches_to_classic_ui_by_default(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     calls: list[object] = []
 
     def fake_run_interactive(settings):
@@ -471,7 +330,7 @@ def test_skills_show_prints_skill_body(tmp_path, capsys, monkeypatch):
 
 def test_run_reports_missing_skill_without_traceback(tmp_path, capsys):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
 
     code = main(["--config", str(config), "run", "--skill", "missing", "hello"])
 
@@ -544,7 +403,7 @@ def test_sessions_list_and_show_include_cache_metadata(tmp_path, capsys, monkeyp
 
 def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     code = main(["--config", str(config), "status"])
@@ -559,7 +418,7 @@ def test_status_command_prints_status(tmp_path, capsys, monkeypatch):
 
 def test_status_command_prints_json(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     code = main(["--config", str(config), "status", "--json"])
@@ -573,7 +432,7 @@ def test_status_command_prints_json(tmp_path, capsys, monkeypatch):
 
 def test_doctor_checks_config_permissions(tmp_path):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
     config.chmod(0o644)
 
     code, report = _doctor(Namespace(config=config))
@@ -600,7 +459,7 @@ def test_doctor_json_without_key_fails_with_setup_hint(tmp_path, capsys):
 
 def test_doctor_live_json_reports_usage(tmp_path, capsys, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
     config.chmod(0o600)
 
     async def fake_live(settings):

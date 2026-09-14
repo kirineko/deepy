@@ -7,16 +7,17 @@ from typing import Any, Literal, Mapping, Sequence, cast
 
 from agents import ModelSettings
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.responses import ResponseInputParam
+from openai.types.shared_params import Reasoning as ReasoningParam
 
 from deepy.config import Settings
-from deepy.llm.thinking import build_thinking_extra_body
+from deepy.llm.thinking import build_model_settings
 from deepy.usage import TokenUsage, normalize_usage
 from deepy.utils import log_debug_event
 from deepy.utils import json as json_utils
 
-INPUT_SUGGESTION_MODEL = "deepseek-v4-flash"
-LOCALHOST_INPUT_SUGGESTION_MODEL = "gpt-5.6-luna"
+INPUT_SUGGESTION_MODEL = "deepseek-flash"
+CLI_PROXY_INPUT_SUGGESTION_MODEL = "gpt-5.6-luna"
 INPUT_SUGGESTION_DELAY_SECONDS = 0.3
 MIN_ASSISTANT_REPLIES = 2
 MAX_RECENT_HISTORY_ITEMS = 40
@@ -141,20 +142,25 @@ class InputSuggestionController:
 
 
 def input_suggestion_model_name(settings: Settings | None = None) -> str:
-    if settings is not None and settings.model.provider == "localhost":
-        return LOCALHOST_INPUT_SUGGESTION_MODEL
-    if settings is not None and settings.model.provider != "deepseek":
-        return settings.model.name
-    return INPUT_SUGGESTION_MODEL
+    provider = settings.model.provider if settings else "deepseek"
+    return {
+        "deepseek": INPUT_SUGGESTION_MODEL,
+        "mimo": "mimo-v2.5",
+        "kimi": "kimi-k3",
+        "cli_proxy": CLI_PROXY_INPUT_SUGGESTION_MODEL,
+    }[provider]
 
 
 def input_suggestion_model_settings(settings: Settings | None = None) -> ModelSettings:
-    provider = settings.model.provider if settings is not None else "deepseek"
-    return ModelSettings(
-        include_usage=True,
-        store=False,
-        extra_body=build_thinking_extra_body(False, provider=provider),
+    current = settings or Settings()
+    effort = "low" if current.model.provider == "kimi" else "none"
+    model = replace(
+        current.model,
+        name=input_suggestion_model_name(current),
+        thinking=effort != "none",
+        reasoning_effort=effort,
     )
+    return build_model_settings(replace(current, model=model))
 
 
 def assistant_reply_count(items: Sequence[Mapping[str, Any]]) -> int:
@@ -213,7 +219,7 @@ async def generate_input_suggestion(
         _log_input_suggestion_debug(settings, {"status": "skipped", "reason": "empty_context"})
         return None
     request_messages = cast(
-        list[ChatCompletionMessageParam],
+        ResponseInputParam,
         [
             *messages,
             {"role": "user", "content": SUGGESTION_PROMPT},
@@ -225,12 +231,15 @@ async def generate_input_suggestion(
     started_at = time.time()
     try:
         response = await asyncio.wait_for(
-            client.chat.completions.create(
+            client.responses.create(
                 model=suggestion_model,
-                messages=request_messages,
-                temperature=0,
-                max_tokens=64,
-                extra_body=settings_payload.extra_body,
+                input=request_messages,
+                max_output_tokens=2048,
+                reasoning=cast(
+                    ReasoningParam, settings_payload.reasoning.model_dump(exclude_none=True)
+                )
+                if settings_payload.reasoning
+                else None,
                 store=settings_payload.store,
             ),
             timeout=timeout_seconds,
@@ -238,15 +247,12 @@ async def generate_input_suggestion(
     except Exception as exc:
         _log_input_suggestion_debug(
             settings,
-            {"status": "failed", "reason": "api_error", "error": exc},
+            {"status": "failed", "reason": "api_error", "error": type(exc).__name__},
         )
         return None
-    text = ""
-    choices = getattr(response, "choices", None) or []
-    if choices:
-        message = getattr(choices[0], "message", None)
-        content = getattr(message, "content", None)
-        text = content if isinstance(content, str) else ""
+    finally:
+        await client.close()
+    text = response.output_text or ""
     suggestion = parse_suggestion_text(text)
     if not suggestion:
         _log_input_suggestion_debug(settings, {"status": "skipped", "reason": "empty_response"})
@@ -390,9 +396,7 @@ def _item_text(item: Mapping[str, Any]) -> str:
 
 def _has_cjk(value: str) -> bool:
     return any(
-        "\u4e00" <= char <= "\u9fff"
-        or "\u3040" <= char <= "\u30ff"
-        or "\uac00" <= char <= "\ud7af"
+        "\u4e00" <= char <= "\u9fff" or "\u3040" <= char <= "\u30ff" or "\uac00" <= char <= "\ud7af"
         for char in value
     )
 

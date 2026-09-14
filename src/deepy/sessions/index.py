@@ -29,6 +29,7 @@ class SessionEntry:
     updated_at: int
     processes: dict[str, dict[str, str]] | None = None
     usage: dict[str, Any] | None = None
+    web_search_usage: dict[str, Any] | None = None
     input_suggestion_usage: dict[str, Any] | None = None
     latest_context_window_tokens: int | None = None
     last_usage_tokens: int | None = None
@@ -68,6 +69,7 @@ def list_session_entries(project_root: Path, deepy_home: Path | None = None) -> 
                 updated_at=coerce_int(row["updated_at"], 0),
                 processes=normalize_processes(json_loads_or_none(row["processes_json"])),
                 usage=json_object(row["usage_json"]),
+                web_search_usage=json_object(row["web_search_usage_json"]),
                 input_suggestion_usage=json_object(row["input_suggestion_usage_json"]),
                 latest_context_window_tokens=optional_int(row["latest_context_window_tokens"]),
                 last_usage_tokens=optional_int(row["last_usage_tokens"]),

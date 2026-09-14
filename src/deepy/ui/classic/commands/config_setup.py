@@ -15,10 +15,6 @@ from rich.console import Console
 
 from deepy.config import (
     Settings,
-    default_base_url_for_provider,
-    default_model_for_provider,
-    is_supported_model_for_provider,
-    is_valid_thinking_mode_for_provider,
     provider_info_for,
     ui_setup_from_selection,
     ui_setup_number,
@@ -97,16 +93,13 @@ def _run_interactive_config_setup(
         console=console,
         input_func=lambda label: _prompt_config_value(label, default=""),
     ) or previous.model.provider
+    selected = previous.model_for_provider(provider)
     provider_info = provider_info_for(provider)
     console.print(f"Provider: {provider}")
     if provider_info.api_key_url:
         console.print(f"Create an API key at {provider_info.api_key_url}")
     api_key = _prompt_config_value("API key", default="", is_password=True)
-    model_default = (
-        previous.model.name
-        if previous.model.provider == provider and is_supported_model_for_provider(previous.model.name, provider)
-        else default_model_for_provider(provider)
-    )
+    model_default = selected.name
     model = _prompt_for_model_selection(
         model_default,
         provider=provider,
@@ -114,17 +107,9 @@ def _run_interactive_config_setup(
         input_func=lambda label: _prompt_config_value(label, default=""),
         allow_custom_model=True,
     ) or model_default
-    base_default = (
-        previous.model.base_url
-        if previous.model.provider == provider
-        else default_base_url_for_provider(provider)
-    )
+    base_default = selected.base_url
     base_url = _prompt_config_value("Base URL", default=base_default)
-    thinking_default = (
-        previous.model.reasoning_mode
-        if previous.model.provider == provider and is_valid_thinking_mode_for_provider(previous.model.reasoning_mode, provider)
-        else provider_info_for(provider).default_thinking_mode
-    )
+    thinking_default = selected.reasoning_mode
     thinking_mode = _prompt_for_reasoning_mode_selection(
         thinking_default,
         provider=provider,

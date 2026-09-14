@@ -3,54 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from deepy.llm.replay import (
-    sanitize_chat_completion_stream_event,
-    sanitize_model_input_for_chat_completions,
+    sanitize_sdk_items_for_replay,
     sanitize_model_response_output,
 )
 from deepy.llm.multimodal import IMAGE_ONLY_DEFAULT_TEXT
-
-
-def test_sanitize_model_input_normalizes_chat_tool_call_items_for_agents_sdk():
-    items = [
-        {"role": "user", "content": "!ls"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-local",
-                    "type": "function",
-                    "function": {"name": "shell", "arguments": '{"command":"ls"}'},
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "content": '{"ok":true,"name":"shell","output":"README.md"}',
-            "tool_call_id": "call-local",
-        },
-    ]
-
-    sanitized = sanitize_model_input_for_chat_completions(items)
-
-    assert sanitized == [
-        {"role": "user", "content": "!ls"},
-        {
-            "type": "function_call",
-            "call_id": "call-local",
-            "name": "shell",
-            "arguments": '{"command":"ls"}',
-        },
-        {
-            "type": "function_call_output",
-            "call_id": "call-local",
-            "output": '{"ok":true,"name":"shell","output":"README.md"}',
-        },
-    ]
-    from agents.models.chatcmpl_converter import Converter
-
-    messages = Converter.items_to_messages(sanitized)
-    assert messages[1]["tool_calls"][0]["id"] == "call-local"
 
 
 def test_sanitize_model_input_drops_empty_assistant_between_tool_call_and_output():
@@ -73,7 +29,7 @@ def test_sanitize_model_input_drops_empty_assistant_between_tool_call_and_output
         "type": "function_call_output",
     }
 
-    assert sanitize_model_input_for_chat_completions([call, empty_message, output]) == [
+    assert sanitize_sdk_items_for_replay([call, empty_message, output]) == [
         call,
         output,
     ]
@@ -99,60 +55,19 @@ def test_sanitize_model_input_keeps_non_empty_assistant_preamble():
         "type": "function_call_output",
     }
 
-    assert sanitize_model_input_for_chat_completions([preamble, call, output]) == [
+    assert sanitize_sdk_items_for_replay([preamble, call, output]) == [
         preamble,
         call,
         output,
     ]
 
 
-def test_sanitize_model_input_normalizes_multimodal_user_content_for_chat_completions():
-    items = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "inspect this"},
-                {"type": "input_image", "image_url": "data:image/png;base64,abc"},
-            ],
-        }
-    ]
-
-    assert sanitize_model_input_for_chat_completions(items) == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "inspect this"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,abc"},
-                },
-            ],
-        }
-    ]
-
-
-def test_sanitize_model_input_adds_default_text_for_image_only_turn():
-    items = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_image", "image_url": "data:image/png;base64,abc"},
-            ],
-        }
-    ]
-
-    assert sanitize_model_input_for_chat_completions(items) == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": IMAGE_ONLY_DEFAULT_TEXT},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,abc"},
-                },
-            ],
-        }
-    ]
+def test_image_only_input_uses_responses_blocks():
+    from deepy.llm.response_images import normalize_response_images
+    items = [{"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="}]}]
+    result = normalize_response_images(items)
+    assert result[0]["content"][0] == {"type": "input_text", "text": IMAGE_ONLY_DEFAULT_TEXT}
+    assert result[0]["content"][1] == items[0]["content"][0]
 
 
 def test_sanitize_model_response_output_drops_empty_assistant_message():
@@ -169,32 +84,3 @@ def test_sanitize_model_response_output_drops_empty_assistant_message():
     )
 
     assert sanitize_model_response_output([call, empty_message, preamble]) == [call, preamble]
-
-
-def test_sanitize_stream_event_suppresses_empty_assistant_done_event():
-    event = SimpleNamespace(
-        type="response.output_item.done",
-        item=SimpleNamespace(
-            type="message",
-            role="assistant",
-            content=[SimpleNamespace(type="output_text", text="")],
-        ),
-    )
-
-    assert sanitize_chat_completion_stream_event(event) is None
-
-
-def test_sanitize_stream_event_cleans_completed_response_output():
-    call = SimpleNamespace(type="function_call", call_id="call-read")
-    empty_message = SimpleNamespace(
-        type="message",
-        role="assistant",
-        content=[SimpleNamespace(type="output_text", text="")],
-    )
-    event = SimpleNamespace(
-        type="response.completed",
-        response=SimpleNamespace(output=[call, empty_message]),
-    )
-
-    assert sanitize_chat_completion_stream_event(event) is event
-    assert event.response.output == [call]

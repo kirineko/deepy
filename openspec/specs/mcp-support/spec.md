@@ -1,7 +1,9 @@
 # mcp-support Specification
 
 ## Purpose
-TBD - created by archiving change add-mcp-support. Update Purpose after archive.
+
+Define configured MCP server loading, lifecycle, tool exposure, search inheritance and audit boundaries.
+
 ## Requirements
 ### Requirement: MCP Server Loading
 Deepy SHALL load configured MCP servers through OpenAI Agents SDK MCP server

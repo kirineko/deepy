@@ -5,13 +5,12 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1_048_576
 DEFAULT_COMPACT_TRIGGER_RATIO = 0.8
 DEFAULT_RESERVED_CONTEXT_TOKENS = 50_000
 DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES = 2
-DEFAULT_WEB_SEARCH_SEARXNG_URL = "https://s.kirineko.tech/"
 DEFAULT_UI_THEME = "dark"
 DEFAULT_UI_INTERFACE = "classic"
 DEFAULT_MCP_ENABLED = True
@@ -22,41 +21,24 @@ DEFAULT_MCP_CACHE_TOOLS_LIST = True
 DEFAULT_INPUT_SUGGESTIONS_ENABLED = True
 DEFAULT_UI_VIEW_MODE = "concise"
 DEFAULT_PROVIDER = "deepseek"
-DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1"
-DEFAULT_LOCALHOST_BASE_URL = "http://127.0.0.1:8317/v1"
+DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+DEFAULT_CLI_PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
 DEEPSEEK_REASONING_EFFORTS = {"high", "max"}
 SWITCH_ONLY_REASONING_EFFORTS = {"enabled", "none"}
-OPENROUTER_REASONING_MODES = (
-    "enabled",
-    "disabled",
-    "xhigh",
-    "high",
-    "medium",
-    "low",
-    "minimal",
-    "none",
-)
-OPENROUTER_REASONING_EFFORTS = set(OPENROUTER_REASONING_MODES)
-LOCALHOST_REASONING_MODES = ("none", "low", "medium", "high", "xhigh")
-LOCALHOST_REASONING_EFFORTS = set(LOCALHOST_REASONING_MODES)
-REASONING_EFFORTS = (
-    DEEPSEEK_REASONING_EFFORTS
-    | SWITCH_ONLY_REASONING_EFFORTS
-    | OPENROUTER_REASONING_EFFORTS
-    | LOCALHOST_REASONING_EFFORTS
-)
+CLI_PROXY_REASONING_MODES = ("none", "low", "medium", "high", "xhigh")
+CLI_PROXY_REASONING_EFFORTS = set(CLI_PROXY_REASONING_MODES)
+KIMI_REASONING_MODES = ("low", "high", "max")
 DEEPSEEK_REASONING_MODES = ("none", "high", "max")
 SWITCH_ONLY_THINKING_MODES = ("disabled", "enabled")
 REASONING_MODES = set(DEEPSEEK_REASONING_MODES)
-THINKING_MODES = (
-    set(DEEPSEEK_REASONING_MODES)
-    | set(SWITCH_ONLY_THINKING_MODES)
-    | OPENROUTER_REASONING_EFFORTS
-    | LOCALHOST_REASONING_EFFORTS
+THINKING_MODES = set(
+    DEEPSEEK_REASONING_MODES
+    + SWITCH_ONLY_THINKING_MODES
+    + CLI_PROXY_REASONING_MODES
+    + KIMI_REASONING_MODES
 )
-PROVIDERS = {"deepseek", "openrouter", "xiaomi", "localhost"}
-PROVIDER_API_CHAT_COMPLETIONS = "chat_completions"
+REASONING_EFFORTS = THINKING_MODES
+PROVIDERS = {"deepseek", "mimo", "kimi", "cli_proxy"}
 PROVIDER_API_RESPONSES = "responses"
 UI_THEMES = {"dark", "light"}
 UI_THEME_OPTIONS = (("1", "dark"), ("2", "light"))
@@ -92,7 +74,7 @@ class ProviderInfo:
     default_model: str
     default_thinking_mode: str
     sends_reasoning_effort: bool = True
-    api: str = PROVIDER_API_CHAT_COMPLETIONS
+    api: str = PROVIDER_API_RESPONSES
     api_key_url: str | None = None
 
 
@@ -101,150 +83,119 @@ DeepSeekModelInfo = ModelInfo
 
 DEEPSEEK_MODEL_CATALOG = (
     ModelInfo(
-        name="deepseek-v4-pro",
-        label="DeepSeek V4 Pro",
-        description="Higher quality for agentic coding and complex reasoning.",
-    ),
-    ModelInfo(
-        name="deepseek-v4-flash",
-        label="DeepSeek V4 Flash",
-        description="Lower latency and cost for faster everyday turns.",
+        "deepseek-flash",
+        "DeepSeek V4.1 Flash",
+        "DeepSeek Flash Responses with image input.",
+        supports_image_input=True,
     ),
 )
-OPENROUTER_MODEL_CATALOG = (
+MIMO_MODEL_CATALOG = (
     ModelInfo(
-        name="xiaomi/mimo-v2.5-pro",
-        label="MiMo V2.5 Pro",
-        description="Xiaomi MiMo V2.5 Pro via OpenRouter.",
+        "mimo-v2.5",
+        "MiMo 2.5",
+        "MiMo Responses with image input.",
+        supports_image_input=True,
         default_reasoning_mode="enabled",
     ),
     ModelInfo(
-        name="xiaomi/mimo-v2.5",
-        label="MiMo V2.5",
-        description="Xiaomi MiMo V2.5 via OpenRouter.",
-        supports_image_input=True,
+        "mimo-v2.5-pro",
+        "MiMo 2.5 Pro",
+        "MiMo Pro text reasoning.",
         default_reasoning_mode="enabled",
     ),
 )
-XIAOMI_MODEL_CATALOG = (
-    ModelInfo(
-        name="mimo-v2.5-pro",
-        label="MiMo V2.5 Pro",
-        description="Xiaomi official MiMo V2.5 Pro.",
-        default_reasoning_mode="enabled",
-    ),
-    ModelInfo(
-        name="mimo-v2.5",
-        label="MiMo V2.5",
-        description="Xiaomi official MiMo V2.5.",
-        supports_image_input=True,
-        default_reasoning_mode="enabled",
-    ),
+KIMI_MODEL_CATALOG = (
+    ModelInfo("kimi-k3", "Kimi K3", "Kimi Responses with image input.", supports_image_input=True),
 )
-LOCALHOST_MODEL_CATALOG = (
+CLI_PROXY_MODEL_CATALOG = tuple(
     ModelInfo(
-        name="gpt-5.6-sol",
-        label="GPT-5.6 Sol",
-        description="Flagship GPT-5.6 capability via local CLIProxyAPI.",
+        name,
+        label,
+        "CLI Proxy Responses with image input.",
         supports_image_input=True,
         default_reasoning_mode="medium",
-    ),
-    ModelInfo(
-        name="gpt-5.6-terra",
-        label="GPT-5.6 Terra",
-        description="Balanced GPT-5.6 performance and cost via local CLIProxyAPI.",
-        supports_image_input=True,
-        default_reasoning_mode="medium",
-    ),
-    ModelInfo(
-        name="gpt-5.6-luna",
-        label="GPT-5.6 Luna",
-        description="Efficient high-volume GPT-5.6 via local CLIProxyAPI.",
-        supports_image_input=True,
-        default_reasoning_mode="medium",
-    ),
+    )
+    for name, label in (
+        ("gpt-6-astra", "GPT-6 Astra"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("gpt-5.6-terra", "GPT-5.6 Terra"),
+        ("gpt-5.6-luna", "GPT-5.6 Luna"),
+        ("gpt-5.5", "GPT-5.5"),
+    )
 )
 PROVIDER_CATALOG = (
     ProviderInfo(
-        id="deepseek",
-        label="DeepSeek",
-        description="DeepSeek official OpenAI-compatible API.",
-        default_base_url=DEFAULT_BASE_URL,
-        models=DEEPSEEK_MODEL_CATALOG,
-        thinking_modes=DEEPSEEK_REASONING_MODES,
-        default_model=DEFAULT_MODEL,
-        default_thinking_mode="max",
+        "deepseek",
+        "DeepSeek",
+        "DeepSeek official Responses API.",
+        DEFAULT_BASE_URL,
+        DEEPSEEK_MODEL_CATALOG,
+        DEEPSEEK_REASONING_MODES,
+        DEFAULT_MODEL,
+        "max",
         api_key_url="https://platform.deepseek.com/api_keys",
     ),
     ProviderInfo(
-        id="openrouter",
-        label="OpenRouter",
-        description="OpenRouter gateway for Xiaomi MiMo models.",
-        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
-        models=OPENROUTER_MODEL_CATALOG,
-        thinking_modes=OPENROUTER_REASONING_MODES,
-        default_model="xiaomi/mimo-v2.5-pro",
-        default_thinking_mode="enabled",
-        api_key_url="https://openrouter.ai/workspaces/default/keys",
-    ),
-    ProviderInfo(
-        id="xiaomi",
-        label="Xiaomi",
-        description="Xiaomi official MiMo OpenAI-compatible API.",
-        default_base_url=DEFAULT_XIAOMI_BASE_URL,
-        models=XIAOMI_MODEL_CATALOG,
-        thinking_modes=SWITCH_ONLY_THINKING_MODES,
-        default_model="mimo-v2.5-pro",
-        default_thinking_mode="enabled",
-        sends_reasoning_effort=False,
+        "mimo",
+        "MiMo",
+        "Xiaomi MiMo Responses API.",
+        DEFAULT_MIMO_BASE_URL,
+        MIMO_MODEL_CATALOG,
+        SWITCH_ONLY_THINKING_MODES,
+        "mimo-v2.5",
+        "enabled",
         api_key_url="https://platform.xiaomimimo.com/console/api-keys",
     ),
     ProviderInfo(
-        id="localhost",
-        label="Localhost",
-        description="Local CLIProxyAPI OpenAI Responses endpoint for GPT-5.6.",
-        default_base_url=DEFAULT_LOCALHOST_BASE_URL,
-        models=LOCALHOST_MODEL_CATALOG,
-        thinking_modes=LOCALHOST_REASONING_MODES,
-        default_model="gpt-5.6-terra",
-        default_thinking_mode="medium",
-        api=PROVIDER_API_RESPONSES,
+        "kimi",
+        "Kimi",
+        "Kimi Responses API.",
+        "https://api.moonshot.cn/v1",
+        KIMI_MODEL_CATALOG,
+        KIMI_REASONING_MODES,
+        "kimi-k3",
+        "max",
+        api_key_url="https://platform.moonshot.cn/console/api-keys",
+    ),
+    ProviderInfo(
+        "cli_proxy",
+        "CLI Proxy",
+        "Local CLI Proxy Responses API.",
+        DEFAULT_CLI_PROXY_BASE_URL,
+        CLI_PROXY_MODEL_CATALOG,
+        CLI_PROXY_REASONING_MODES,
+        "gpt-5.6-terra",
+        "medium",
     ),
 )
 PROVIDER_BY_ID = {provider.id: provider for provider in PROVIDER_CATALOG}
 SUPPORTED_DEEPSEEK_MODELS = frozenset(model.name for model in DEEPSEEK_MODEL_CATALOG)
 SUPPORTED_MODELS_BY_PROVIDER = {
-    provider.id: frozenset(model.name for model in provider.models)
-    for provider in PROVIDER_CATALOG
+    provider.id: frozenset(model.name for model in provider.models) for provider in PROVIDER_CATALOG
 }
 
 
 def provider_info_for(provider: str | None) -> ProviderInfo:
-    return PROVIDER_BY_ID.get(provider or DEFAULT_PROVIDER, PROVIDER_BY_ID[DEFAULT_PROVIDER])
+    key = provider or DEFAULT_PROVIDER
+    if key not in PROVIDER_BY_ID:
+        raise ValueError(f"Unsupported provider: {key}. Choose deepseek, mimo, kimi, or cli_proxy.")
+    return PROVIDER_BY_ID[key]
 
 
 def resolve_provider(raw_provider: str | None, base_url: str | None) -> str:
-    provider = (raw_provider or "").strip().lower()
-    if provider in PROVIDERS:
-        return provider
-    inferred = infer_provider_from_base_url(base_url)
-    return inferred or DEFAULT_PROVIDER
+    return provider_info_for((raw_provider or DEFAULT_PROVIDER).strip().lower()).id
 
 
 def infer_provider_from_base_url(base_url: str | None) -> str | None:
-    if not base_url:
-        return None
-    parsed = urlparse(base_url)
-    host = (parsed.hostname or "").lower()
-    if host == "api.deepseek.com":
-        return "deepseek"
-    if host == "openrouter.ai":
-        return "openrouter"
-    if host == "api.xiaomimimo.com":
-        return "xiaomi"
-    if host in {"127.0.0.1", "localhost"}:
-        return "localhost"
-    return None
+    """Identify endpoints for diagnostics, never for configuration selection."""
+    host = (urlparse(base_url or "").hostname or "").lower()
+    return {
+        "api.deepseek.com": "deepseek",
+        "api.xiaomimimo.com": "mimo",
+        "api.moonshot.cn": "kimi",
+        "127.0.0.1": "cli_proxy",
+        "localhost": "cli_proxy",
+    }.get(host)
 
 
 def _raw_provider_value(raw: Mapping[str, Any], env: Mapping[str, str]) -> str | None:
@@ -261,7 +212,7 @@ def is_supported_model_for_provider(model: str, provider: str) -> bool:
 
 
 def allows_custom_model_for_provider(provider: str) -> bool:
-    return provider == "openrouter"
+    return False
 
 
 def is_valid_config_model_for_provider(model: str, provider: str) -> bool:
@@ -291,66 +242,23 @@ def is_valid_thinking_mode_for_provider(value: str, provider: str) -> bool:
     return value in thinking_modes_for_provider(provider)
 
 
-def normalize_reasoning_effort(
-    value: str,
-    *,
-    provider: str,
-    thinking: bool | None,
-) -> str:
-    provider_info = provider_info_for(provider)
-    if provider == "openrouter":
-        if thinking is False or value in {"none", "disabled"}:
-            return "none"
-        if value == "enabled":
-            return "enabled"
-        if value in OPENROUTER_REASONING_EFFORTS:
-            return value
-        return provider_info.default_thinking_mode
-    if provider == "localhost":
-        if thinking is False or value == "none":
-            return "none"
-        if value in LOCALHOST_REASONING_EFFORTS:
-            return value
-        return provider_info.default_thinking_mode
-    if provider_info.thinking_modes == SWITCH_ONLY_THINKING_MODES:
-        if thinking is False or value in {"none", "disabled"}:
-            return "none"
-        if thinking is True or value == "enabled":
-            return "enabled"
-        return provider_info.default_thinking_mode
-    if value in DEEPSEEK_REASONING_EFFORTS:
-        return value
-    return provider_info.default_thinking_mode
+def normalize_reasoning_effort(value: str, *, provider: str, thinking: bool | None) -> str:
+    mode = value
+    if thinking is False:
+        mode = "disabled" if provider == "mimo" else "none"
+    if provider == "mimo" and mode == "none":
+        mode = "disabled"
+    if not is_valid_thinking_mode_for_provider(mode, provider):
+        raise ValueError(f"Unsupported reasoning mode {mode} for {provider}.")
+    return reasoning_effort_for_mode(mode, provider)
 
 
 def thinking_enabled_for_mode(mode: str, provider: str) -> bool:
-    if provider == "openrouter":
-        return mode not in {"none", "disabled"}
-    if provider == "localhost":
-        return mode != "none"
-    if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
-        return mode != "disabled"
-    return mode != "none"
+    return mode not in {"none", "disabled"}
 
 
 def reasoning_effort_for_mode(mode: str, provider: str) -> str:
-    if provider == "openrouter":
-        if mode in {"none", "disabled"}:
-            return "none"
-        if mode == "enabled":
-            return "enabled"
-        if mode in OPENROUTER_REASONING_EFFORTS:
-            return mode
-        return provider_info_for(provider).default_thinking_mode
-    if provider == "localhost":
-        if mode == "none":
-            return "none"
-        if mode in LOCALHOST_REASONING_EFFORTS:
-            return mode
-        return provider_info_for(provider).default_thinking_mode
-    if provider_info_for(provider).thinking_modes == SWITCH_ONLY_THINKING_MODES:
-        return "none" if mode == "disabled" else "enabled"
-    return mode if mode in DEEPSEEK_REASONING_EFFORTS else "max"
+    return "none" if mode == "disabled" else mode
 
 
 def default_config_path() -> Path:

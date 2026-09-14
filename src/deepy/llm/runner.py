@@ -95,9 +95,9 @@ async def run_prompt_once(
     )
     audit_policy = AuditPolicy(lambda: audit_state.mode, resolved_settings.audit)
     session = DeepySession.open(root, session_id) if session_id else DeepySession.create(root)
-    effective_image_attachments = (
-        list(image_attachments or []) if supports_image_input(resolved_settings) else []
-    )
+    effective_image_attachments = list(image_attachments or [])
+    if effective_image_attachments and not supports_image_input(resolved_settings):
+        return RunSummary(output="当前模型不支持图片，请切换图片模型或移除附件。", session_id=session.session_id, complete=False, status="failed")
     initial_todos, _ = normalize_todo_items(session.todo_state())
     runtime = ToolRuntime(
         cwd=root,
@@ -105,6 +105,7 @@ async def run_prompt_once(
         background_tasks=background_tasks or BackgroundTaskManager(),
         should_interrupt=should_interrupt,
         todo_items=initial_todos or [],
+        record_search_usage=session.record_web_search_usage,
     )
     created_mcp_runtime: DeepyMcpRuntime | None = None
     if mcp_runtime is None:
@@ -172,7 +173,7 @@ async def run_prompt_once(
     run_config = RunConfig(
         workflow_name="Deepy",
         trace_include_sensitive_data=False,
-        reasoning_item_id_policy="omit",
+        reasoning_item_id_policy="preserve",
         session_input_callback=build_session_input_callback(resolved_settings),
     )
 

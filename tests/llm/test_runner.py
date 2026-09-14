@@ -314,7 +314,7 @@ async def test_run_prompt_once_wires_agent_session_and_stream(monkeypatch, tmp_p
                 )
             )
             assert run_config.trace_include_sensitive_data is False
-            assert run_config.reasoning_item_id_policy == "omit"
+            assert run_config.reasoning_item_id_policy == "preserve"
             assert callable(run_config.session_input_callback)
             return FakeStream()
 
@@ -363,7 +363,7 @@ async def test_run_prompt_once_sends_supported_image_prompt_as_multipart(monkeyp
     await run_prompt_once(
         "inspect",
         project_root=tmp_path,
-        settings=Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5")),
+        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
         image_attachments=[attachment],
     )
@@ -382,7 +382,7 @@ async def test_run_prompt_once_sends_supported_image_prompt_as_multipart(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_run_prompt_once_ignores_image_prompt_for_deepseek_before_model_call(
+async def test_run_prompt_once_preserves_image_prompt_for_deepseek(
     monkeypatch,
     tmp_path,
 ):
@@ -405,7 +405,7 @@ async def test_run_prompt_once_ignores_image_prompt_for_deepseek_before_model_ca
         image_attachments=[attachment],
     )
 
-    assert captured == ["inspect"]
+    assert captured[0][0]["content"][1]["type"] == "input_image"
     assert summary.status == "completed"
     assert summary.output == "hello"
 
@@ -932,7 +932,7 @@ async def test_run_prompt_once_interrupt_rolls_back_persisted_image_user_input(
     summary = await run_prompt_once(
         "describe",
         project_root=tmp_path,
-        settings=Settings(model=ModelConfig(provider="xiaomi", name="mimo-v2.5")),
+        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
         image_attachments=[attachment],
         should_interrupt=lambda: True,

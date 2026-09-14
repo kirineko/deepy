@@ -2,31 +2,9 @@
 
 ## Purpose
 
-Deepy uses the OpenAI Agents SDK with DeepSeek's OpenAI-compatible Chat
-Completions API while preserving DeepSeek-specific thinking, usage, and error
-behavior.
+Deepy uses the OpenAI Agents SDK Responses API for DeepSeek, MiMo, Kimi and CLI Proxy while preserving provider-specific reasoning, tool continuations, images, usage and recoverable errors.
+
 ## Requirements
-### Requirement: OpenAI Agents SDK Provider
-
-Deepy SHALL construct OpenAI-compatible model access through the OpenAI Agents
-SDK using the provider catalog's API transport.
-
-#### Scenario: Provider is created
-
-- **WHEN** Deepy creates a model provider for a provider whose API transport is
-  Chat Completions
-- **THEN** it SHALL use `AsyncOpenAI(base_url, api_key)`
-- **AND** it SHALL use `OpenAIChatCompletionsModel`
-- **AND** it SHALL pass the selected provider's model id to the model wrapper
-- **AND** it SHALL disable tracing of sensitive model data by default
-
-#### Scenario: Localhost Responses provider is created
-
-- **WHEN** Deepy creates a model provider for provider `localhost`
-- **THEN** it SHALL use `AsyncOpenAI(base_url, api_key)`
-- **AND** it SHALL use `OpenAIResponsesModel`
-- **AND** it SHALL pass the selected localhost model id to the model wrapper
-- **AND** it SHALL disable tracing of sensitive model data by default
 
 ### Requirement: Shared Model Settings
 
@@ -41,15 +19,11 @@ runs, interactive runs, and live doctor checks.
 - **AND** the builder SHALL map thinking parameters according to the resolved provider
 
 ### Requirement: DeepSeek Thinking
-
-Deepy SHALL enable DeepSeek thinking by default for supported DeepSeek models.
+Deepy SHALL enable DeepSeek Flash reasoning by default through Responses settings.
 
 #### Scenario: Model settings are built
-
-- **WHEN** Deepy builds model settings for DeepSeek
-- **THEN** `thinking` SHALL default to enabled
-- **AND** `reasoning_effort` SHALL default to `max`
-- **AND** `ModelSettings` SHALL include usage and disable provider-side storage
+- **WHEN** DeepSeek model settings are built without a reasoning override
+- **THEN** Deepy SHALL use `reasoning.effort=max`, request usage, and disable provider-side storage
 
 ### Requirement: DeepSeek API Errors
 
@@ -65,39 +39,45 @@ content instead of crashing the terminal process.
   traceback
 
 ### Requirement: Reasoning Mode Provider Mapping
-Deepy SHALL map the configured thinking choice to provider-specific
-OpenAI-compatible request parameters through the shared model settings builder.
+Deepy SHALL map reasoning modes to provider-supported Responses parameters centrally.
 
 #### Scenario: DeepSeek reasoning mode none is used
-- **WHEN** Deepy builds model settings for provider `deepseek` with reasoning mode `none`
-- **THEN** `ModelSettings` SHALL disable DeepSeek thinking
-- **AND** it SHALL NOT send `reasoning_effort`
+- **WHEN** the selected DeepSeek mode is none, high or max
+- **THEN** Deepy SHALL send the corresponding Responses reasoning effort and omit Chat Completions thinking fields
 
-#### Scenario: DeepSeek reasoning mode high is used
-- **WHEN** Deepy builds model settings for provider `deepseek` with reasoning mode `high`
-- **THEN** `ModelSettings` SHALL enable DeepSeek thinking
-- **AND** it SHALL send `reasoning_effort` as `high`
+#### Scenario: MiMo mapping
+- **WHEN** MiMo thinking is disabled or enabled
+- **THEN** Deepy SHALL map disabled to Responses `reasoning.effort=none` and enabled to `high`
+- **AND** it SHALL NOT advertise low/medium/high as distinct MiMo reasoning strengths
 
-#### Scenario: DeepSeek reasoning mode max is used
-- **WHEN** Deepy builds model settings for provider `deepseek` with reasoning mode `max`
-- **THEN** `ModelSettings` SHALL enable DeepSeek thinking
-- **AND** it SHALL send `reasoning_effort` as `max`
+#### Scenario: Kimi mapping
+- **WHEN** Kimi reasoning is low, high or max
+- **THEN** Deepy SHALL send the corresponding Responses effort and provider-supported tool-choice/options
+- **AND** it SHALL NOT send unsupported forced tool choices or disabled-thinking settings
+
+#### Scenario: CLI mapping
+- **WHEN** CLI Proxy model settings are built
+- **THEN** Deepy SHALL send only the selected model supported Responses reasoning/options
 
 #### Scenario: Provider mapping is centralized
-- **WHEN** any runtime path builds model settings for the active conversation model
-- **THEN** it SHALL use the shared provider-aware model settings builder
-- **AND** UI code SHALL NOT construct provider-specific thinking payloads directly
+- **WHEN** any runtime path constructs model settings
+- **THEN** it SHALL use shared provider-aware mapping and SHALL NOT construct provider payloads in UI code
+
+#### Scenario: DeepSeek reasoning mode high is used
+- **WHEN** DeepSeek reasoning is high
+- **THEN** Deepy SHALL send Responses reasoning.effort=high
+
+#### Scenario: DeepSeek reasoning mode max is used
+- **WHEN** DeepSeek reasoning is max
+- **THEN** Deepy SHALL send Responses reasoning.effort=max
 
 ### Requirement: Selected Model Provider Construction
-Deepy SHALL construct the provider with the active configured provider and
-model.
+Deepy SHALL construct the provider from the active profile without leaking a previous provider settings.
 
 #### Scenario: Provider is created after model selection
-- **WHEN** Deepy creates an OpenAI-compatible provider after the active provider or model has been changed
-- **THEN** it SHALL pass the selected model name to the provider's model wrapper
-  (`OpenAIChatCompletionsModel` or `OpenAIResponsesModel`)
-- **AND** it SHALL pass the selected provider's resolved base URL to `AsyncOpenAI`
-- **AND** subsequent model requests SHALL use that selected provider and model
+- **WHEN** the active provider or model changes
+- **THEN** subsequent requests SHALL use the selected Responses model, base URL, resolved credentials and supported reasoning settings
+- **AND** provider-specific opaque history items SHALL NOT be forwarded unchanged to another provider
 
 ### Requirement: Thinking Language Guidance
 
@@ -119,29 +99,21 @@ latest natural language when thinking is enabled.
   for visible thinking unless the user requested another language
 
 ### Requirement: Input Suggestion Provider Settings
-Deepy SHALL construct input suggestion model calls as fixed DeepSeek V4 Flash
-non-thinking background requests when the active provider is DeepSeek.
+Deepy SHALL build provider-local fixed input suggestion requests through Responses.
 
 #### Scenario: Input suggestion provider is created
-- **WHEN** Deepy creates provider settings for an input suggestion request
-- **AND** the active provider is `deepseek` or unset DeepSeek-style behavior
-- **THEN** it SHALL use model `deepseek-v4-flash`
-- **AND** it SHALL disable DeepSeek thinking
-- **AND** it SHALL NOT send `reasoning_effort`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
+- **WHEN** an input suggestion is generated
+- **THEN** Deepy SHALL use `deepseek-flash/none`, `mimo-v2.5/disabled`, `kimi-k3/low`, or `gpt-5.6-luna/none` for the respective active provider
+- **AND** it SHALL request usage, disable provider-side storage, and use only the active provider credentials
+- **AND** it SHALL NOT inherit the main reasoning mode or require a separate provider key
 
 #### Scenario: Main reasoning mode is enabled
-- **WHEN** the active conversation model uses reasoning mode `high` or `max`
-- **AND** the active provider is `deepseek`
-- **THEN** input suggestion requests SHALL still disable DeepSeek thinking
-- **AND** they SHALL NOT inherit the active reasoning effort
+- **WHEN** main conversation reasoning is enabled
+- **THEN** suggestions SHALL retain the fixed provider-local reasoning rather than inherit main reasoning
 
 #### Scenario: Main model is changed
-- **WHEN** the active conversation model is changed to any supported DeepSeek
-  model
-- **THEN** input suggestion requests SHALL continue to use
-  `deepseek-v4-flash`
+- **WHEN** the main model changes within the same provider
+- **THEN** suggestions SHALL retain that provider's fixed suggestion model
 
 ### Requirement: On-Demand DeepSeek Balance Lookup
 Deepy SHALL support read-only DeepSeek account balance lookups for explicit
@@ -192,160 +164,19 @@ user-visible status and session-cost surfaces.
 - **THEN** it SHALL NOT print the configured API key
 - **AND** it SHALL NOT include the API key in error text
 
-### Requirement: Third-Party Provider Model Settings
-Deepy SHALL build OpenAI-compatible model settings according to the resolved
-provider.
-
-#### Scenario: OpenRouter reasoning effort is configured
-- **WHEN** Deepy builds model settings for provider `openrouter`
-- **AND** the active model is any configured OpenRouter model id
-- **AND** thinking mode is `xhigh`, `high`, `medium`, `low`, or `minimal`
-- **THEN** `ModelSettings` SHALL send
-  `extra_body={"reasoning": {"enabled": true, "effort": "<selected effort>"}}`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-
-#### Scenario: OpenRouter boolean reasoning is enabled
-- **WHEN** Deepy builds model settings for provider `openrouter`
-- **AND** the active model is any configured OpenRouter model id
-- **AND** thinking mode is `enabled`
-- **THEN** `ModelSettings` SHALL send
-  `extra_body={"reasoning": {"enabled": true}}`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-
-#### Scenario: OpenRouter reasoning is disabled
-- **WHEN** Deepy builds model settings for provider `openrouter`
-- **AND** the active model is any configured OpenRouter model id
-- **AND** thinking mode is `none` or `disabled`
-- **THEN** `ModelSettings` SHALL send
-  `extra_body={"reasoning": {"enabled": false}}`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-
-#### Scenario: Xiaomi MiMo thinking is enabled
-- **WHEN** Deepy builds model settings for provider `xiaomi`
-- **AND** the active model is `mimo-v2.5-pro` or `mimo-v2.5`
-- **AND** thinking mode is `enabled`
-- **THEN** `ModelSettings` SHALL send `extra_body={"thinking": {"type": "enabled"}}`
-- **AND** it SHALL NOT send `reasoning_effort`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-
-#### Scenario: Xiaomi MiMo thinking is disabled
-- **WHEN** Deepy builds model settings for provider `xiaomi`
-- **AND** the active model is `mimo-v2.5-pro` or `mimo-v2.5`
-- **AND** thinking mode is `disabled`
-- **THEN** `ModelSettings` SHALL send `extra_body={"thinking": {"type": "disabled"}}`
-- **AND** it SHALL NOT send `reasoning_effort`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-
 ### Requirement: Provider-Specific Balance Boundaries
 Deepy SHALL keep DeepSeek balance lookup behavior scoped to official DeepSeek
 API hosts.
 
 #### Scenario: Third-party provider status is rendered
-- **WHEN** Deepy renders status, startup, footer, or session-cost information for provider `openrouter` or `xiaomi`
+- **WHEN** Deepy renders status, startup, footer, or session-cost information for provider `mimo`, `kimi`, or `cli_proxy`
 - **THEN** it SHALL show provider and model identity
 - **AND** it SHALL NOT request DeepSeek balance
 - **AND** it SHALL NOT present DeepSeek balance as available for that provider
 
-### Requirement: MiMo Tool Schema Compatibility Boundary
-Deepy SHALL apply MiMo tool schema compatibility only when the resolved provider
-and model identify a Xiaomi MiMo model that requires it.
-
-#### Scenario: Xiaomi official MiMo model is selected
-- **WHEN** Deepy constructs an agent for provider `xiaomi`
-- **AND** the active model is `mimo-v2.5` or `mimo-v2.5-pro`
-- **THEN** Deepy SHALL construct built-in tools using MiMo-compatible
-  model-visible schemas
-- **AND** model tool calls SHALL continue through the standard OpenAI Agents SDK
-  `message.tool_calls` path
-
-#### Scenario: OpenRouter MiMo model is selected
-- **WHEN** Deepy constructs an agent for provider `openrouter`
-- **AND** the active model id is `xiaomi/mimo-v2.5` or
-  `xiaomi/mimo-v2.5-pro`
-- **THEN** Deepy SHALL construct built-in tools using MiMo-compatible
-  model-visible schemas
-- **AND** model tool calls SHALL continue through the standard OpenAI Agents SDK
-  `message.tool_calls` path
-
-#### Scenario: OpenRouter non-MiMo model is selected
-- **WHEN** Deepy constructs an agent for provider `openrouter`
-- **AND** the active model id does not identify Xiaomi MiMo
-- **THEN** Deepy SHALL use the existing built-in tool schemas
-- **AND** it SHALL NOT apply MiMo-specific schema compatibility
-
-#### Scenario: MiMo returns pseudo tool-call content
-- **WHEN** a MiMo model returns assistant content that resembles an XML-like
-  `<tool_call>` block instead of standard `message.tool_calls`
-- **THEN** Deepy SHALL treat that response as ordinary assistant content
-- **AND** it SHALL NOT execute tools by parsing provider-specific pseudo
-  tool-call text
-
-### Requirement: Xiaomi MiMo Reasoning Content Replay
-Deepy SHALL replay Xiaomi direct MiMo reasoning content when required for
-thinking-enabled multi-turn tool calls.
-
-#### Scenario: Xiaomi direct MiMo thinking tool call continues
-- **WHEN** Deepy sends a follow-up request to provider `xiaomi`
-- **AND** the active model is `mimo-v2.5` or `mimo-v2.5-pro`
-- **AND** the previous assistant turn produced `reasoning_content` before a
-  standard tool call
-- **THEN** Deepy SHALL include that prior `reasoning_content` in the replayed
-  assistant message
-- **AND** the tool result follow-up SHALL continue through the standard OpenAI
-  Chat Completions message format
-
-#### Scenario: OpenRouter MiMo thinking tool call continues
-- **WHEN** Deepy sends a follow-up request to provider `openrouter`
-- **AND** the active model id is `xiaomi/mimo-v2.5` or
-  `xiaomi/mimo-v2.5-pro`
-- **THEN** Deepy SHALL NOT add Xiaomi-specific `reasoning_content` replay
-- **AND** it SHALL keep using OpenRouter's reasoning request mapping
-
-### Requirement: OpenRouter Reasoning Alias Replay
-Deepy SHALL preserve OpenRouter plaintext reasoning across Chat Completions tool
-follow-up requests by using the existing reasoning-content replay mechanism.
-
-#### Scenario: OpenRouter response contains plaintext reasoning before a tool call
-- **WHEN** Deepy receives a Chat Completions response from provider `openrouter`
-- **AND** the assistant message contains a non-empty `reasoning` string
-- **AND** the assistant message does not already contain `reasoning_content`
-- **AND** the assistant message contains standard OpenAI `tool_calls`
-- **THEN** Deepy SHALL make that reasoning available to the existing
-  `reasoning_content` replay path
-- **AND** it SHALL preserve the standard `tool_calls` message structure
-
-#### Scenario: OpenRouter tool follow-up is replayed
-- **WHEN** Deepy sends a tool-result follow-up request to provider `openrouter`
-- **AND** the previous assistant turn produced replayable OpenRouter reasoning
-  before a standard tool call
-- **THEN** Deepy SHALL include the prior reasoning as `reasoning_content` on the
-  replayed assistant tool-call message
-- **AND** it SHALL continue using OpenRouter's request-side `reasoning` mapping
-
-#### Scenario: OpenRouter response already contains reasoning content
-- **WHEN** Deepy receives a Chat Completions response from provider `openrouter`
-- **AND** the assistant message already contains `reasoning_content`
-- **THEN** Deepy SHALL NOT overwrite that existing `reasoning_content`
-- **AND** replay SHALL continue through the existing reasoning-content path
-
-#### Scenario: Non-OpenRouter provider returns reasoning
-- **WHEN** Deepy receives or replays reasoning for a provider other than
-  `openrouter`, `deepseek`, or direct Xiaomi MiMo
-- **THEN** Deepy SHALL NOT enable OpenRouter-specific reasoning alias replay
-- **AND** existing DeepSeek and direct Xiaomi reasoning-content behavior SHALL
-  remain unchanged
-
-#### Scenario: OpenRouter response contains reasoning details
-- **WHEN** Deepy receives `reasoning_details` from OpenRouter
-- **THEN** Deepy SHALL NOT synthesize, reorder, or mutate `reasoning_details` as
-  part of the reasoning alias replay
-- **AND** full `reasoning_details` preservation SHALL remain outside the scope
-  of this behavior
+#### Scenario: Non-DeepSeek conversation uses built-in search
+- **WHEN** a non-DeepSeek conversation calls the DeepSeek search service
+- **THEN** Deepy SHALL NOT present DeepSeek balance as the active conversation provider balance
 
 ### Requirement: DeepSeek Cache Prefix Snapshot
 Deepy SHALL compute a deterministic cache-prefix snapshot for DeepSeek model
@@ -422,91 +253,72 @@ the active DeepSeek conversation model and model settings.
 - **THEN** it SHALL use provider-safe compaction settings
 - **AND** it SHALL NOT assume DeepSeek cache behavior is available
 
-### Requirement: MiMo Image Input Request Serialization
-Deepy SHALL serialize prompt image attachments through the shared OpenAI-compatible provider path only for supported MiMo image models.
+### Requirement: Responses Tool History And Streaming
+Deepy SHALL preserve executable tool continuations and observable streaming behavior across supported Responses providers.
 
-#### Scenario: Xiaomi official MiMo image prompt is sent
-- **WHEN** Deepy sends a model request for provider `xiaomi`
-- **AND** the active model is `mimo-v2.5`
-- **AND** the user prompt contains image attachments
-- **THEN** Deepy SHALL send a multipart user message with text and image content blocks
-- **AND** each image block SHALL contain a base64 data URL with the image MIME type
+#### Scenario: Function continuation
+- **WHEN** a provider emits a function call and Deepy produces a result
+- **THEN** the next request SHALL contain the corresponding function output and correct call ID
+- **AND** required provider reasoning items SHALL be retained in a supported Responses form
+- **AND** the model SHALL be able to complete the second round
 
-#### Scenario: OpenRouter MiMo image prompt is sent
-- **WHEN** Deepy sends a model request for provider `openrouter`
-- **AND** the active model is `xiaomi/mimo-v2.5`
-- **AND** the user prompt contains image attachments
-- **THEN** Deepy SHALL send a multipart user message with text and image content blocks
-- **AND** each image block SHALL contain a base64 data URL with the image MIME type
+#### Scenario: Streaming turn
+- **WHEN** a Responses stream emits text, reasoning, tool events and final usage
+- **THEN** Deepy SHALL normalize them into the existing transcript/tool lifecycle
+- **AND** final usage SHALL be recorded once and the completed response SHALL remain replayable
 
-#### Scenario: DeepSeek image prompt is blocked before request
-- **WHEN** Deepy prepares a model request for provider `deepseek`
-- **AND** prompt state contains image attachments
-- **THEN** Deepy SHALL reject or discard the image attachments before provider serialization
-- **AND** it SHALL NOT send image content blocks to DeepSeek
+#### Scenario: Failure or cancellation
+- **WHEN** the stream fails, is incomplete, or the user cancels
+- **THEN** Deepy SHALL leave the UI usable, expose a recoverable outcome and retain valid history
+- **AND** it SHALL NOT invent a completed assistant response or unknown usage
 
-#### Scenario: Text-only prompt is sent
-- **WHEN** the user prompt contains no image attachments
-- **THEN** Deepy SHALL preserve the existing text-only request shape for all providers
+#### Scenario: Storage disabled
+- **WHEN** Deepy continues a conversation or resumes a session
+- **THEN** it SHALL reconstruct valid local history without requiring provider-side stored responses
 
-### Requirement: Image Content Block Normalization
-Deepy SHALL normalize internal image content blocks to the Chat Completions image-url shape when using the OpenAI-compatible model wrapper.
+### Requirement: Unified Responses Provider Access
+Deepy SHALL use Responses API for all supported conversation providers while preserving SDK tool execution and sensitive tracing defaults.
 
-#### Scenario: SDK image block is prepared for Chat Completions
-- **WHEN** model input contains an internal image content block
-- **THEN** Deepy SHALL convert it to a Chat Completions `image_url` content part
-- **AND** the converted part SHALL preserve the original data URL
+#### Scenario: Provider creation
+- **WHEN** Deepy constructs a supported provider
+- **THEN** it SHALL use the selected model, that provider resolved key and base URL for Responses requests
+- **AND** sensitive model-data tracing SHALL remain disabled by default
 
-#### Scenario: SDK text block is prepared for Chat Completions
-- **WHEN** model input contains an internal text content block in the same user message as image content
-- **THEN** Deepy SHALL convert it to a Chat Completions `text` content part
-- **AND** the text part SHALL remain before image parts when it originated from prompt text
+#### Scenario: All model paths
+- **WHEN** a main turn, subagent, input suggestion, compaction, summary, or live doctor invokes a model
+- **THEN** it SHALL use the shared provider-aware Responses construction path
+- **AND** it SHALL NOT fall back to Chat Completions
+- **AND** only the separate built-in WebSearch service SHALL use Anthropic Messages
 
-#### Scenario: SDK image-only message is prepared for Chat Completions
-- **WHEN** model input contains image content blocks without a non-empty text content block
-- **THEN** Deepy SHALL prepend a Chat Completions `text` content part
-- **AND** that text SHALL ask the model to describe the image without executing tools or modifying files
-- **AND** image content parts SHALL remain after that text part
+### Requirement: MiMo Responses Tool Compatibility
+Deepy SHALL scope MiMo tool-schema compatibility to supported direct MiMo models while preserving normal function-call execution.
 
-#### Scenario: Future Kimi path reuses image normalization
-- **WHEN** a future provider uses the same OpenAI-compatible image-url contract
-- **THEN** Deepy's image normalization SHALL be reusable without changing prompt UI state
+#### Scenario: MiMo Responses tool call
+- **WHEN** Deepy constructs tools for `mimo-v2.5` or `mimo-v2.5-pro` under `mimo`
+- **THEN** it SHALL use compatible model-visible schemas and preserve runtime defaults
+- **AND** calls SHALL execute through Responses function_call/function_call_output with matching call IDs
 
-### Requirement: Localhost Responses Provider Model Settings
-Deepy SHALL build Responses API model settings for provider `localhost`.
+#### Scenario: Other provider
+- **WHEN** the provider is not MiMo
+- **THEN** Deepy SHALL NOT apply MiMo-specific schema transformations
 
-#### Scenario: Localhost reasoning effort medium is configured
-- **WHEN** Deepy builds model settings for provider `localhost`
-- **AND** thinking mode is `medium`
-- **THEN** `ModelSettings` SHALL set Responses `reasoning.effort` to `medium`
-- **AND** it SHALL set Responses `reasoning.summary` to `auto`
-- **AND** it SHALL NOT send DeepSeek/OpenRouter/Xiaomi chat thinking `extra_body` payloads
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
+#### Scenario: Pseudo call
+- **WHEN** assistant prose resembles XML or another textual tool-call syntax
+- **THEN** Deepy SHALL treat it as text and SHALL NOT execute it
 
-#### Scenario: Localhost reasoning effort none is configured
-- **WHEN** Deepy builds model settings for provider `localhost`
-- **AND** thinking mode is `none`
-- **THEN** `ModelSettings` SHALL set Responses `reasoning.effort` to `none`
-- **AND** it SHALL NOT set Responses `reasoning.summary`
-- **AND** it SHALL NOT send DeepSeek/OpenRouter/Xiaomi chat thinking `extra_body` payloads
+### Requirement: Responses Image Content Normalization
+Deepy SHALL normalize supported prompt and tool images into Responses input content.
 
-#### Scenario: Localhost reasoning effort xhigh is configured
-- **WHEN** Deepy builds model settings for provider `localhost`
-- **AND** thinking mode is `xhigh`
-- **THEN** `ModelSettings` SHALL set Responses `reasoning.effort` to `xhigh`
-- **AND** it SHALL set Responses `reasoning.summary` to `auto`
+#### Scenario: Image content
+- **WHEN** supported model input includes images
+- **THEN** Deepy SHALL send `input_image` with a base64 data URL preserving MIME type and order
+- **AND** prompt text SHALL use `input_text` before the images
+- **AND** Kimi SHALL NOT receive remote HTTP image URLs
 
-### Requirement: Localhost Input Suggestion Provider Settings
-Deepy SHALL construct localhost input suggestion model calls as fixed
-`gpt-5.6-luna` Chat Completions requests with reasoning effort `none`.
+#### Scenario: Image-only content
+- **WHEN** supported input contains images without text
+- **THEN** Deepy SHALL prepend concise image-description guidance without requesting tool execution or file mutation
 
-#### Scenario: Localhost input suggestion provider is created
-- **WHEN** Deepy creates provider settings for an input suggestion request
-- **AND** the active provider is `localhost`
-- **THEN** it SHALL use model `gpt-5.6-luna`
-- **AND** it SHALL send Chat Completions `reasoning_effort` as `none`
-- **AND** it SHALL request usage metadata
-- **AND** it SHALL disable provider-side storage
-- **AND** it SHALL NOT inherit the active conversation model or thinking mode
-
+#### Scenario: Text-only content
+- **WHEN** input contains no images
+- **THEN** Deepy SHALL preserve valid text-only Responses input without artificial image blocks

@@ -1,7 +1,9 @@
 # background-tasks Specification
 
 ## Purpose
-TBD - created by archiving change add-background-task-management. Update Purpose after archive.
+
+Define the lifecycle, output isolation, shutdown and resource limits of background tasks managed by Deepy.
+
 ## Requirements
 ### Requirement: Background Task Lifecycle
 Deepy SHALL manage background tasks it starts through a Deepy-owned task lifecycle.

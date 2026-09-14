@@ -1498,7 +1498,7 @@ def test_terminal_stream_renderer_keeps_reasoning_text_out_of_status_footer(tmp_
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
     renderer = terminal.TerminalStreamRenderer(
@@ -1688,10 +1688,10 @@ def test_model_slash_command_lists_models(tmp_path):
     rendered = console.export_text()
     assert next_session == "s1"
     assert "Available providers and models:" in rendered
-    assert "openrouter" in rendered
-    assert "xiaomi" in rendered
-    assert "deepseek-v4-pro" in rendered
-    assert "deepseek-v4-flash" in rendered
+    assert "kimi" in rendered
+    assert "mimo" in rendered
+    assert "deepseek-flash" in rendered
+    assert "deepseek-flash" in rendered
     assert "thinking:" in rendered
     assert "none" in rendered
     assert "high" in rendered
@@ -1702,13 +1702,13 @@ def test_model_slash_command_lists_models(tmp_path):
 def test_model_slash_command_sets_model_and_reasoning_directly(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n',
+        '[providers.deepseek]\napi_key = "sk-test"\nmodel = "deepseek-flash"\nthinking = true\nreasoning_effort = "max"\n',
         encoding="utf-8",
     )
     console = Console(record=True)
 
     next_session = _handle_slash_command(
-        SlashCommand("model", "set deepseek-v4-flash high"),
+        SlashCommand("model", "set deepseek-flash high"),
         console,
         tmp_path,
         "s1",
@@ -1718,18 +1718,17 @@ def test_model_slash_command_sets_model_and_reasoning_directly(tmp_path):
     rendered = console.export_text()
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved provider: deepseek · model: deepseek-v4-flash · thinking: high" in rendered
+    assert "Saved provider: deepseek · model: deepseek-flash · thinking: high" in rendered
     assert 'api_key = "sk-test"' in text
     assert 'provider = "deepseek"' in text
-    assert 'name = "deepseek-v4-flash"' in text
-    assert 'thinking = true' in text
-    assert 'reasoning_effort = "high"' in text
+    assert 'model = "deepseek-flash"' in text
+    assert 'reasoning = "high"' in text
 
 
 def test_model_slash_command_sets_reasoning_none_directly(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n',
+        '[providers.deepseek]\nmodel = "deepseek-flash"\nthinking = true\nreasoning_effort = "max"\n',
         encoding="utf-8",
     )
     console = Console(record=True)
@@ -1739,55 +1738,24 @@ def test_model_slash_command_sets_reasoning_none_directly(tmp_path):
         console,
         tmp_path,
         "s1",
-        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-flash")),
     )
 
     assert next_session == "s1"
-    assert "Saved provider: deepseek · model: deepseek-v4-pro · thinking: none" in console.export_text()
-    assert 'thinking = false' in config.read_text(encoding="utf-8")
-
-
-def test_model_slash_command_sets_openrouter_provider_model_and_thinking(tmp_path):
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n',
-        encoding="utf-8",
-    )
-    console = Console(record=True)
-
-    next_session = _handle_slash_command(
-        SlashCommand("model", "set openrouter xiaomi/mimo-v2.5-pro disabled"),
-        console,
-        tmp_path,
-        "s1",
-        settings=Settings(path=config, model=ModelConfig(api_key="sk-test")),
-    )
-
-    text = config.read_text(encoding="utf-8")
-    rendered = console.export_text()
-    assert next_session == "s1"
-    assert "Saved provider: openrouter · model: xiaomi/mimo-v2.5-pro · thinking: none" in rendered
-    assert "Provider switched to openrouter" in rendered
-    assert "Reconfigure the API key" in rendered
-    assert "https://openrouter.ai/workspaces/default/keys" in rendered
-    assert 'api_key = "sk-test"' in text
-    assert 'provider = "openrouter"' in text
-    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
-    assert 'base_url = "https://openrouter.ai/api/v1"' in text
-    assert 'thinking = false' in text
-    assert 'reasoning_effort = "none"' in text
+    assert "Saved provider: deepseek · model: deepseek-flash · thinking: none" in console.export_text()
+    assert 'reasoning = "none"' in config.read_text(encoding="utf-8")
 
 
 def test_model_slash_command_sets_xiaomi_enabled_without_high_effort(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n',
+        '[providers.deepseek]\napi_key = "sk-test"\nmodel = "deepseek-flash"\n',
         encoding="utf-8",
     )
     console = Console(record=True)
 
     next_session = _handle_slash_command(
-        SlashCommand("model", "set xiaomi mimo-v2.5 enabled"),
+        SlashCommand("model", "set mimo mimo-v2.5 enabled"),
         console,
         tmp_path,
         "s1",
@@ -1796,17 +1764,16 @@ def test_model_slash_command_sets_xiaomi_enabled_without_high_effort(tmp_path):
 
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved provider: xiaomi · model: mimo-v2.5 · thinking: enabled" in console.export_text()
-    assert 'provider = "xiaomi"' in text
-    assert 'name = "mimo-v2.5"' in text
-    assert 'thinking = true' in text
-    assert 'reasoning_effort = "enabled"' in text
-    assert 'reasoning_effort = "high"' not in text
+    assert "Saved provider: mimo · model: mimo-v2.5 · thinking: enabled" in console.export_text()
+    assert 'provider = "mimo"' in text
+    assert 'model = "mimo-v2.5"' in text
+    assert 'reasoning = "enabled"' in text
+    assert 'reasoning = "high"' not in text
 
 
 def test_model_slash_command_rejects_invalid_values_without_changing_config(tmp_path):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\nmodel = "deepseek-flash"\n', encoding="utf-8")
     console = Console(record=True)
 
     next_session = _handle_slash_command(
@@ -1814,19 +1781,19 @@ def test_model_slash_command_rejects_invalid_values_without_changing_config(tmp_
         console,
         tmp_path,
         "s1",
-        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-flash")),
     )
 
     assert next_session == "s1"
     assert "Invalid model:" in console.export_text()
-    assert config.read_text(encoding="utf-8") == '[model]\nname = "deepseek-v4-pro"\n'
+    assert config.read_text(encoding="utf-8") == '[providers.deepseek]\nmodel = "deepseek-flash"\n'
 
 
 def test_model_slash_command_uses_numbered_selection(tmp_path):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\nmodel = "deepseek-flash"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["2", "1", "3"])
+    answers = iter(["2", "1", "2"])
 
     next_session = _handle_slash_command(
         SlashCommand("model"),
@@ -1840,22 +1807,21 @@ def test_model_slash_command_uses_numbered_selection(tmp_path):
     rendered = console.export_text()
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Current provider: deepseek · model: deepseek-v4-pro · thinking: max" in rendered
+    assert "Current provider: deepseek · model: deepseek-flash · thinking: max" in rendered
     assert "Providers:" in rendered
-    assert "Models for openrouter:" in rendered
+    assert "Models for mimo:" in rendered
     assert "Thinking:" in rendered
-    assert "Saved provider: openrouter · model: xiaomi/mimo-v2.5-pro · thinking: xhigh" in rendered
-    assert "Provider switched to openrouter" in rendered
-    assert "https://openrouter.ai/workspaces/default/keys" in rendered
-    assert 'provider = "openrouter"' in text
-    assert 'name = "xiaomi/mimo-v2.5-pro"' in text
-    assert 'thinking = true' in text
-    assert 'reasoning_effort = "xhigh"' in text
+    assert "Saved provider: mimo · model: mimo-v2.5 · thinking: enabled" in rendered
+    assert "API key missing for mimo" in rendered
+    assert "https://platform.xiaomimimo.com/console/api-keys" in rendered
+    assert 'active_provider = "mimo"' in text
+    assert 'model = "mimo-v2.5"' in text
+    assert 'reasoning = "enabled"' in text
 
 
 def test_model_slash_command_cancels_without_saving(tmp_path):
     config = tmp_path / "config.toml"
-    original = '[model]\nname = "deepseek-v4-pro"\n'
+    original = '[providers.deepseek]\nmodel = "deepseek-flash"\n'
     config.write_text(original, encoding="utf-8")
     console = Console(record=True)
     answers = iter(["2", ""])
@@ -1865,7 +1831,7 @@ def test_model_slash_command_cancels_without_saving(tmp_path):
         console,
         tmp_path,
         "s1",
-        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-flash")),
         input_func=lambda prompt: next(answers),
     )
 
@@ -1876,10 +1842,10 @@ def test_model_slash_command_cancels_without_saving(tmp_path):
 
 def test_model_slash_command_uses_keyboard_pickers_when_no_input_func(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\nname = "deepseek-v4-pro"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\nmodel = "deepseek-flash"\n', encoding="utf-8")
     console = Console(record=True)
     monkeypatch.setattr("deepy.ui.classic.commands.model_commands.pick_provider", lambda current: "deepseek")
-    monkeypatch.setattr("deepy.ui.classic.commands.model_commands.pick_model", lambda current, *, provider: "deepseek-v4-flash")
+    monkeypatch.setattr("deepy.ui.classic.commands.model_commands.pick_model", lambda current, *, provider: "deepseek-flash")
     monkeypatch.setattr("deepy.ui.classic.commands.model_commands.pick_reasoning_mode", lambda current, *, provider: "high")
 
     next_session = _handle_slash_command(
@@ -1887,14 +1853,14 @@ def test_model_slash_command_uses_keyboard_pickers_when_no_input_func(tmp_path, 
         console,
         tmp_path,
         "s1",
-        settings=Settings(path=config, model=ModelConfig(name="deepseek-v4-pro")),
+        settings=Settings(path=config, model=ModelConfig(name="deepseek-flash")),
     )
 
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved provider: deepseek · model: deepseek-v4-flash · thinking: high" in console.export_text()
-    assert 'name = "deepseek-v4-flash"' in text
-    assert 'reasoning_effort = "high"' in text
+    assert "Saved provider: deepseek · model: deepseek-flash · thinking: high" in console.export_text()
+    assert 'model = "deepseek-flash"' in text
+    assert 'reasoning = "high"' in text
 
 
 def test_help_slash_command_includes_model(tmp_path):
@@ -2415,7 +2381,7 @@ def test_theme_slash_command_rejects_invalid_value(tmp_path):
 
 def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
     answers = iter(["1", "sk-reset", "2", "https://api.deepseek.com", "3", "2"])
 
@@ -2443,14 +2409,14 @@ def test_reset_slash_command_removes_config_and_runs_setup(tmp_path, monkeypatch
     text = config.read_text(encoding="utf-8")
     assert "old-key" not in text
     assert 'api_key = "sk-reset"' in text
-    assert 'name = "deepseek-v4-flash"' in text
+    assert 'model = "deepseek-flash"' in text
     assert 'theme = "light"' in text
 
 
 def test_reset_slash_command_warns_when_selected_ui_differs_from_running_ui(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "old-key"\n\n[ui]\ninterface = "classic"\ntheme = "dark"\n',
+        '[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ninterface = "classic"\ntheme = "dark"\n',
         encoding="utf-8",
     )
     console = Console(record=True)
@@ -2486,9 +2452,9 @@ def test_reset_slash_command_warns_when_selected_ui_differs_from_running_ui(tmp_
 
 def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
     console = Console(record=True)
-    answers = iter(["3", "sk-mi-reset", "1", "", "2", "2"])
+    answers = iter(["2", "sk-mi-reset", "1", "", "2", "2"])
 
     class FakePromptSession:
         def prompt(self, prompt, default="", is_password=False):
@@ -2508,92 +2474,15 @@ def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatc
     assert next_session == "s1"
     assert "https://platform.xiaomimimo.com/console/api-keys" in rendered
     text = config.read_text(encoding="utf-8")
-    assert 'provider = "xiaomi"' in text
+    assert 'provider = "mimo"' in text
     assert 'api_key = "sk-mi-reset"' in text
-    assert 'name = "mimo-v2.5-pro"' in text
-    assert 'thinking = true' in text
-    assert 'reasoning_effort = "enabled"' in text
-
-
-def test_reset_slash_command_accepts_openrouter_custom_model_and_effort(tmp_path, monkeypatch):
-    config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
-    console = Console(record=True)
-    answers = iter([
-        "2",
-        "sk-or-reset",
-        "anthropic/claude-sonnet-4.5",
-        "",
-        "1",
-        "minimal",
-        "3",
-    ])
-
-    class FakePromptSession:
-        def prompt(self, prompt, default="", is_password=False):
-            return next(answers)
-
-    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
-
-    next_session = _handle_slash_command(
-        SlashCommand("reset"),
-        console,
-        tmp_path,
-        "s1",
-        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
-    )
-
-    rendered = console.export_text()
-    text = config.read_text(encoding="utf-8")
-    assert next_session == "s1"
-    assert "paste any model name copied from the OpenRouter models page" in rendered
-    assert "Reasoning effort:" in rendered
-    assert "default" in rendered
-    assert "minimal" in rendered
-    assert 'provider = "openrouter"' in text
-    assert 'api_key = "sk-or-reset"' in text
-    assert 'name = "anthropic/claude-sonnet-4.5"' in text
-    assert 'reasoning_effort = "minimal"' in text
-
-
-def test_reset_slash_command_openrouter_disabled_skips_effort_prompt(tmp_path, monkeypatch):
-    config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n', encoding="utf-8")
-    console = Console(record=True)
-    answers = iter([
-        "2",
-        "sk-or-reset",
-        "anthropic/claude-sonnet-4.5",
-        "",
-        "2",
-        "3",
-    ])
-
-    class FakePromptSession:
-        def prompt(self, prompt, default="", is_password=False):
-            return next(answers)
-
-    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
-
-    next_session = _handle_slash_command(
-        SlashCommand("reset"),
-        console,
-        tmp_path,
-        "s1",
-        settings=Settings(path=config, ui=UiConfig(theme="dark", theme_configured=True)),
-    )
-
-    rendered = console.export_text()
-    text = config.read_text(encoding="utf-8")
-    assert next_session == "s1"
-    assert "Reasoning effort:" not in rendered
-    assert 'thinking = false' in text
-    assert 'reasoning_effort = "none"' in text
+    assert 'model = "mimo-v2.5"' in text
+    assert 'reasoning = "enabled"' in text
 
 
 def test_reset_slash_command_cancellation_restores_existing_config(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    original = '[model]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
+    original = '[providers.deepseek]\napi_key = "old-key"\n\n[ui]\ntheme = "dark"\n'
     config.write_text(original, encoding="utf-8")
     console = Console(record=True)
     answers = iter([
@@ -2728,7 +2617,7 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
         active_work="thinking",
     )
@@ -2739,7 +2628,7 @@ def test_working_status_text_preserves_compact_footer_with_active_work(tmp_path)
     assert "time 0s" in rendered
     assert "esc to interrupt" in rendered
     assert "running Read README.md" in rendered
-    assert "model deepseek-v4-pro[max]" not in rendered
+    assert "model deepseek-flash[max]" not in rendered
     assert f"cwd {tmp_path}" not in rendered
     assert "ctx unknown/1K" not in rendered
     assert "Working (" not in rendered
@@ -2764,7 +2653,7 @@ def test_local_command_status_text_preserves_compact_footer(tmp_path):
     assert "time 0s" in rendered
     assert "esc to interrupt" in rendered
     assert "local command" in rendered
-    assert "model deepseek-v4-pro[max]" not in rendered
+    assert "model deepseek-flash[max]" not in rendered
     assert "ctx unknown/2K" not in rendered
     assert "printf ok" in rendered
     assert "Running local command (" not in rendered
@@ -3254,7 +3143,7 @@ def test_status_display_writes_runtime_status_in_output_flow_without_scroll_regi
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
     buffer = TtyBuffer()
@@ -3274,7 +3163,7 @@ def test_status_display_writes_runtime_status_in_output_flow_without_scroll_regi
     assert "\x1b[r" not in output
     assert "\x1b[24;1H" not in output
     assert "\x1b[23;1H" not in output
-    assert "model deepseek-v4-pro[max]" not in output
+    assert "model deepseek-flash[max]" not in output
     assert "thinking" in output
     assert "48;2" not in output
 
@@ -3289,7 +3178,7 @@ def test_status_display_clears_inline_runtime_status_before_output(tmp_path, mon
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
     buffer = TtyBuffer()
@@ -3328,7 +3217,7 @@ def test_status_display_keeps_inline_runtime_status_for_nonprinting_events(tmp_p
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
     )
     buffer = TtyBuffer()
@@ -3563,12 +3452,12 @@ def test_format_context_footer_shows_unknown_context_window_without_usage(tmp_pa
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
-    assert "model deepseek-v4-flash[high]" in toolbar
-    assert "model deepseek-v4-flash " not in toolbar
+    assert "model deepseek-flash[high]" in toolbar
+    assert "model deepseek-flash " not in toolbar
     assert "thinking high" not in toolbar
     assert f"cwd {tmp_path}" in toolbar
     assert "ctx unknown/1K" in toolbar
@@ -3589,7 +3478,7 @@ def test_format_context_footer_marks_loaded_agents_md(tmp_path):
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3605,7 +3494,7 @@ def test_format_context_footer_ignores_empty_agents_md(tmp_path):
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3625,7 +3514,7 @@ def test_format_context_footer_does_not_use_cumulative_usage_as_context_window(t
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3650,7 +3539,7 @@ def test_format_context_footer_shows_latest_request_context_window_only(tmp_path
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3680,7 +3569,7 @@ def test_format_context_footer_shows_cache_health(tmp_path):
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3699,7 +3588,7 @@ def test_format_context_footer_marks_next_auto_compact_from_context_window(tmp_p
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3720,7 +3609,7 @@ async def test_format_context_footer_uses_compacted_context_window_checkpoint(tm
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=10_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-flash", thinking=True, reasoning_effort="high"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="high"),
         ),
     )
 
@@ -3739,14 +3628,14 @@ def test_build_status_footer_uses_visual_segments_and_mcp_count(tmp_path):
         project_root=tmp_path,
         settings=Settings(
             context=ContextConfig(window_tokens=1_000, compact_trigger_ratio=0.8),
-            model=ModelConfig(name="deepseek-v4-pro", thinking=True, reasoning_effort="max"),
+            model=ModelConfig(name="deepseek-flash", thinking=True, reasoning_effort="max"),
         ),
         mcp_runtime=runtime,
         background_tasks=SimpleNamespace(running_count=lambda: 2),  # type: ignore[arg-type]
         active_work="thinking 3s",
     )
 
-    assert footer.plain.startswith("provider deepseek · thinking 3s · model deepseek-v4-pro[max]")
+    assert footer.plain.startswith("provider deepseek · thinking 3s · model deepseek-flash[max]")
     assert "mcp 1" in footer.plain
     assert "bg 2" in footer.plain
     assert "[AGENTS.md]" in footer.plain
@@ -3893,7 +3782,7 @@ def test_run_interactive_submits_supported_image_only_prompt_as_attachment(tmp_p
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
     result = terminal.run_interactive(
-        Settings(model=ModelConfig(provider="openrouter", name="xiaomi/mimo-v2.5")),
+        Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -4087,8 +3976,8 @@ def test_run_interactive_new_session_resets_next_run_session_id(tmp_path, monkey
     assert "Esc interrupt" not in str(toolbars)
     toolbar_texts = [_toolbar_text(toolbar) for toolbar in toolbars]
     assert "Ctrl+D twice exit" not in str(toolbar_texts)
-    assert "model deepseek-v4-pro[max]" in str(toolbar_texts)
-    assert "model deepseek-v4-pro " not in str(toolbar_texts)
+    assert "model deepseek-flash[max]" in str(toolbar_texts)
+    assert "model deepseek-flash " not in str(toolbar_texts)
     assert "thinking max" not in str(toolbar_texts)
     assert f"cwd {tmp_path}" in str(toolbar_texts)
     assert "ctx 900/1K (90.0%) · compact next" in toolbar_texts[1]
@@ -4332,12 +4221,12 @@ def test_run_interactive_stops_pending_question_loop_at_limit(tmp_path, monkeypa
 def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
     config.write_text(
-        '[model]\napi_key = "sk-test"\nname = "deepseek-v4-pro"\nthinking = true\nreasoning_effort = "max"\n'
+        '[providers.deepseek]\napi_key = "sk-test"\nmodel = "deepseek-flash"\nthinking = true\nreasoning_effort = "max"\n'
         '\n[ui]\ntheme = "dark"\n',
         encoding="utf-8",
     )
     console = Console(record=True, width=160)
-    prompts = iter(["/model set deepseek-v4-flash high", "hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
+    prompts = iter(["/model set deepseek-flash high", "hello", CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
     observed: list[tuple[str, str]] = []
 
     async def fake_run_once(prompt, **kwargs):
@@ -4351,7 +4240,7 @@ def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypat
     result = terminal.run_interactive(
         Settings(
             path=config,
-            model=ModelConfig(api_key="sk-test", name="deepseek-v4-pro"),
+            model=ModelConfig(api_key="sk-test", name="deepseek-flash"),
             ui=UiConfig(theme="dark", theme_configured=True),
         ),
         project_root=tmp_path,
@@ -4361,7 +4250,7 @@ def test_run_interactive_reloads_settings_after_model_change(tmp_path, monkeypat
     )
 
     assert result == 0
-    assert observed == [("deepseek-v4-flash", "high")]
+    assert observed == [("deepseek-flash", "high")]
 
 
 def test_run_interactive_refreshes_skill_completion_after_market_install(tmp_path, monkeypatch):
@@ -4717,7 +4606,7 @@ def test_stable_non_status_exit_does_not_fetch_balance(tmp_path, monkeypatch):
 
 def test_run_interactive_prompts_for_missing_theme_before_welcome(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
-    config.write_text('[model]\napi_key = "sk-test"\n', encoding="utf-8")
+    config.write_text('[providers.deepseek]\napi_key = "sk-test"\n', encoding="utf-8")
     console = Console(record=True, width=160)
     events = iter([CTRL_D_EXIT_CONFIRM_SIGNAL, CTRL_D_EXIT_CONFIRM_SIGNAL])
 

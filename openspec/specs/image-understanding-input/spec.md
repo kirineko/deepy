@@ -1,10 +1,13 @@
 # image-understanding-input Specification
 
 ## Purpose
-TBD - created by archiving change add-mimo-image-understanding. Update Purpose after archive.
+
+Deepy validates and preserves image attachments across prompts, tool results and local sessions, and sends them through Responses only for image-capable catalog models.
+
 ## Requirements
+
 ### Requirement: Prompt Image Attachments
-Deepy SHALL support structured image attachments on user prompts for explicitly supported MiMo image-understanding models.
+Deepy SHALL support structured image attachments on user prompts for catalogued image-capable Responses models.
 
 #### Scenario: Supported model receives pasted images
 - **WHEN** the active model supports image input
@@ -28,82 +31,74 @@ Deepy SHALL support structured image attachments on user prompts for explicitly 
 - **AND** it SHALL preserve the current prompt text
 - **AND** it SHALL keep accepting text input and text-only submission
 
-### Requirement: Supported Image Model Set
-Deepy SHALL treat image input as supported only for explicitly allowlisted
-image-capable models.
-
-#### Scenario: Xiaomi official MiMo model is active
-- **WHEN** the active provider is `xiaomi`
-- **AND** the active model is `mimo-v2.5`
-- **THEN** Deepy SHALL allow image attachments on user prompts
-
-#### Scenario: Xiaomi official MiMo Pro model is active
-- **WHEN** the active provider is `xiaomi`
-- **AND** the active model is `mimo-v2.5-pro`
-- **THEN** Deepy SHALL treat image attachments as unsupported
-- **AND** it SHALL NOT send image content blocks to the model request
-
-#### Scenario: OpenRouter MiMo model is active
-- **WHEN** the active provider is `openrouter`
-- **AND** the active model is `xiaomi/mimo-v2.5`
-- **THEN** Deepy SHALL allow image attachments on user prompts
-
-#### Scenario: OpenRouter MiMo Pro model is active
-- **WHEN** the active provider is `openrouter`
-- **AND** the active model is `xiaomi/mimo-v2.5-pro`
-- **THEN** Deepy SHALL treat image attachments as unsupported
-- **AND** it SHALL NOT send image content blocks to the model request
-
-#### Scenario: Localhost GPT-5.6 model is active
-- **WHEN** the active provider is `localhost`
-- **AND** the active model is `gpt-5.6-sol`, `gpt-5.6-terra`, or `gpt-5.6-luna`
-- **THEN** Deepy SHALL allow image attachments on user prompts
-
-#### Scenario: DeepSeek model is active
-- **WHEN** the active provider is `deepseek`
-- **THEN** Deepy SHALL treat image attachments as unsupported
-- **AND** it SHALL NOT send image content blocks to the model request
-
-#### Scenario: Future Kimi model is not yet active
-- **WHEN** the implementation contains internal image-content abstractions
-- **THEN** those abstractions SHALL NOT require Xiaomi-specific naming
-- **AND** Deepy SHALL NOT expose Kimi K2.6 image input as supported until a later change explicitly adds the model
-
 ### Requirement: Image Attachment Validation
-Deepy SHALL validate pasted image attachments before adding them to prompt state.
+Deepy SHALL validate images at paste time and revalidate the complete request against current model capabilities before sending.
 
 #### Scenario: Supported image is pasted
-- **WHEN** clipboard image data has a supported MIME type and does not exceed the configured image size limit
-- **THEN** Deepy SHALL attach the image to the prompt
-- **AND** it SHALL assign the image a stable display label for that prompt
+- **WHEN** an image has a supported MIME type and meets active limits
+- **THEN** Deepy SHALL attach it with a stable label and preserve existing draft text
+
+#### Scenario: Limits
+- **WHEN** Deepy validates image input
+- **THEN** it SHALL accept only PNG, JPEG, WebP or GIF, with application limits of 10 MiB per image, eight images per submitted turn, and 32 MiB for the encoded request body
+- **AND** it SHALL also enforce any smaller provider-specific limit
+- **AND** request-body validation SHALL include replayed history images
 
 #### Scenario: Unsupported image format is pasted
-- **WHEN** clipboard image data has an unsupported MIME type
-- **THEN** Deepy SHALL reject the image with a concise non-blocking error
-- **AND** it SHALL preserve the current prompt text
+- **WHEN** MIME type, image size or image count exceeds a limit
+- **THEN** Deepy SHALL reject the new attachment with a concise non-blocking explanation and preserve the draft
+
+#### Scenario: Model changes after paste
+- **WHEN** a draft contains images and the selected model no longer supports them
+- **THEN** Deepy SHALL preserve the draft and block incompatible submission with guidance to remove attachments or select an image-capable model
+- **AND** it SHALL NOT silently drop images or send an unsupported payload
 
 #### Scenario: Oversized image is pasted
-- **WHEN** clipboard image data exceeds the configured image size limit
-- **THEN** Deepy SHALL reject the image with a concise non-blocking error
-- **AND** it SHALL preserve the current prompt text
+- **WHEN** clipboard image data exceeds the active size limit
+- **THEN** Deepy SHALL reject the image with a non-blocking error and preserve the current prompt text
 
 ### Requirement: Image Content Transport
-Deepy SHALL use OpenAI-compatible multipart content blocks for supported image prompts.
+Deepy SHALL serialize image prompts as valid Responses input content while preserving user-visible attachment semantics.
 
 #### Scenario: Image prompt is converted for model input
-- **WHEN** Deepy prepares a supported image prompt for the model
-- **THEN** it SHALL represent prompt text as a text content block
-- **AND** it SHALL represent each image as an image URL content block containing a `data:<mime>;base64,<data>` URL
-- **AND** it SHALL NOT append image labels or base64 data to the natural-language prompt text
+- **WHEN** a supported image prompt is sent
+- **THEN** Deepy SHALL send text as input_text followed by ordered input_image parts containing base64 data URLs
+- **AND** it SHALL NOT append base64 or display labels to natural-language prompt text
 
 #### Scenario: Image-only prompt is converted for model input
-- **WHEN** Deepy prepares a supported prompt that contains image attachments and no user prompt text
-- **THEN** it SHALL prepend a concise default text content block before the image URL blocks
-- **AND** the default text SHALL ask for image description without tool execution or file modification
-- **AND** the displayed transcript MAY continue to show only the compact image labels
+- **WHEN** a user submits images without prompt text
+- **THEN** Deepy SHALL prepend concise image-description guidance without requesting tool execution or file modification
+- **AND** the transcript SHALL continue displaying compact attachment labels
 
 #### Scenario: Provider rejects image request
-- **WHEN** a supported image model returns a provider API error for an image request
-- **THEN** Deepy SHALL surface the provider error through the existing model-turn error path
-- **AND** the interactive session SHALL continue
+- **WHEN** an image request returns a provider error
+- **THEN** Deepy SHALL surface a recoverable model-turn error and keep the interactive session usable
 
+### Requirement: Responses Image Model Set
+Deepy SHALL support images only for model/API combinations explicitly marked image-capable in the shared catalog.
+
+#### Scenario: Supported image selection
+- **WHEN** the active model is DeepSeek `deepseek-flash`, MiMo `mimo-v2.5`, Kimi `kimi-k3`, or one of the five supported CLI Proxy models
+- **THEN** Deepy SHALL allow validated image attachments through Responses
+
+#### Scenario: MiMo Pro
+- **WHEN** the active model is `mimo-v2.5-pro`
+- **THEN** Deepy SHALL reject new image pastes and SHALL NOT send image content to that model
+
+#### Scenario: Other modalities
+- **WHEN** an input path checks audio, video, PDF or generation capabilities
+- **THEN** Deepy SHALL NOT advertise these as native supported modalities in this change
+
+### Requirement: Recoverable Read Image Batch Validation
+Deepy SHALL validate the aggregate image count of a batch Read result before returning image attachments to the agent.
+
+#### Scenario: Read batch exceeds the image limit
+- **WHEN** a batch Read produces more than eight images
+- **THEN** Read SHALL return an error explaining the limit and asking for a smaller batch
+- **AND** the error SHALL contain no image attachments
+- **AND** the agent SHALL be able to receive the tool error and continue with a smaller Read request
+
+#### Scenario: Read batch is within the image limit
+- **WHEN** a batch Read produces at most eight images with optional text targets
+- **THEN** Deepy SHALL preserve the successful image attachments and text results in target order
+- **AND** text targets SHALL NOT count toward the image limit

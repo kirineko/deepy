@@ -4,6 +4,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from deepy.audit import AuditPolicy
+from deepy.config import ModelConfig
 
 from .builtin import ToolRuntime
 from .schema_compat import make_mimo_compatible_tool_schema
@@ -30,6 +31,7 @@ def build_function_tools(
     preferred_mcp_web_search_tools: list[str] | None = None,
     include_tools: set[str] | frozenset[str] | None = None,
     audit_policy: AuditPolicy | None = None,
+    read_model_config: ModelConfig | None = None,
 ) -> list[Tool]:
     from agents.tool import FunctionTool
 
@@ -156,7 +158,10 @@ def build_function_tools(
         args, error, repair_metadata = _tool_args(raw_input, "Read", READ_SCHEMA)
         if error is not None:
             return error
-        result = await asyncio.to_thread(runtime.read, args)
+        if read_model_config is None:
+            result = await asyncio.to_thread(runtime.read, args)
+        else:
+            result = await asyncio.to_thread(runtime.read, args, model_config=read_model_config)
         return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_write(_context: object, raw_input: str) -> str:
@@ -182,7 +187,7 @@ def build_function_tools(
         args, error, repair_metadata = _tool_args(raw_input, "WebSearch", WEB_SEARCH_SCHEMA)
         if error is not None:
             return error
-        result = await asyncio.to_thread(runtime.web_search, _string_arg(args, "query"))
+        result = await runtime.web_search(_string_arg(args, "query"))
         return _merge_tool_result_metadata(result, repair_metadata)
 
     async def invoke_web_fetch(_context: object, raw_input: str) -> str:

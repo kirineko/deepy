@@ -117,7 +117,12 @@ class PromptTextArea(TextArea):
             return
         raw_text = self.text.strip()
         if isinstance(panel, PromptPanel):
-            text, image_attachments = panel.collect_image_prompt(raw_text)
+            from deepy.llm.multimodal import ImageAttachmentError
+            try:
+                text, image_attachments = panel.collect_image_prompt(raw_text)
+            except ImageAttachmentError as exc:
+                self.post_message(self.ImagePasteNotice(str(exc)))
+                return
         else:
             text = raw_text
             image_attachments = []
@@ -401,6 +406,8 @@ class PromptPanel(Vertical):
 
     def collect_image_prompt(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
         if self.image_attachments is None:
+            return text, []
+        if text == "/model" or text.startswith("/model "):
             return text, []
         attachments = self.image_attachments.collect_and_reset()
         self.refresh_image_status()

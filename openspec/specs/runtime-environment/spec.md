@@ -1,7 +1,9 @@
 # runtime-environment Specification
 
 ## Purpose
-TBD - created by archiving change improve-windows-powershell-support. Update Purpose after archive.
+
+Provide explicit runtime and encoding context for portable model guidance and platform-appropriate local command execution.
+
 ## Requirements
 ### Requirement: Runtime Environment Classification
 

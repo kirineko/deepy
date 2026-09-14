@@ -307,8 +307,14 @@ def prompt_for_input(
     image_attachments: ImageAttachmentController | None = None,
 ) -> str:
     prompt_message = PROMPT_MESSAGE if message is None else message
+    restored = getattr(session, "deepy_restored_draft", "")
+    if restored:
+        delattr(session, "deepy_restored_draft")
+    elif image_attachments and image_attachments.attachments:
+        restored = " ".join(item.display_label for item in image_attachments.attachments)
     return session.prompt(
         prompt_message,
+        default=restored,
         placeholder=input_suggestion_placeholder(input_suggestions),
         bottom_toolbar=prompt_toolbar_with_images(bottom_toolbar, image_attachments),
     ).strip()
@@ -371,5 +377,3 @@ def prompt_style(palette: UiPalette | None = None) -> Style:
             "bottom-toolbar": f"{toolbar_base} {palette.toolbar_foreground}",
         }
     )
-
-

@@ -62,7 +62,7 @@ def test_build_welcome_tips_includes_builtins_and_loaded_skills_only(tmp_path):
 
 def test_build_welcome_settings_uses_deepy_fields(tmp_path):
     settings = build_welcome_settings(
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         thinking_enabled=True,
         reasoning_effort="max",
         project_root=Path("/tmp/home/project"),
@@ -73,7 +73,7 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
     assert [(item.label, item.value) for item in settings] == [
         ("Version", "0.1.0"),
         ("Provider", "deepseek"),
-        ("Model", "deepseek-v4-pro"),
+        ("Model", "deepseek-flash"),
         ("Thinking", "max"),
         ("CWD", "~/project"),
     ]
@@ -81,7 +81,7 @@ def test_build_welcome_settings_uses_deepy_fields(tmp_path):
 
 def test_build_welcome_settings_uses_none_when_thinking_is_disabled(tmp_path):
     settings = build_welcome_settings(
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         thinking_enabled=False,
         reasoning_effort="max",
         project_root=Path("/tmp/home/project"),
@@ -94,7 +94,7 @@ def test_build_welcome_settings_uses_none_when_thinking_is_disabled(tmp_path):
 
 def test_build_welcome_settings_includes_theme_when_available(tmp_path):
     settings = build_welcome_settings(
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         thinking_enabled=True,
         reasoning_effort="max",
         project_root=tmp_path,
@@ -108,7 +108,7 @@ def test_build_welcome_settings_includes_theme_when_available(tmp_path):
 
 def test_build_welcome_settings_shows_available_update(tmp_path):
     settings = build_welcome_settings(
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         thinking_enabled=True,
         reasoning_effort="max",
         project_root=tmp_path,
@@ -141,7 +141,7 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
 
     console.print(
         build_welcome_panel(
-            model="deepseek-v4-pro",
+            model="deepseek-flash",
             thinking_enabled=True,
             reasoning_effort="max",
             project_root=tmp_path,
@@ -163,7 +163,7 @@ def test_build_welcome_panel_renders_settings_and_tips(tmp_path):
     assert "Read, edit" in rendered
     assert "0.1.0" in rendered
     assert "deepseek" in rendered
-    assert "deepseek-v4-pro" in rendered
+    assert "deepseek-flash" in rendered
     assert "Reasoning" in rendered
     assert "Theme" in rendered
     assert "light" in rendered
@@ -177,7 +177,7 @@ def test_build_welcome_panel_prefers_wide_low_strip(tmp_path):
 
     console.print(
         build_welcome_panel(
-            model="deepseek-v4-pro",
+            model="deepseek-flash",
             thinking_enabled=True,
             reasoning_effort="max",
             project_root=tmp_path,

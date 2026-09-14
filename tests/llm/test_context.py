@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from deepy.llm.multimodal import UnsupportedImageInputError
+
 from deepy.config.settings import ContextConfig, Settings
 from deepy.config.settings import ModelConfig
 from deepy.llm.context import (
@@ -22,8 +25,8 @@ def test_session_input_callback_does_not_trim_or_compact():
     assert prepared == history + new_input
 
 
-def test_session_input_callback_strips_images_for_text_only_model():
-    settings = Settings(model=ModelConfig(provider="deepseek", name="deepseek-v4-pro"))
+def test_session_input_callback_blocks_images_for_text_only_model():
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro"))
     callback = build_session_input_callback(settings)
     history = [
         {
@@ -40,16 +43,13 @@ def test_session_input_callback_strips_images_for_text_only_model():
     ]
     new_input = [{"role": "user", "content": "continue"}]
 
-    prepared = callback(history, new_input)
-
-    assert prepared == [
-        {"role": "user", "content": [{"type": "input_text", "text": "describe"}]},
-        {"role": "user", "content": "continue"},
-    ]
+    with pytest.raises(UnsupportedImageInputError):
+        callback(history, new_input)
+    assert history[0]["content"][1]["type"] == "input_image"
 
 
 def test_session_input_callback_preserves_images_for_supported_model():
-    settings = Settings(model=ModelConfig(provider="openrouter", name="xiaomi/mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
     callback = build_session_input_callback(settings)
     history = [
         {
@@ -65,8 +65,8 @@ def test_session_input_callback_preserves_images_for_supported_model():
     assert callback(history, new_input) == history + new_input
 
 
-def test_session_input_callback_strips_images_from_resumed_history_but_keeps_text_turn():
-    settings = Settings(model=ModelConfig(provider="deepseek", name="deepseek-v4-pro"))
+def test_session_input_callback_blocks_incompatible_resumed_image_history():
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro"))
     callback = build_session_input_callback(settings)
     history = [
         {
@@ -91,11 +91,9 @@ def test_session_input_callback_strips_images_from_resumed_history_but_keeps_tex
         }
     ]
 
-    assert callback(history, new_input) == [
-        {"role": "user", "content": [{"type": "input_text", "text": "old image"}]},
-        {"role": "assistant", "content": "old answer"},
-        {"role": "user", "content": [{"type": "input_text", "text": "new text"}]},
-    ]
+    with pytest.raises(UnsupportedImageInputError):
+        callback(history, new_input)
+    assert history[0]["content"][1]["type"] == "input_image"
 
 
 def test_should_auto_compact_uses_ratio_or_reserved_context():

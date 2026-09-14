@@ -1,7 +1,9 @@
 # system-audit Specification
 
 ## Purpose
-TBD - created by archiving change add-system-audit-modes. Update Purpose after archive.
+
+Define audit modes and the SDK approval lifecycle for model-requested side effects and file mutation previews.
+
 ## Requirements
 ### Requirement: Audit Modes
 

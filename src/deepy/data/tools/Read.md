@@ -15,3 +15,7 @@ batch call with `files` instead of serial single-file reads.
 Text output includes line numbers and total line metadata. Successful text reads
 record runtime-managed read state for later `Write` or `Update`; the model does
 not need to copy snapshot ids, tokens, or content hashes.
+
+Read at most eight images per batch. A larger image batch returns an error with
+no image attachments; retry with fewer images. Text targets do not count toward
+this limit.

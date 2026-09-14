@@ -1,639 +1,161 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-
 import pytest
+import httpx
+from agents import Agent, Runner, function_tool
+from openai import AsyncOpenAI
 
-from agents import OpenAIResponsesModel
-
-from deepy.config.settings import ModelConfig, Settings
-from deepy.llm.provider import (
-    DeepyOpenAIChatCompletionsModel,
-    build_provider_bundle,
-    preserve_openrouter_reasoning_content_alias,
-    should_replay_chat_completion_reasoning_content,
-    should_replay_deepseek_reasoning_content,
-)
-from deepy.llm.cache_context import (
-    build_cache_prefix_snapshot,
-    capture_cache_prefix_diagnostics,
-    set_current_cache_prefix_snapshot,
-    reset_current_cache_prefix_snapshot,
-)
+from deepy.config import Settings
+from deepy.config.providers import PROVIDER_CATALOG
+from deepy.llm.provider import DeepyResponsesModel, build_provider_bundle
 from deepy.llm.thinking import build_model_settings
 
 
-class Reasoning:
-    def __init__(self, origin_model=None, provider_data=None):
-        self.origin_model = origin_model
-        self.provider_data = provider_data or {}
+@pytest.mark.parametrize("info", PROVIDER_CATALOG, ids=lambda p: p.id)
+@pytest.mark.asyncio
+async def test_responses_function_continuation(info):
+    calls = []
 
-
-class ReplayContext:
-    def __init__(self, model, reasoning, base_url=None):
-        self.model = model
-        self.reasoning = reasoning
-        self.base_url = base_url
-
-
-def test_deepseek_reasoning_replay_only_for_deepseek_sources():
-    assert should_replay_deepseek_reasoning_content(
-        ReplayContext("deepseek-v4-pro", Reasoning(origin_model="deepseek-v4-pro"))
-    )
-    assert should_replay_deepseek_reasoning_content(
-        ReplayContext("deepseek-v4-pro", Reasoning(provider_data={}))
-    )
-    assert not should_replay_deepseek_reasoning_content(
-        ReplayContext("deepseek-v4-pro", Reasoning(origin_model="claude-4", provider_data={"x": 1}))
-    )
-    assert not should_replay_deepseek_reasoning_content(
-        ReplayContext("gpt-5.5", Reasoning(origin_model="deepseek-v4-pro"))
-    )
-
-
-def test_xiaomi_reasoning_replay_only_for_direct_xiaomi_mimo_sources():
-    assert should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "mimo-v2.5",
-            Reasoning(origin_model="mimo-v2.5"),
-            base_url="https://api.xiaomimimo.com/v1",
-        )
-    )
-    assert should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "mimo-v2.5-pro",
-            Reasoning(provider_data={}),
-            base_url="https://api.xiaomimimo.com/v1/",
-        )
-    )
-    assert not should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "google/gemini-3.5-flash",
-            Reasoning(origin_model="mimo-v2.5"),
-            base_url="https://api.xiaomimimo.com/v1",
-        )
-    )
-
-
-def test_openrouter_reasoning_replay_matches_openrouter_model_sources():
-    assert should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "xiaomi/mimo-v2.5",
-            Reasoning(origin_model="xiaomi/mimo-v2.5"),
-            base_url="https://openrouter.ai/api/v1",
-        )
-    )
-    assert should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "google/gemini-3.5-flash",
-            Reasoning(provider_data={}),
-            base_url="https://openrouter.ai/api/v1/",
-        )
-    )
-    assert not should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "xiaomi/mimo-v2.5",
-            Reasoning(origin_model="other/model", provider_data={"model": "other/model"}),
-            base_url="https://openrouter.ai/api/v1",
-        )
-    )
-    assert not should_replay_chat_completion_reasoning_content(
-        ReplayContext(
-            "xiaomi/mimo-v2.5",
-            Reasoning(origin_model="xiaomi/mimo-v2.5"),
-            base_url="https://example.com/v1",
-        )
-    )
-
-
-def test_xiaomi_reasoning_content_is_replayed_for_tool_followup():
-    from agents.models.openai_chatcompletions import Converter
-
-    reasoning_item = {
-        "id": "__reasoning__",
-        "type": "reasoning",
-        "summary": [{"text": "I should read the file.", "type": "summary_text"}],
-        "provider_data": {"model": "mimo-v2.5"},
-    }
-    tool_call = {
-        "arguments": '{"file_path":"AGENTS.md"}',
-        "call_id": "call-read",
-        "name": "read_file",
-        "type": "function_call",
-    }
-
-    messages = Converter.items_to_messages(
-        [reasoning_item, tool_call],
-        model="mimo-v2.5",
-        base_url="https://api.xiaomimimo.com/v1",
-        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
-    )
-
-    assert messages == [
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
+    def handle(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert request.url.path.endswith("/responses")
+        assert body["model"] == info.default_model
+        assert body["store"] is False
+        output = (
+            [
                 {
-                    "id": "call-read",
-                    "type": "function",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": '{"file_path":"AGENTS.md"}',
-                    },
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "echo",
+                    "arguments": '{"value":"ok"}',
+                    "status": "completed",
                 }
-            ],
-            "reasoning_content": "I should read the file.",
-        }
-    ]
-
-
-def test_openrouter_reasoning_aliases_before_sdk_conversion():
-    from agents.models.openai_chatcompletions import Converter
-
-    reasoning_details = [{"type": "reasoning.text", "text": "hidden"}]
-    message = _chat_completion_message(
-        reasoning="I should read the file.",
-        reasoning_details=reasoning_details,
-    )
-    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
-
-    preserve_openrouter_reasoning_content_alias(
-        response,
-        "https://openrouter.ai/api/v1",
-    )
-
-    assert message.reasoning_content == "I should read the file."
-    assert message.reasoning_details is reasoning_details
-
-    items = _output_item_dicts(
-        Converter.message_to_output_items(
-            message,
-            provider_data={"model": "xiaomi/mimo-v2.5"},
-        )
-    )
-    messages = Converter.items_to_messages(
-        items,
-        model="xiaomi/mimo-v2.5",
-        base_url="https://openrouter.ai/api/v1",
-        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
-    )
-
-    assert messages == [
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
+            ]
+            if len(calls) == 1
+            else [
                 {
-                    "id": "call-read",
-                    "type": "function",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": '{"file_path":"AGENTS.md"}',
-                    },
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "done", "annotations": []}],
                 }
-            ],
-            "reasoning_content": "I should read the file.",
-        }
-    ]
-
-
-def test_openrouter_reasoning_alias_preserves_existing_content_and_details():
-    reasoning_details = [{"type": "reasoning.text", "text": "hidden"}]
-    message = _chat_completion_message(
-        reasoning="new reasoning",
-        reasoning_content="existing reasoning",
-        reasoning_details=reasoning_details,
-    )
-    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
-
-    preserve_openrouter_reasoning_content_alias(
-        response,
-        "https://openrouter.ai/api/v1",
-    )
-
-    assert message.reasoning_content == "existing reasoning"
-    assert message.reasoning_details is reasoning_details
-
-
-def test_non_openrouter_reasoning_is_not_aliased():
-    message = _chat_completion_message(reasoning="I should read the file.")
-    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
-
-    preserve_openrouter_reasoning_content_alias(
-        response,
-        "https://api.example.com/v1",
-    )
-
-    assert getattr(message, "reasoning_content", None) is None
-
-
-def test_openrouter_mimo_reasoning_content_is_replayed():
-    from agents.models.openai_chatcompletions import Converter
-
-    messages = Converter.items_to_messages(
-        [
-            {
-                "id": "__reasoning__",
-                "type": "reasoning",
-                "summary": [{"text": "I should read the file.", "type": "summary_text"}],
-                "provider_data": {"model": "xiaomi/mimo-v2.5"},
-            },
-            {
-                "arguments": '{"file_path":"AGENTS.md"}',
-                "call_id": "call-read",
-                "name": "read_file",
-                "type": "function_call",
-            },
-        ],
-        model="xiaomi/mimo-v2.5",
-        base_url="https://openrouter.ai/api/v1",
-        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
-    )
-
-    assert messages[0]["reasoning_content"] == "I should read the file."
-
-
-def _chat_completion_message(
-    *,
-    reasoning: str | None = None,
-    reasoning_content: str | None = None,
-    reasoning_details: object | None = None,
-) -> SimpleNamespace:
-    message = SimpleNamespace(
-        content=None,
-        refusal=None,
-        audio=None,
-        reasoning=reasoning,
-        reasoning_details=reasoning_details,
-        tool_calls=[
-            SimpleNamespace(
-                id="call-read",
-                type="function",
-                function=SimpleNamespace(
-                    name="read_file",
-                    arguments='{"file_path":"AGENTS.md"}',
-                ),
-            )
-        ],
-    )
-    if reasoning_content is not None:
-        message.reasoning_content = reasoning_content
-    return message
-
-
-def _output_item_dicts(items):
-    return [
-        item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else item
-        for item in items
-    ]
-
-
-def test_provider_bundle_passes_explicit_reasoning_replay_hook():
-    settings = Settings(model=ModelConfig(api_key="sk-test"))
-
-    bundle = build_provider_bundle(settings)
-
-    assert isinstance(bundle.model, DeepyOpenAIChatCompletionsModel)
-    assert (
-        bundle.model.should_replay_reasoning_content
-        is should_replay_chat_completion_reasoning_content
-    )
-
-
-def test_provider_bundle_uses_selected_model_name():
-    settings = Settings(model=ModelConfig(api_key="sk-test", name="deepseek-v4-flash"))
-
-    bundle = build_provider_bundle(settings)
-
-    assert bundle.model.model == "deepseek-v4-flash"
-
-
-def test_provider_bundle_uses_selected_provider_base_url_and_model():
-    settings = Settings(
-        model=ModelConfig(
-            provider="openrouter",
-            api_key="sk-test",
-            name="xiaomi/mimo-v2.5-pro",
-            base_url="https://openrouter.ai/api/v1",
-        )
-    )
-
-    bundle = build_provider_bundle(settings)
-
-    assert bundle.model.model == "xiaomi/mimo-v2.5-pro"
-    assert str(bundle.client.base_url) == "https://openrouter.ai/api/v1/"
-
-
-def test_model_settings_map_reasoning_modes_to_deepseek_body():
-    disabled = build_model_settings(
-        Settings(model=ModelConfig(api_key="sk-test", thinking=False))
-    ).extra_body
-    high = build_model_settings(
-        Settings(model=ModelConfig(api_key="sk-test", thinking=True, reasoning_effort="high"))
-    ).extra_body
-    max_effort = build_model_settings(
-        Settings(model=ModelConfig(api_key="sk-test", thinking=True, reasoning_effort="max"))
-    ).extra_body
-
-    assert disabled == {"thinking": {"type": "disabled"}}
-    assert high == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
-    assert max_effort == {"thinking": {"type": "enabled"}, "reasoning_effort": "max"}
-
-
-def test_model_settings_map_openrouter_reasoning_effort():
-    enabled = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="openrouter",
-                name="google/gemini-3.5-flash",
-                base_url="https://openrouter.ai/api/v1",
-                api_key="sk-test",
-                thinking=True,
-                reasoning_effort="enabled",
-            )
-        )
-    )
-    minimal = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="openrouter",
-                name="anthropic/claude-sonnet-4.5",
-                base_url="https://openrouter.ai/api/v1",
-                api_key="sk-test",
-                thinking=True,
-                reasoning_effort="minimal",
-            )
-        )
-    )
-    disabled = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="openrouter",
-                name="xiaomi/mimo-v2.5",
-                base_url="https://openrouter.ai/api/v1",
-                api_key="sk-test",
-                thinking=False,
-                reasoning_effort="none",
-            )
-        )
-    )
-
-    assert enabled.extra_body == {"reasoning": {"enabled": True}}
-    assert minimal.extra_body == {"reasoning": {"enabled": True, "effort": "minimal"}}
-    assert disabled.extra_body == {"reasoning": {"enabled": False}}
-    assert minimal.include_usage is True
-    assert minimal.store is False
-
-
-def test_model_settings_map_xiaomi_mimo_switch_thinking_without_reasoning_effort():
-    enabled = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="xiaomi",
-                name="mimo-v2.5-pro",
-                base_url="https://api.xiaomimimo.com/v1",
-                api_key="sk-test",
-                thinking=True,
-                reasoning_effort="enabled",
-            )
-        )
-    ).extra_body
-    disabled = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="xiaomi",
-                name="mimo-v2.5",
-                base_url="https://api.xiaomimimo.com/v1",
-                api_key="sk-test",
-                thinking=False,
-                reasoning_effort="none",
-            )
-        )
-    ).extra_body
-
-    assert enabled == {"thinking": {"type": "enabled"}}
-    assert disabled == {"thinking": {"type": "disabled"}}
-
-
-def test_provider_bundle_uses_responses_model_for_localhost():
-    settings = Settings(
-        model=ModelConfig(
-            provider="localhost",
-            api_key="sk-local",
-            name="gpt-5.6-terra",
-            base_url="http://127.0.0.1:8317/v1",
-            thinking=True,
-            reasoning_effort="medium",
-        )
-    )
-
-    bundle = build_provider_bundle(settings)
-
-    assert isinstance(bundle.model, OpenAIResponsesModel)
-    assert bundle.model.model == "gpt-5.6-terra"
-    assert str(bundle.client.base_url) == "http://127.0.0.1:8317/v1/"
-
-
-def test_model_settings_map_localhost_reasoning_effort():
-    medium = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="localhost",
-                name="gpt-5.6-terra",
-                base_url="http://127.0.0.1:8317/v1",
-                api_key="sk-local",
-                thinking=True,
-                reasoning_effort="medium",
-            )
-        )
-    )
-    none = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="localhost",
-                name="gpt-5.6-luna",
-                base_url="http://127.0.0.1:8317/v1",
-                api_key="sk-local",
-                thinking=False,
-                reasoning_effort="none",
-            )
-        )
-    )
-    xhigh = build_model_settings(
-        Settings(
-            model=ModelConfig(
-                provider="localhost",
-                name="gpt-5.6-sol",
-                base_url="http://127.0.0.1:8317/v1",
-                api_key="sk-local",
-                thinking=True,
-                reasoning_effort="xhigh",
-            )
-        )
-    )
-
-    assert medium.extra_body in (None, {})
-    assert medium.include_usage is True
-    assert medium.store is False
-    assert medium.reasoning is not None
-    assert medium.reasoning.effort == "medium"
-    assert medium.reasoning.summary == "auto"
-    assert none.reasoning is not None
-    assert none.reasoning.effort == "none"
-    assert none.reasoning.summary is None
-    assert xhigh.reasoning is not None
-    assert xhigh.reasoning.effort == "xhigh"
-    assert xhigh.reasoning.summary == "auto"
-
-
-@pytest.mark.asyncio
-async def test_deepy_model_sanitizes_replay_before_chat_completion_fetch(monkeypatch):
-    from agents import OpenAIChatCompletionsModel
-
-    captured_input = []
-
-    async def fake_fetch(self, system_instructions, input, *args, **kwargs):
-        captured_input.append(input)
-        return object()
-
-    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
-    model = build_provider_bundle(Settings(model=ModelConfig(api_key="sk-test"))).model
-    call = {
-        "arguments": '{"file_path":"README.md"}',
-        "call_id": "call-read",
-        "name": "read_file",
-        "type": "function_call",
-    }
-    empty_message = {
-        "id": "__fake_id__",
-        "content": [{"annotations": [], "text": "", "type": "output_text"}],
-        "role": "assistant",
-        "status": "completed",
-        "type": "message",
-    }
-    output = {
-        "call_id": "call-read",
-        "output": '{"ok":true}',
-        "type": "function_call_output",
-    }
-
-    await model._fetch_response(
-        None,
-        [call, empty_message, output],
-        object(),
-        [],
-        None,
-        [],
-        object(),
-        object(),
-        stream=False,
-    )
-
-    assert captured_input == [[call, output]]
-
-
-@pytest.mark.asyncio
-async def test_deepy_model_captures_sdk_request_shape_without_secrets(monkeypatch):
-    from agents import OpenAIChatCompletionsModel
-
-    diagnostics = []
-
-    async def fake_fetch(self, system_instructions, input, *args, **kwargs):
-        return object()
-
-    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
-    settings = Settings(model=ModelConfig(api_key="sk-test"))
-    model = build_provider_bundle(settings).model
-    snapshot = build_cache_prefix_snapshot(
-        settings,
-        system_instructions="system",
-        model_settings=build_model_settings(settings),
-    )
-
-    with capture_cache_prefix_diagnostics(diagnostics.append):
-        token = set_current_cache_prefix_snapshot(snapshot)
-        try:
-            await model._fetch_response(
-                "system",
-                [{"role": "user", "content": "hi"}],
-                build_model_settings(settings),
-                [],
-                None,
-                [],
-                object(),
-                object(),
-                stream=False,
-            )
-        finally:
-            reset_current_cache_prefix_snapshot(token)
-
-    assert diagnostics
-    assert diagnostics[0].prefix_snapshot is not None
-    assert diagnostics[0].sdk_request_shape["system_instructions"] == "system"
-    assert "sk-test" not in str(diagnostics[0].sdk_request_shape)
-
-
-@pytest.mark.asyncio
-async def test_deepy_model_sends_deepseek_thinking_fields_in_chat_completion_body():
-    import httpx
-    from openai import AsyncOpenAI
-
-    captured: list[dict[str, object]] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(
-            {
-                "url": str(request.url),
-                "body": json.loads(request.content.decode()),
-            }
+            ]
         )
         return httpx.Response(
             200,
-            headers={"content-type": "text/event-stream"},
-            content=b"data: [DONE]\n\n",
+            json={
+                "id": f"resp_{len(calls)}",
+                "object": "response",
+                "created_at": 1,
+                "model": info.default_model,
+                "status": "completed",
+                "output": output,
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            },
         )
 
-    class Tracing:
-        def include_data(self) -> bool:
-            return False
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = AsyncOpenAI(
-        api_key="sk-test",
-        base_url="https://api.deepseek.com",
-        http_client=http_client,
-    )
-    model = DeepyOpenAIChatCompletionsModel(
-        model="deepseek-v4-pro",
-        openai_client=client,
-    )
-    settings = Settings(
-        model=ModelConfig(
-            api_key="sk-test",
-            thinking=True,
-            reasoning_effort="max",
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url=info.default_base_url,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    ) as client:
+        settings = Settings.from_mapping({"active_provider": info.id})
+        model = DeepyResponsesModel(
+            provider=info.id, model=info.default_model, openai_client=client
         )
+
+        @function_tool
+        def echo(value: str) -> str:
+            return value
+
+        result = await Runner.run(
+            Agent(
+                name="test",
+                model=model,
+                model_settings=build_model_settings(settings),
+                tools=[echo],
+            ),
+            "call echo",
+        )
+        assert result.final_output == "done"
+    assert len(calls) == 2
+    assert any(
+        item.get("type") == "function_call_output"
+        and item["call_id"] == "call_1"
+        and item["output"] == "ok"
+        for item in calls[1]["input"]
     )
 
-    await model._fetch_response(
-        "You are a helpful assistant",
-        "Hello",
-        build_model_settings(settings),
-        [],
-        None,
-        [],
-        object(),
-        Tracing(),
-        stream=True,
-    )
-    await http_client.aclose()
 
-    assert captured[0]["url"] == "https://api.deepseek.com/chat/completions"
-    body = captured[0]["body"]
-    assert isinstance(body, dict)
-    assert body["model"] == "deepseek-v4-pro"
-    assert body["stream"] is True
-    assert body["thinking"] == {"type": "enabled"}
-    assert body["reasoning_effort"] == "max"
+def test_missing_key_and_selected_identity():
+    with pytest.raises(ValueError, match="API key missing"):
+        build_provider_bundle(Settings())
+    settings = Settings.from_mapping(
+        {"active_provider": "kimi", "providers": {"kimi": {"api_key": "test"}}}
+    )
+    bundle = build_provider_bundle(settings)
+    assert isinstance(bundle.model, DeepyResponsesModel)
+    assert bundle.model.provider == "kimi"
+    assert bundle.model.model == "kimi-k3"
+
+
+@pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled"])
+@pytest.mark.asyncio
+async def test_nonstream_partial_response_is_not_success(status):
+    from agents.exceptions import ModelBehaviorError
+
+    async with AsyncOpenAI(
+        api_key="test",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "id": "resp_1",
+                        "object": "response",
+                        "created_at": 1,
+                        "model": "deepseek-flash",
+                        "status": status,
+                        "output": [],
+                    },
+                )
+            )
+        ),
+    ) as client:
+        model = DeepyResponsesModel(
+            provider="deepseek", model="deepseek-flash", openai_client=client
+        )
+        with pytest.raises(ModelBehaviorError, match="did not complete"):
+            await Runner.run(Agent(name="test", model=model), "hello")
+
+
+@pytest.mark.parametrize("status", ["incomplete", "failed"])
+@pytest.mark.asyncio
+async def test_stream_partial_usage_precedes_recoverable_failure(monkeypatch, status):
+    from types import SimpleNamespace
+    from agents import OpenAIResponsesModel
+    from agents.exceptions import ModelBehaviorError
+    from deepy.llm.events import normalize_stream_event
+
+    async def events(self, *args, **kwargs):
+        yield SimpleNamespace(
+            type=f"response.{status}",
+            response=SimpleNamespace(output=[], usage={"input_tokens": 2, "output_tokens": 1}),
+        )
+
+    monkeypatch.setattr(OpenAIResponsesModel, "stream_response", events)
+    async with AsyncOpenAI(api_key="test") as client:
+        model = DeepyResponsesModel(
+            provider="deepseek", model="deepseek-flash", openai_client=client
+        )
+        observed = []
+        with pytest.raises(ModelBehaviorError):
+            async for event in model.stream_response():
+                observed.append(
+                    normalize_stream_event(SimpleNamespace(type="raw_response_event", data=event))
+                )
+    assert len(observed) == 1 and observed[0].kind == "usage"

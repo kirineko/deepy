@@ -10,10 +10,10 @@ from agents import Agent, ModelSettings, Runner, set_tracing_disabled
 from openai import AsyncOpenAI
 
 from deepy.llm.provider import (
-    DeepyOpenAIChatCompletionsModel,
-    should_replay_chat_completion_reasoning_content,
+    DeepyResponsesModel,
 )
-from deepy.llm.thinking import build_thinking_extra_body
+from deepy.llm.thinking import build_model_settings
+from deepy.config import Settings, ModelConfig
 from deepy.usage import normalize_usage, usage_from_run_result
 
 
@@ -25,22 +25,18 @@ async def main() -> int:
     if not api_key:
         print("DEEPSEEK_API_KEY is required.", file=sys.stderr)
         return 2
-    model_name = os.environ.get("DEEPSEEK_PROBE_MODEL") or os.environ.get("DEEPY_MODEL") or "deepseek-v4-pro"
+    model_name = os.environ.get("DEEPSEEK_PROBE_MODEL") or os.environ.get("DEEPY_MODEL") or "deepseek-flash"
 
     set_tracing_disabled(disabled=True)
     client = AsyncOpenAI(base_url=API_URL, api_key=api_key)
-    model = DeepyOpenAIChatCompletionsModel(
+    model = DeepyResponsesModel(
         model=model_name,
         openai_client=client,
-        should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
+        provider="deepseek",
     )
     reasoning_effort = os.environ.get("DEEPSEEK_PROBE_REASONING") or "max"
     thinking_enabled = reasoning_effort not in {"none", "disabled", "off", "false", "0"}
-    model_settings = ModelSettings(
-        include_usage=True,
-        store=False,
-        extra_body=build_thinking_extra_body(thinking_enabled, reasoning_effort),
-    )
+    model_settings = build_model_settings(Settings(model=ModelConfig(name=model_name, thinking=thinking_enabled, reasoning_effort=reasoning_effort)))
     stable_instructions = _stable_instructions()
     stable_prompt = "Use the invariant context above. Reply with exactly one word: ok."
 
@@ -64,7 +60,7 @@ async def main() -> int:
 
 
 async def _run_probe(
-    model: DeepyOpenAIChatCompletionsModel,
+    model: DeepyResponsesModel,
     model_settings: ModelSettings,
     instructions: str,
     prompt: str,

@@ -1,7 +1,9 @@
 # structured-apply-patch Specification
 
 ## Purpose
-TBD - created by archiving change structured-apply-patch-protocol. Update Purpose after archive.
+
+Record the removal of the legacy model-facing apply_patch tool in favor of the current file-editing tools.
+
 ## Requirements
 ### Requirement: Structured Apply Patch Removed
 Deepy SHALL NOT expose `apply_patch` as a model-facing built-in file editing

@@ -29,7 +29,7 @@ also supporting OpenAI-compatible providers.
 ## Why Use It
 
 - **DeepSeek-first agent loop**: tuned for DeepSeek V4 thinking mode while still
-  supporting OpenAI-compatible providers such as OpenRouter and Xiaomi MiMo.
+  supporting DeepSeek, MiMo, Kimi and CLI Proxy through the Responses API.
 - **Transparent terminal execution**: thinking, tool calls, diffs, shell output,
   usage, and context pressure stay visible in the transcript.
 - **Project memory and continuity**: `AGENTS.md` rules, local SQLite sessions,
@@ -293,13 +293,14 @@ setup creates this file for most users.
 Minimal resolved shape:
 
 ```toml
-[model]
-api_key = "sk-..."
-provider = "deepseek"
-name = "deepseek-v4-pro"
+config_version = 2
+active_provider = "deepseek"
+
+[providers.deepseek]
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
-thinking = true
-reasoning_effort = "max"
+reasoning = "max"
 
 [context]
 window_tokens = 1048576
@@ -324,30 +325,28 @@ Manual configuration commands:
 
 ```bash
 deepy config setup
-deepy config init --api-key sk-... --provider deepseek --model deepseek-v4-pro
-deepy config init --api-key sk-or-... --provider openrouter --model xiaomi/mimo-v2.5-pro
-deepy config init --api-key sk-or-... --provider openrouter --model anthropic/claude-sonnet-4.5 --thinking minimal
-deepy config init --api-key sk-... --provider xiaomi --model mimo-v2.5-pro
+deepy config init --provider deepseek --model deepseek-flash
 deepy config theme light
 ```
 
-Supported provider/model pairs:
+| Provider | Model IDs | Thinking |
+|---|---|---|
+| DeepSeek | `deepseek-flash` (V4.1 Flash) | `none`, `high`, `max` |
+| MiMo | `mimo-v2.5`, `mimo-v2.5-pro` | `disabled`, `enabled` |
+| Kimi | `kimi-k3` | `low`, `high`, `max` |
+| CLI Proxy | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` |
 
-- `deepseek`: `deepseek-v4-pro`, `deepseek-v4-flash`; thinking modes `none`,
-  `high`, `max`.
-- `openrouter`: UI model selection offers `xiaomi/mimo-v2.5-pro`,
-  `xiaomi/mimo-v2.5`; setup/init may also use a model id copied from
-  OpenRouter. Thinking modes are `enabled`, `disabled`, `xhigh`, `high`,
-  `medium`, `low`, `minimal`, `none`.
-- `xiaomi`: `mimo-v2.5-pro`, `mimo-v2.5`; thinking modes `enabled`,
-  `disabled`.
+Each provider keeps its own key, URL, model and thinking settings. `/model provider <id>` restores its saved profile; leaving the setup password blank preserves the saved key. Default environment variables are `DEEPSEEK_API_KEY`, `MIMO_API_KEY`, `KIMI_API_KEY` (with `MOONSHOT_API_KEY` fallback), and `CLI_PROXY_API_KEY`. Environment keys take precedence without being written back. The generic `DEEPY_API_KEY` override is no longer supported.
 
-WebSearch uses Deepy's hosted SearXNG endpoint by default. You can override it:
+Old shared `[model]` configuration requires setup again. Keep a copy for manual recovery; Deepy does not automatically migrate or overwrite it. Full reset rebuilds configuration.
 
-```toml
-[tools.web_search]
-searxng_url = "https://your-searxng.example/"
-```
+Conversation, subagents, suggestions and compaction use Responses. Built-in WebSearch independently calls DeepSeek Messages native search, requiring a separate DeepSeek key for every conversation provider. Configured Tavily/search MCP preference remains effective; WebFetch still retrieves URLs locally over HTTP. Search usage is displayed separately and included in session API consumption.
+
+All catalog models except MiMo 2.5 Pro accept images. Both UIs support multiple pasted images and image-only prompts: PNG/JPEG/WebP/GIF, 10 MiB per image, eight images per turn, and 32 MiB for the complete encoded request. Switching to a text-only model preserves images and asks you to remove draft attachments, switch back, or start a text-only session. Native audio, video, PDF input and media generation are not supported in this update.
+
+Batch `Read` accepts at most eight images; larger image batches return a tool error so the agent can retry with fewer files.
+
+Suggestions use the current provider's fixed `deepseek-flash`/none, `mimo-v2.5`/disabled, `kimi-k3`/low, or `gpt-5.6-luna`/none, with separate usage accounting.
 
 ## Development
 

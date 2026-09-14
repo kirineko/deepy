@@ -279,7 +279,7 @@ async def test_session_records_cache_break_when_prefix_snapshot_changes(tmp_path
         system_instructions="stable",
     )
     second = build_cache_prefix_snapshot(
-        Settings(model=ModelConfig(api_key="sk-test", name="deepseek-v4-flash")),
+        Settings(model=ModelConfig(api_key="sk-test", name="future-model")),
         system_instructions="stable",
     )
 
@@ -302,7 +302,7 @@ async def test_session_records_input_suggestion_usage_separately(tmp_path):
     before_context_usage = session.latest_context_window_usage()
     session.record_input_suggestion_usage(
         {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         elapsed_ms=25,
     )
 
@@ -311,7 +311,7 @@ async def test_session_records_input_suggestion_usage_separately(tmp_path):
     assert entry.usage["total_tokens"] == 12
     assert entry.input_suggestion_usage is not None
     assert entry.input_suggestion_usage["total_tokens"] == 4
-    assert entry.input_suggestion_usage["model"] == "deepseek-v4-flash"
+    assert entry.input_suggestion_usage["model"] == "deepseek-flash"
     assert entry.input_suggestion_usage["elapsed_ms"] == 25
     assert session.latest_context_window_usage() == before_context_usage
 

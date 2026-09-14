@@ -287,7 +287,13 @@ def run_interactive(
                 continue
 
             ctrl_d_exit_pending = False
-            text, pasted_images = image_attachments.collect_from_prompt_text(text)
+            from deepy.llm.multimodal import ImageAttachmentError
+            try:
+                text, pasted_images = image_attachments.collect_from_prompt_text(text)
+            except ImageAttachmentError as exc:
+                setattr(prompt_session, "deepy_restored_draft", text)
+                output.print(str(exc))
+                continue
             if not text and not pasted_images:
                 continue
 
@@ -667,5 +673,3 @@ def _run_once_with_status(
 
     renderer.flush()
     return summary
-
-

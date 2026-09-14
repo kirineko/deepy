@@ -1,7 +1,9 @@
 # code-maintainability Specification
 
 ## Purpose
-TBD - created by archiving change split-oversized-modules. Update Purpose after archive.
+
+Keep source modules maintainable through size limits, behavior-preserving decomposition and reusable test fixtures.
+
 ## Requirements
 ### Requirement: Source modules stay within the maintainable size ceiling
 

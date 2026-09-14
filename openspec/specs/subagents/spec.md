@@ -1,8 +1,11 @@
 # subagents Specification
 
 ## Purpose
-TBD - created by archiving change add-subagent-support. Update Purpose after archive.
+
+Deepy provides focused subagents with inherited tool, MCP and audit boundaries, resolving model overrides within the active Responses provider.
+
 ## Requirements
+
 ### Requirement: Built-In Subagents
 
 Deepy SHALL provide focused built-in subagents for common specialist workflows.
@@ -190,3 +193,39 @@ subagents.
 - **AND** Deepy SHALL resume the original top-level run rather than starting a
   new subagent run
 
+### Requirement: Subagent Responses Model Resolution
+Deepy SHALL resolve subagent models within the active provider through the same Responses path as the main agent.
+
+#### Scenario: Inherited model
+- **WHEN** a subagent has no explicit model
+- **THEN** it SHALL inherit the active provider model, credentials and supported settings
+
+#### Scenario: Explicit override
+- **WHEN** a custom subagent specifies a model in the active provider catalog
+- **THEN** Deepy SHALL construct a Responses model for that provider/model
+- **AND** it SHALL NOT let an unqualified string select an SDK default provider
+
+#### Scenario: Invalid override
+- **WHEN** a subagent model belongs to another provider or is not supported
+- **THEN** Deepy SHALL reject that override with a concise diagnostic and keep other valid agents usable
+
+#### Scenario: Search boundary
+- **WHEN** a subagent is allowed WebSearch or inherits search-class MCP tools
+- **THEN** it SHALL retain the existing tool/MCP inheritance and priority boundaries
+- **AND** built-in WebSearch SHALL use independent DeepSeek credentials
+
+### Requirement: Subagent Read Model Capabilities
+Deepy SHALL validate Read image results against the effective model of the agent invoking the tool without changing shared runtime settings.
+
+#### Scenario: Image-capable child of a text-only parent
+- **WHEN** a text-only parent delegates to an image-capable model override
+- **THEN** the child's single and batch Read calls SHALL accept supported images
+
+#### Scenario: Text-only child of an image-capable parent
+- **WHEN** an image-capable parent delegates to a text-only model override
+- **THEN** the child's Read calls SHALL return image capability errors without image attachments
+
+#### Scenario: Inheritance and concurrent calls
+- **WHEN** inherited, overridden, and parent Read calls run concurrently
+- **THEN** each SHALL use its own effective model capabilities
+- **AND** shared file state, audit policy, search counters, and runtime settings SHALL remain shared and unchanged by capability selection

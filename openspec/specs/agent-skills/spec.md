@@ -1,7 +1,9 @@
 # agent-skills Specification
 
 ## Purpose
-TBD - created by archiving change add-agent-skill-market. Update Purpose after archive.
+
+Define discovery, precedence, explicit invocation and on-demand loading of project, user and built-in agent skills.
+
 ## Requirements
 ### Requirement: Standard Agent Skills Discovery
 Deepy SHALL discover user skills from `~/.agents/skills` and project skills from `<project>/.agents/skills`, using standard Agent Skills directories that contain `SKILL.md`.

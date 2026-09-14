@@ -2,26 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
-from agents import Model, ModelSettings
-from agents import OpenAIChatCompletionsModel
-from agents import OpenAIResponsesModel
+from agents import Model, ModelSettings, OpenAIResponsesModel
 
 from deepy.config import Settings
-from deepy.config.providers import PROVIDER_API_RESPONSES, provider_info_for
-from deepy.config.settings import infer_provider_from_base_url
 
 from .cache_context import capture_sdk_request_shape
+from .response_images import normalize_response_images, validate_encoded_request
 from .multimodal import (
     items_contain_image_content,
     model_supports_image_input,
-    strip_image_content_from_items,
-)
-from .replay import (
-    sanitize_chat_completion_stream_event,
-    sanitize_model_input_for_chat_completions,
-    sanitize_model_response_output,
+    UnsupportedImageInputError,
 )
 
 
@@ -32,147 +23,111 @@ class ProviderBundle:
     model_settings: ModelSettings
 
 
-class DeepyOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
+class DeepyResponsesModel(OpenAIResponsesModel):
+    """Keep provider identity explicit even when users override the endpoint."""
+
+    def __init__(self, *, provider: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.provider = provider
+
+    def _tag_reasoning(self, items: list[Any]) -> None:
+        for item in items:
+            if getattr(item, "type", None) == "reasoning":
+                setattr(item, "deepy_provider", self.provider)
+
+    async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
+        from agents.exceptions import ModelBehaviorError
+
+        response = await super()._fetch_response(*args, **kwargs)
+        if getattr(response, "status", None) in {"incomplete", "failed", "cancelled"}:
+            raise ModelBehaviorError(
+                "Provider response did not complete. Please retry or reduce context."
+            )
+        return response
+
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         response = await super().get_response(*args, **kwargs)
-        response.output = sanitize_model_response_output(response.output)
+        self._tag_reasoning(response.output)
         return response
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
-        async for event in super().stream_response(*args, **kwargs):
-            sanitized = sanitize_chat_completion_stream_event(event)
-            if sanitized is not None:
-                yield sanitized
+        from agents.exceptions import ModelBehaviorError
 
-    async def _fetch_response(
-        self,
-        system_instructions: str | None,
-        input: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        model_name = str(getattr(self, "model", ""))
-        base_url = str(getattr(self._get_client(), "base_url", "") or "")
-        inferred_provider = infer_provider_from_base_url(base_url) or (
-            "openrouter" if _is_openrouter_base_url(base_url) else ""
+        async for event in super().stream_response(*args, **kwargs):
+            if event.type == "response.output_item.done":
+                self._tag_reasoning([getattr(event, "item", None)])
+            response = getattr(event, "response", None)
+            if response is not None:
+                self._tag_reasoning(response.output or [])
+            yield event
+            if event.type in {"response.incomplete", "response.failed"}:
+                raise ModelBehaviorError(
+                    "Provider response did not complete. Please retry or reduce context."
+                )
+
+    def _build_response_create_kwargs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        names = (
+            "system_instructions",
+            "input",
+            "model_settings",
+            "tools",
+            "output_schema",
+            "handoffs",
+            "previous_response_id",
+            "conversation_id",
+            "stream",
+            "prompt",
         )
-        if (
-            isinstance(input, list)
-            and items_contain_image_content(input)
-            and not model_supports_image_input(inferred_provider, model_name)
-        ):
-            input = strip_image_content_from_items(input)
+        kwargs = {**dict(zip(names, args)), **kwargs}
+        items = normalize_response_images(kwargs.get("input"))
+        if isinstance(items, list) and items_contain_image_content(items):
+            if not model_supports_image_input(self.provider, self.model):
+                raise UnsupportedImageInputError(
+                    "当前模型不支持会话中的图片，请切换图片模型或开始纯文本会话。原图片已保留。"
+                )
+        if isinstance(items, list):
+            prepared = []
+            for item in items:
+                if isinstance(item, dict) and item.get("type") == "reasoning":
+                    item = dict(item)
+                    origin = item.pop("deepy_provider", None)
+                    if (origin and origin != self.provider) or (
+                        not origin and item.get("encrypted_content")
+                    ):
+                        continue
+                prepared.append(item)
+            items = prepared
+        kwargs["input"] = items
         capture_sdk_request_shape(
-            system_instructions=system_instructions,
-            input=input,
-            model=model_name,
-            model_settings=args[0] if args else None,
-            tools=args[1] if len(args) > 1 and isinstance(args[1], list) else None,
+            system_instructions=kwargs.get("system_instructions"),
+            input=items,
+            model=self.model,
+            model_settings=kwargs.get("model_settings"),
+            tools=kwargs.get("tools"),
             mcp_servers=None,
         )
-        response = await super()._fetch_response(
-            system_instructions,
-            sanitize_model_input_for_chat_completions(input),
-            *args,
-            **kwargs,
-        )
-        preserve_openrouter_reasoning_content_alias(
-            response,
-            str(getattr(self._get_client(), "base_url", "") or ""),
-        )
-        return response
-
-
-def preserve_openrouter_reasoning_content_alias(response: Any, base_url: str) -> None:
-    if not _is_openrouter_base_url(base_url):
-        return
-
-    choices = getattr(response, "choices", None)
-    if not isinstance(choices, list):
-        return
-
-    for choice in choices:
-        message = getattr(choice, "message", None)
-        if message is None or not getattr(message, "tool_calls", None):
-            continue
-        reasoning = getattr(message, "reasoning", None)
-        if not isinstance(reasoning, str) or not reasoning.strip():
-            continue
-        existing = getattr(message, "reasoning_content", None)
-        if isinstance(existing, str) and existing:
-            continue
-        setattr(message, "reasoning_content", reasoning)
-
-
-def should_replay_chat_completion_reasoning_content(context: object) -> bool:
-    model = str(getattr(context, "model", "")).lower()
-    base_url = str(getattr(context, "base_url", "") or "").rstrip("/").lower()
-    if "deepseek" in model:
-        return _reasoning_origin_matches(context, "deepseek")
-    if _is_direct_xiaomi_mimo(model, base_url):
-        return _reasoning_origin_matches(context, "mimo")
-    if _is_openrouter_base_url(base_url):
-        return _reasoning_origin_matches_model(context, model)
-    return False
-
-
-def should_replay_deepseek_reasoning_content(context: object) -> bool:
-    return should_replay_chat_completion_reasoning_content(context)
-
-
-def _reasoning_origin_matches(context: object, model_fragment: str) -> bool:
-    reasoning = getattr(context, "reasoning", None)
-    origin_model = getattr(reasoning, "origin_model", None)
-    provider_data = getattr(reasoning, "provider_data", {}) or {}
-    return (
-        isinstance(origin_model, str)
-        and model_fragment in origin_model.lower()
-    ) or provider_data == {}
-
-
-def _reasoning_origin_matches_model(context: object, model: str) -> bool:
-    reasoning = getattr(context, "reasoning", None)
-    origin_model = getattr(reasoning, "origin_model", None)
-    provider_data = getattr(reasoning, "provider_data", {}) or {}
-    return (
-        isinstance(origin_model, str)
-        and origin_model.strip().lower() == model
-    ) or provider_data == {}
-
-
-def _is_direct_xiaomi_mimo(model: str, base_url: str) -> bool:
-    if "xiaomimimo.com" not in base_url:
-        return False
-    return model in {"mimo-v2.5", "mimo-v2.5-pro"}
-
-
-def _is_openrouter_base_url(base_url: str) -> bool:
-    parsed = urlparse(base_url)
-    host = (parsed.hostname or base_url).rstrip("/").lower()
-    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+        payload = super()._build_response_create_kwargs(**kwargs)
+        if self.provider == "kimi":
+            payload["tool_choice"] = "auto"
+        return payload
 
 
 def build_provider_bundle(settings: Settings) -> ProviderBundle:
     from agents import set_tracing_disabled
     from openai import AsyncOpenAI
-
     from .thinking import build_model_settings
 
     if not settings.model.api_key:
-        raise ValueError(f"Model API key is missing in {settings.path or 'Deepy config'}.")
-
+        raise ValueError(f"API key missing for {settings.model.provider}; run deepy config setup.")
     set_tracing_disabled(disabled=True)
-    client = AsyncOpenAI(base_url=settings.model.base_url, api_key=settings.model.api_key)
-    provider_info = provider_info_for(settings.model.provider)
-    if provider_info.api == PROVIDER_API_RESPONSES:
-        model: Model = OpenAIResponsesModel(
-            model=settings.model.name,
-            openai_client=client,
-        )
-    else:
-        model = DeepyOpenAIChatCompletionsModel(
-            model=settings.model.name,
-            openai_client=client,
-            should_replay_reasoning_content=should_replay_chat_completion_reasoning_content,
-        )
+    import httpx
+
+    client = AsyncOpenAI(
+        base_url=settings.model.base_url,
+        api_key=settings.model.api_key,
+        http_client=httpx.AsyncClient(event_hooks={"request": [validate_encoded_request]}),
+    )
+    model = DeepyResponsesModel(
+        provider=settings.model.provider, model=settings.model.name, openai_client=client
+    )
     return ProviderBundle(client=client, model=model, model_settings=build_model_settings(settings))

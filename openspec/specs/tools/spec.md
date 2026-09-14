@@ -4,7 +4,9 @@
 
 Deepy exposes a compact set of project tools to the model while preserving safe
 file modification behavior and readable terminal output.
+
 ## Requirements
+
 ### Requirement: Core Tools
 
 Deepy SHALL expose project tools for shell execution, local code search, v3 file
@@ -137,49 +139,6 @@ managed file mutations.
   files, and concise target file paths
 - **AND** it SHALL NOT render full file contents, replacement blocks, or raw
   edit JSON as the tool-call argument summary
-
-### Requirement: Web Research
-
-Deepy SHALL provide self-owned web search and direct URL fetch tools instead of
-depending on third-party DeepCode backends. WebSearch SHALL use a configured
-SearXNG instance first when `tools.web_search.searxng_url` is set, and SHALL
-fall back to DuckDuckGo when SearXNG is unreachable or returns an unusable
-response. WebSearch SHALL use DuckDuckGo directly when no SearXNG URL is
-configured.
-
-#### Scenario: User asks for current online information
-
-- **WHEN** the model invokes web search or fetch
-- **THEN** Deepy SHALL use its own configured implementation
-- **AND** a complete URL SHALL be fetchable through the web fetch tool
-
-#### Scenario: SearXNG search succeeds
-
-- **WHEN** the model invokes WebSearch and configured SearXNG returns usable results
-- **THEN** Deepy SHALL return those results
-- **AND** the tool metadata SHALL identify SearXNG as the successful provider
-
-#### Scenario: SearXNG is unreachable and DuckDuckGo fallback succeeds
-
-- **WHEN** the model invokes WebSearch and configured SearXNG fails because of timeout,
-  DNS failure, connection failure, HTTP non-2xx, malformed response, parser
-  failure, or empty results
-- **AND** DuckDuckGo returns usable results
-- **THEN** Deepy SHALL return the DuckDuckGo results
-- **AND** the tool metadata SHALL identify DuckDuckGo and summarize the failed
-  SearXNG attempt
-
-#### Scenario: No SearXNG configured
-
-- **WHEN** the model invokes WebSearch and no SearXNG URL is configured
-- **THEN** Deepy SHALL use DuckDuckGo directly
-
-#### Scenario: All search providers fail
-
-- **WHEN** the model invokes WebSearch and every configured provider fails
-- **THEN** Deepy SHALL return a structured tool failure
-- **AND** the failure SHALL include concise, masked provider-attempt metadata
-- **AND** the interactive session SHALL continue without an uncaught exception
 
 ### Requirement: WebFetch Readable HTML Extraction
 
@@ -561,7 +520,7 @@ preserving built-in WebSearch as a fallback.
 - **WHEN** MCP is disabled, no MCP web-search tools are active, or every MCP
   web-search server fails to connect
 - **THEN** Deepy's built-in WebSearch SHALL keep its normal provider behavior
-  using configured SearXNG and DuckDuckGo fallback
+  using the independent DeepSeek Messages search service
 
 ### Requirement: Todo Write Tool
 
@@ -1349,7 +1308,67 @@ pending built-in tool approvals before execution.
 - **WHEN** a pending approval is for `task_stop`
 - **THEN** Deepy SHALL show the target background task id
 
-### Requirement: Read Tool Image Follow-Up Compatibility
+### Requirement: Bounded DeepSeek Search Execution
+Deepy SHALL bound search work and keep opaque server data out of ordinary model and UI output.
+
+#### Scenario: Default bounds
+- **WHEN** WebSearch starts a request
+- **THEN** it SHALL set max_uses to 3 and max_tokens to 4096, use an overall timeout of 60 seconds, and expose at most 10 deduplicated sources
+- **AND** it SHALL send only the search query context rather than the entire conversation
+- **AND** it SHALL NOT automatically retry the complete paid request
+
+#### Scenario: Cancellation
+- **WHEN** the user cancels while search is pending
+- **THEN** Deepy SHALL cancel the pending request and return control without starting fallback searches
+
+#### Scenario: Encrypted or absent excerpts
+- **WHEN** a source contains encrypted content but no plaintext snippet
+- **THEN** Deepy SHALL preserve its valid title/URL without inventing an excerpt
+- **AND** it SHALL NOT expose encrypted blobs or credentials in normal output
+
+#### Scenario: Domain constraints
+- **WHEN** search results are returned
+- **THEN** Deepy SHALL NOT claim a server-enforced domain restriction without locally validating that restriction
+
+### Requirement: DeepSeek Built-In Web Research
+Deepy SHALL provide built-in WebSearch through a separate DeepSeek Anthropic Messages search service and preserve direct URL WebFetch.
+
+#### Scenario: Built-in search invocation
+- **WHEN** any supported conversation model invokes WebSearch
+- **THEN** Deepy SHALL call `https://api.deepseek.com/anthropic/v1/messages` with model `deepseek-flash` and native tool `web_search_20250305`
+- **AND** it SHALL use only the DeepSeek profile/environment credentials, independently of active conversation credentials or base URL
+- **AND** it SHALL return structured sources from actual search tool records
+
+#### Scenario: Search success
+- **WHEN** the response contains correlated server search invocation and successful search result blocks
+- **THEN** Deepy SHALL return source titles and valid HTTP(S) URLs with available plaintext snippets/citations
+- **AND** it SHALL identify DeepSeek as the backend and distinguish complete, empty and partial results
+
+#### Scenario: No evidence
+- **WHEN** the response is HTTP 200 or claims to search but has no actual search tool records
+- **THEN** Deepy SHALL return a structured recoverable failure instead of claiming a successful search
+
+#### Scenario: Tool error
+- **WHEN** the request fails, a server search tool reports an error, or results are incomplete
+- **THEN** Deepy SHALL expose a concise masked error or explicitly marked partial result
+- **AND** it SHALL keep the session alive and SHALL NOT silently retry against another backend
+
+#### Scenario: Missing search key
+- **WHEN** DeepSeek credentials are unavailable
+- **THEN** WebSearch SHALL return an actionable instruction to configure the DeepSeek profile or DEEPSEEK_API_KEY
+- **AND** non-DeepSeek conversation, MCP tools and WebFetch SHALL remain usable
+
+#### Scenario: Legacy search removal
+- **WHEN** built-in search is invoked or its configuration is loaded
+- **THEN** Deepy SHALL NOT contact SearXNG, s.kirineko.tech, or DuckDuckGo and SHALL NOT perform the old query-rewriting model call
+- **AND** it SHALL NOT mount conversation-provider native search tools
+
+#### Scenario: Direct URL fetch
+- **WHEN** the model invokes WebFetch with a complete URL
+- **THEN** Deepy SHALL preserve local HTTP fetching and readable extraction
+- **AND** it SHALL NOT submit an unsupported DeepSeek native web_fetch tool
+
+### Requirement: Responses Read Image Follow-Up
 Deepy's existing image follow-up messages from `Read` SHALL remain compatible with the shared image input contract.
 
 #### Scenario: Read loads an image file
@@ -1357,9 +1376,9 @@ Deepy's existing image follow-up messages from `Read` SHALL remain compatible wi
 - **THEN** Deepy SHALL return a structured follow-up message containing image content
 - **AND** the image content SHALL use the same internal image attachment representation accepted by model input normalization
 
-#### Scenario: Read image follow-up is converted for Chat Completions
+#### Scenario: Read image follow-up is converted for Responses
 - **WHEN** a `Read` image follow-up message is included in model input for a supported image model
-- **THEN** Deepy SHALL convert it to the same Chat Completions image-url shape used for pasted prompt images
+- **THEN** Deepy SHALL convert it to the same Responses input_image shape used for pasted prompt images
 - **AND** it SHALL preserve the base64 data URL and MIME type
 
 #### Scenario: Read image follow-up targets unsupported model
@@ -1367,3 +1386,6 @@ Deepy's existing image follow-up messages from `Read` SHALL remain compatible wi
 - **THEN** Deepy SHALL avoid sending image content blocks to that model
 - **AND** it SHALL surface a concise model incompatibility error rather than sending an unsupported payload
 
+#### Scenario: Tool image exceeds active limits
+- **WHEN** a Read image result exceeds the active model or request image limits
+- **THEN** Deepy SHALL return a recoverable image-limit error without sending the invalid image payload

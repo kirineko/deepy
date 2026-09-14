@@ -73,8 +73,6 @@ def project_sessions_db(project_root: Path, deepy_home: Path | None = None) -> P
     return project_sessions_dir(project_root, deepy_home) / SESSION_DB_NAME
 
 
-
-
 @dataclass
 class DeepySession:
     session_id: str
@@ -301,6 +299,23 @@ class DeepySession:
                 last_usage_record_count=item_count(conn, self.session_id),
             )
 
+    def record_web_search_usage(self, metadata: dict[str, Any]) -> None:
+        """Account for the independent search request without advancing chat context."""
+        raw = metadata.get("usage")
+        if not isinstance(raw, dict):
+            return
+        normalized = normalize_usage(raw)
+        with self._transaction() as conn:
+            row = self._ensure_session_row(conn)
+            previous = json_object(row["web_search_usage_json"]) or {}
+            from .auxiliary_usage import search_usage
+            accumulated = search_usage(previous, raw, normalized)
+            conn.execute("update sessions set web_search_usage_json = ? where id = ?",
+                         (json_dumps(accumulated), self.session_id))
+            if normalized.known:
+                total = merge_usage(json_object(row["usage_json"]), normalized)
+                self._update_session_metadata(conn, usage=total.to_dict())
+
     def record_input_suggestion_usage(
         self,
         usage: TokenUsage | dict[str, Any] | None,
@@ -314,13 +329,8 @@ class DeepySession:
         with self._transaction() as conn:
             row = self._ensure_session_row(conn)
             previous_usage = json_object(row["input_suggestion_usage_json"])
-            accumulated = merge_usage(previous_usage, normalized).to_dict()
-            accumulated["model"] = model
-            if elapsed_ms is not None:
-                accumulated["elapsed_ms"] = coerce_int(
-                    previous_usage.get("elapsed_ms") if previous_usage else None,
-                    0,
-                ) + max(elapsed_ms, 0)
+            from .auxiliary_usage import suggestion_usage
+            accumulated = suggestion_usage(previous_usage, normalized, model, elapsed_ms)
             self._update_session_metadata(conn, input_suggestion_usage=accumulated)
 
     def record_session_cost_start(self, snapshot: dict[str, Any]) -> None:

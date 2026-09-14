@@ -16,7 +16,7 @@ SUPPORTED_IMAGE_MIME_TYPES = frozenset(
         "image/gif",
     }
 )
-DEFAULT_MAX_IMAGE_BYTES = 50 * 1024 * 1024
+DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 UNSUPPORTED_IMAGE_INPUT_MESSAGE = "当前模型不支持图片输入，已忽略粘贴的图片。"
 IMAGE_ONLY_DEFAULT_TEXT = "请描述这张图片的内容，不要执行工具或修改文件。"
 IMAGE_DATA_URL_RE = re.compile(r"^data:image/[a-zA-Z0-9.+-]+;base64,", re.IGNORECASE)
@@ -56,15 +56,10 @@ def supports_image_input(settings: Settings) -> bool:
 
 
 def model_supports_image_input(provider: str, model: str) -> bool:
-    normalized_provider = provider.strip().lower()
-    normalized_model = model.strip().lower()
-    if normalized_provider == "xiaomi":
-        return normalized_model == "mimo-v2.5"
-    if normalized_provider == "openrouter":
-        return normalized_model == "xiaomi/mimo-v2.5"
-    if normalized_provider == "localhost":
-        return normalized_model in {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
-    return False
+    from deepy.config.providers import PROVIDER_BY_ID
+
+    info = PROVIDER_BY_ID.get(provider)
+    return bool(info and any(item.name == model and item.supports_image_input for item in info.models))
 
 
 def validate_image_attachment(
@@ -133,7 +128,10 @@ def build_user_input(
 
 def item_contains_image_content(item: Any) -> bool:
     if isinstance(item, dict):
-        return _content_contains_image(item.get("content"))
+        return _content_contains_image(item.get("content")) or (
+            item.get("type") == "function_call_output"
+            and _content_contains_image(item.get("output"))
+        )
     return _content_contains_image(getattr(item, "content", None))
 
 

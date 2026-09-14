@@ -1,20 +1,9 @@
 ## WebSearch
 
-Search when current or external information is required.
+Search current information using DeepSeek Flash's native search through an independent Messages API request.
 
-Args: `query`.
+Use a concise query. Results contain source titles, URLs and available snippets. An empty result means a real search returned no sources; errors and partial results are explicitly identified. Do not present missing search records as successful browsing.
 
-Uses `tools.web_search.searxng_url` when configured, otherwise uses Deepy's
-default SearXNG endpoint. Requests include browser-like headers so private
-SearXNG instances with limiter enabled are less likely to reject the request as
-bot traffic. If SearXNG cannot be reached or returns no parseable results, falls
-back to Deepy's built-in DuckDuckGo HTML search implementation.
+Requires the DeepSeek profile key or DEEPSEEK_API_KEY independently of the active conversation provider. Prefer configured search-class MCP tools when instructed; this tool remains the built-in fallback. Use WebFetch to read a specific URL.
 
-If MCP web-search tools are listed in the system prompt, prefer those MCP tools
-first for web/current-information searches. Use this built-in WebSearch as the
-fallback when MCP search is unavailable, fails, or the user explicitly asks for
-Deepy's built-in search.
-
-Keep searches targeted. After several successful searches, stop searching and
-synthesize from the gathered sources. Use `WebFetch` for exact URLs that need
-deeper reading instead of continuing broad search queries.
+Each request is bounded to three server searches, 4096 output tokens, sixty seconds and ten displayed sources. Search consumes separate DeepSeek usage. Do not repeatedly retry a failed search without a reason.

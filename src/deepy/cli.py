@@ -13,7 +13,6 @@ from .config import (
     PROVIDER_CATALOG,
     Settings,
     allows_custom_model_for_provider,
-    default_base_url_for_provider,
     default_model_for_provider,
     default_thinking_mode_for_provider,
     is_supported_provider,
@@ -65,7 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--provider",
         default="deepseek",
-        help="Provider: deepseek, openrouter, xiaomi, or localhost.",
+        help="Provider: deepseek, mimo, kimi, or cli_proxy.",
     )
     init_parser.add_argument("--model", help="Model name.")
     init_parser.add_argument("--base-url", help="OpenAI-compatible base URL.")
@@ -160,7 +159,10 @@ def _cmd_config_setup(args: argparse.Namespace) -> int:
 
 def _run_config_setup(config_path: Path) -> None:
     if config_path.exists():
-        existing = load_settings(config_path)
+        try:
+            existing = load_settings(config_path)
+        except ValueError:
+            existing = Settings(path=config_path)
     else:
         existing = Settings(path=config_path)
 
@@ -169,15 +171,16 @@ def _run_config_setup(config_path: Path) -> None:
     print(f"{provider_info.label} provider selected.")
     if provider_info.api_key_url:
         print(f"Create an API key at {provider_info.api_key_url}")
-    api_key = _prompt_config_value("API key", default=existing.model.api_key or "", is_password=True)
-    model = _prompt_model_value(provider, default=existing.model.name)
+    selected = existing.model_for_provider(provider)
+    if existing.provider_keys.get(provider):
+        print("A provider key is available; leave blank to preserve the saved key. Environment overrides are not saved.")
+    api_key = _prompt_config_value("API key", default="", is_password=True)
+    model = _prompt_model_value(provider, default=selected.name)
     base_default = (
-        existing.model.base_url
-        if existing.model.provider == provider
-        else default_base_url_for_provider(provider)
+        selected.base_url
     )
     base_url = _prompt_config_value("Base URL", default=base_default)
-    thinking_mode = _prompt_thinking_mode_value(provider, default=existing.model.reasoning_mode)
+    thinking_mode = _prompt_thinking_mode_value(provider, default=selected.reasoning_mode)
     interface, theme = _prompt_ui_choice_value(
         default_interface=existing.ui.interface,
         default_theme=existing.ui.theme,
@@ -278,8 +281,6 @@ def _prompt_model_value(provider: str, *, default: str) -> str:
     print("Model:")
     for index, model in enumerate(provider_info.models, 1):
         print(f"{index}. {model.name}  {model.description}")
-    if allows_custom_model_for_provider(provider):
-        print("Or paste any model name copied from the OpenRouter models page.")
     default_value = default if default in {model.name for model in provider_info.models} else provider_info.default_model
     value = _prompt_config_value("Model number or name", default=_model_number(provider, default_value))
     return _model_from_selection(provider, value, default=default_value)
@@ -306,8 +307,6 @@ def _model_from_selection(provider: str, value: str, *, default: str) -> str:
 
 
 def _prompt_thinking_mode_value(provider: str, *, default: str) -> str:
-    if provider == "openrouter":
-        return _prompt_openrouter_thinking_mode(default=default)
     modes = thinking_modes_for_provider(provider)
     print("Thinking:")
     for index, mode in enumerate(modes, 1):
@@ -322,64 +321,6 @@ def _thinking_mode_number(provider: str, mode: str) -> str:
         if item == mode:
             return str(index)
     return "1"
-
-
-def _prompt_openrouter_thinking_mode(*, default: str) -> str:
-    current_enabled = default not in {"none", "disabled"}
-    print("Thinking:")
-    print("1. enabled  Reasoning enabled")
-    print("2. disabled Reasoning disabled")
-    state_default = "1" if current_enabled else "2"
-    state_value = _prompt_config_value("Thinking number or name", default=state_default)
-    state = _openrouter_thinking_state_from_selection(state_value, default="enabled" if current_enabled else "disabled")
-    if state == "disabled":
-        return "none"
-    print("Reasoning effort:")
-    print("1. default  Use the model default reasoning strength")
-    for index, effort in enumerate(("xhigh", "high", "medium", "low", "minimal"), 2):
-        print(f"{index}. {effort}")
-    effort_default = _openrouter_effort_number(default)
-    effort_value = _prompt_config_value("Reasoning effort number or name", default=effort_default)
-    return _openrouter_effort_from_selection(effort_value, default=default)
-
-
-def _openrouter_thinking_state_from_selection(value: str, *, default: str) -> str:
-    normalized = value.strip().lower()
-    if normalized in {"1", "enabled", "enable", "on", "true", "yes"}:
-        return "enabled"
-    if normalized in {"2", "disabled", "disable", "off", "false", "no", "none"}:
-        return "disabled"
-    return default
-
-
-def _openrouter_effort_number(mode: str) -> str:
-    return {
-        "enabled": "1",
-        "xhigh": "2",
-        "high": "3",
-        "medium": "4",
-        "low": "5",
-        "minimal": "6",
-    }.get(mode, "1")
-
-
-def _openrouter_effort_from_selection(value: str, *, default: str) -> str:
-    normalized = value.strip().lower()
-    by_number = {
-        "1": "enabled",
-        "2": "xhigh",
-        "3": "high",
-        "4": "medium",
-        "5": "low",
-        "6": "minimal",
-    }
-    if normalized in by_number:
-        return by_number[normalized]
-    if normalized in {"default", "enabled"}:
-        return "enabled"
-    if normalized in {"xhigh", "high", "medium", "low", "minimal"}:
-        return normalized
-    return default if default in {"enabled", "xhigh", "high", "medium", "low", "minimal"} else "enabled"
 
 
 def _thinking_mode_from_selection(provider: str, value: str, *, default: str) -> str:
@@ -501,7 +442,7 @@ def _doctor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     except Exception as exc:
         check("openai_agents_provider", False, str(exc))
     else:
-        check("openai_agents_provider", True, "OpenAIChatCompletionsModel ready")
+        check("openai_agents_provider", True, "OpenAIResponsesModel ready")
 
     ok = all(bool(item["ok"]) for item in checks)
     return 0 if ok else 1, {

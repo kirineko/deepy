@@ -48,6 +48,8 @@ class ImageAttachmentController:
         return ImagePasteResult(handled=True, attachment=attachment)
 
     def attach_image(self, data: bytes, mime_type: str) -> PromptImageAttachment:
+        if len(self.attachments) >= 8:
+            raise ImageAttachmentError("每轮最多支持 8 张图片。")
         attachment = build_prompt_image_attachment(
             data=data,
             mime_type=mime_type,
@@ -56,13 +58,22 @@ class ImageAttachmentController:
         self.attachments.append(attachment)
         return attachment
 
+    def validate_submission(self) -> None:
+        if self.attachments and not self.supports_image_input:
+            raise ImageAttachmentError("当前模型不支持图片，请切换图片模型或移除附件。草稿已保留。")
+
     def collect_and_reset(self) -> list[PromptImageAttachment]:
+        self.validate_submission()
         attachments = list(self.attachments)
         self.attachments.clear()
         return attachments
 
     def collect_from_prompt_text(self, text: str) -> tuple[str, list[PromptImageAttachment]]:
+        command = remove_image_attachment_labels(text, self.attachments).strip()
+        if command == "/model" or command.startswith("/model "):
+            return command, []
         self.sync_to_prompt_text(text)
+        self.validate_submission()
         attachments = list(self.attachments)
         cleaned_text = remove_image_attachment_labels(text, attachments).strip()
         self.clear()

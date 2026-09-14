@@ -68,6 +68,7 @@ def normalize_usage(value: Any) -> TokenUsage:
 
     prompt_cache_hit_tokens = _first_int(
         payload.get("prompt_cache_hit_tokens"),
+        payload.get("cache_read_input_tokens"),
         prompt_details.get("cached_tokens"),
         input_details.get("cached_tokens"),
     )
@@ -78,6 +79,11 @@ def normalize_usage(value: Any) -> TokenUsage:
         completion_details.get("reasoning_tokens"),
         output_details.get("reasoning_tokens"),
     )
+
+    if "cache_read_input_tokens" in payload or "cache_creation_input_tokens" in payload:
+        prompt_tokens += _int_field(payload.get("cache_read_input_tokens")) + _int_field(payload.get("cache_creation_input_tokens"))
+        total_tokens = prompt_tokens + completion_tokens
+        prompt_cache_miss_tokens = max(prompt_tokens - prompt_cache_hit_tokens, 0)
 
     request_entries = _request_usage_entries(payload.get("request_usage_entries"))
     if not request_entries and payload:

@@ -4,7 +4,9 @@
 
 Deepy uses a Rich and prompt-toolkit terminal interface that makes user input,
 assistant output, thinking, tool calls, diffs, usage, and context status readable.
+
 ## Requirements
+
 ### Requirement: Prompt Input Behavior
 
 Deepy SHALL provide ergonomic multiline terminal input.
@@ -239,76 +241,57 @@ waiting for startup network checks or MCP connection to complete.
   task into the active prompt area
 
 ### Requirement: Interactive Model Selection Command
-Deepy SHALL provide an interactive `/model` command for selecting the active
-provider, model, and provider-appropriate thinking mode with minimal typing.
+Deepy SHALL provide a transactional provider/model/reasoning picker using saved provider profiles.
 
 #### Scenario: User opens model picker
-- **WHEN** a user runs `/model` without arguments
-- **THEN** Deepy SHALL show the current provider, model, and thinking mode
-- **AND** it SHALL present selectable providers `DeepSeek`, `OpenRouter`, and `Xiaomi`
-- **AND** `DeepSeek` SHALL be the default provider for new or legacy configurations
+- **WHEN** a user runs /model
+- **THEN** Deepy SHALL show the active provider, model and reasoning and offer DeepSeek, MiMo, Kimi and CLI Proxy
+- **AND** DeepSeek SHALL be the default for new configurations
 
 #### Scenario: User selects provider then model then thinking mode
-- **WHEN** a user selects a provider from the `/model` picker
-- **THEN** Deepy SHALL present only models supported by that provider
-- **AND** after model selection it SHALL present only thinking choices supported by that provider
-- **AND** DeepSeek SHALL offer `none`, `high`, and `max`
-- **AND** OpenRouter SHALL offer `enabled`, `disabled`, `xhigh`, `high`,
-  `medium`, `low`, `minimal`, and `none`
-- **AND** Xiaomi MiMo SHALL offer `disabled` and `enabled`
-- **AND** it SHALL save the selected provider, model, and thinking mode only after all selections are complete
-
-#### Scenario: User cancels model selection
-- **WHEN** a user cancels the `/model` picker before completing all selections
-- **THEN** Deepy SHALL leave the saved model settings unchanged
-- **AND** it SHALL keep the current interactive session settings unchanged
+- **WHEN** a user selects a provider
+- **THEN** Deepy SHALL restore its saved selections or use defaults on first selection
+- **AND** it SHALL offer only its catalog models and supported reasoning modes
 
 #### Scenario: User completes model selection
-- **WHEN** a user completes `/model` selection
-- **THEN** Deepy SHALL persist the selected provider, model, and thinking settings
-- **AND** subsequent turns in the same interactive process SHALL use the updated provider and model settings
-- **AND** Deepy SHALL print a concise confirmation with the active provider, model, and thinking mode
+- **WHEN** all selections complete and persistence succeeds
+- **THEN** Deepy SHALL save the target profile and active selection without changing other profiles
+- **AND** subsequent turns SHALL use the new selection and display a concise confirmation
+
+#### Scenario: User cancels model selection
+- **WHEN** the picker is cancelled or saving fails
+- **THEN** Deepy SHALL keep previous persisted and runtime state
 
 ### Requirement: Direct Model Command Forms
-Deepy SHALL provide direct `/model` command forms for users who prefer explicit
-arguments or are using non-picker terminal flows.
+Deepy SHALL support direct commands consistent with profile-aware model selection.
 
 #### Scenario: User lists supported models
-- **WHEN** a user runs `/model list`
-- **THEN** Deepy SHALL list supported models grouped by provider
-- **AND** it SHALL show the available thinking choices for each provider family
+- **WHEN** a user runs /model list
+- **THEN** Deepy SHALL group supported models by provider and show supported reasoning and image capabilities
 
 #### Scenario: User sets DeepSeek model directly
-- **WHEN** a user runs `/model set deepseek-v4-pro` or `/model set deepseek-v4-flash`
-- **THEN** Deepy SHALL persist provider `deepseek` and the selected model
-- **AND** it SHALL keep the current DeepSeek reasoning mode unless a reasoning mode is also selected
-
-#### Scenario: User sets provider and MiMo model directly
-- **WHEN** a user runs `/model set openrouter xiaomi/mimo-v2.5-pro high`
-- **OR** a user runs `/model set openrouter xiaomi/mimo-v2.5 none`
-- **OR** a user runs `/model set xiaomi mimo-v2.5-pro enabled`
-- **OR** a user runs `/model set xiaomi mimo-v2.5 disabled`
-- **THEN** Deepy SHALL persist the selected provider, model, and provider-appropriate thinking mode
+- **WHEN** a user runs `/model set deepseek-flash` or `/model set mimo mimo-v2.5 enabled` or an equivalent supported provider/model command
+- **THEN** Deepy SHALL save the target profile selection and preserve its reasoning unless explicitly changed
 
 #### Scenario: User sets provider directly
-- **WHEN** a user runs `/model provider deepseek`, `/model provider openrouter`, or `/model provider xiaomi`
-- **THEN** Deepy SHALL persist the selected provider
-- **AND** it SHALL choose that provider's default model and default thinking mode when the current model is not valid for the selected provider
+- **WHEN** a user runs /model provider with deepseek, mimo, kimi or cli_proxy
+- **THEN** Deepy SHALL restore that provider profile and credentials, using defaults only for unset settings
 
 #### Scenario: User sets reasoning mode directly
-- **WHEN** a user runs `/model reasoning none`, `/model reasoning high`, or `/model reasoning max`
-- **THEN** Deepy SHALL persist the selected DeepSeek reasoning mode
-- **AND** it SHALL keep the current provider and model when they support that reasoning mode
-
-#### Scenario: User sets switch-only thinking directly
-- **WHEN** a user runs `/model thinking enabled` or `/model thinking disabled`
-- **THEN** Deepy SHALL persist the selected switch-only thinking mode when the current provider supports it
-- **AND** it SHALL keep the current provider and model
+- **WHEN** a user runs /model reasoning or /model thinking with a supported choice
+- **THEN** Deepy SHALL update only the active profile reasoning and retain provider/model
 
 #### Scenario: User provides invalid model command arguments
-- **WHEN** a user runs `/model` with unsupported arguments, provider, model, or thinking mode
-- **THEN** Deepy SHALL reject the command with a concise usage message
-- **AND** it SHALL keep the saved model settings unchanged
+- **WHEN** arguments reference a removed provider/model or unsupported reasoning mode
+- **THEN** Deepy SHALL show concise usage guidance and preserve saved and runtime settings
+
+#### Scenario: User sets provider and MiMo model directly
+- **WHEN** a user runs /model set mimo mimo-v2.5 enabled or /model set mimo mimo-v2.5-pro disabled
+- **THEN** Deepy SHALL update the MiMo profile and active selection without changing other profiles
+
+#### Scenario: User sets switch-only thinking directly
+- **WHEN** a user runs /model thinking enabled or /model thinking disabled for MiMo
+- **THEN** Deepy SHALL update the active profile reasoning while retaining its model
 
 ### Requirement: Model Selection Discoverability
 Deepy SHALL make provider and model selection discoverable in the interactive
@@ -887,7 +870,7 @@ bottom during interactive prompt input and model or local-command work.
 - **THEN** the prompt bottom footer SHALL show compact status segments for the
   active model and reasoning mode, CWD, and context window status
 - **AND** the model and reasoning mode SHALL be represented as a single leading
-  segment such as `model deepseek-v4-pro[max]`
+  segment such as `model deepseek-flash[max]`
 - **AND** the footer SHALL NOT show a separate `thinking` label segment for
   reasoning mode
 - **AND** the footer SHALL NOT show persistent `Ctrl+D twice exit` help
@@ -2200,4 +2183,3 @@ primitives through `deepy.ui.shared`.
 - **WHEN** external code imports `deepy.ui`
 - **THEN** it SHALL be able to reach `run_interactive` and `run_tui` without
   importing removed top-level UI modules such as `deepy.ui.terminal` or `deepy.tui`
-
