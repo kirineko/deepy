@@ -77,7 +77,7 @@ def uses_mimo_tool_schema_compatibility(provider: str, model: str) -> bool:
     normalized_provider = provider.strip().lower()
     normalized_model = model.strip().lower()
     if normalized_provider == "mimo":
-        return normalized_model in {"mimo-v2.5", "mimo-v2.5-pro"}
+        return normalized_model in {"mimo-v2.6-flash", "mimo-v2.6-pro"}
     return False
 
 

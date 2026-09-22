@@ -25,12 +25,11 @@ Deepy 是面向真实项目工作的 Python CLI 编程 Agent。它在终端里�
 修改文件、运行命令、检索网页，并恢复长任务。Deepy 以 DeepSeek 为优先，同时支持
 OpenAI 兼容 provider。
 
-## 0.2.33 更新
+## 0.2.34 更新
 
-DeepSeek Flash、MiMo 2.5 / 2.5 Pro、Kimi K3 和 CLI Proxy 的主对话统一使用 Responses API，
-各 provider 密钥独立保存。内置 WebSearch 使用 DeepSeek 原生联网搜索（需配置 DeepSeek 密钥），
-现有 MCP 搜索继续可用。切换模型保留原始历史和附件，按目标模型预算准备上下文，底栏使用 K/M 简洁显示。
-详见[上下文与历史恢复指南](docs/model-context.zh-CN.md)。
+MiMo 升级至 **V2.6 Flash / Pro**，两款均支持图片输入；Flash 为默认模型和输入建议模型。
+旧 V2.5 配置会给出明确替换指引，不会静默改写配置文件或会话历史。
+详见[更新日志](CHANGELOG.zh-CN.md)及[上下文与历史恢复指南](docs/model-context.zh-CN.md)。
 
 ## 为什么使用 Deepy
 
@@ -302,9 +301,11 @@ deepy config theme light
 | Provider | Model IDs | Thinking |
 |---|---|---|
 | DeepSeek | `deepseek-flash` (V4.1 Flash) | `none`, `high`, `max` |
-| MiMo | `mimo-v2.5`, `mimo-v2.5-pro` | `disabled`, `enabled` |
+| MiMo | `mimo-v2.6-flash`, `mimo-v2.6-pro` | `disabled`, `enabled` |
 | Kimi | `kimi-k3` | `low`, `high`, `max` |
 | CLI Proxy | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` |
+
+MiMo 默认使用 `mimo-v2.6-flash`。Deepy 不再接受 `mimo-v2.5` 和 `mimo-v2.5-pro`；小米计划于 **2026-10-21 10:00（北京时间）**下线这两个模型。请在 TOML 文件的 `[providers.mimo]` 下，将 `model` 从 `mimo-v2.5` 改为 `mimo-v2.6-flash`，或从 `mimo-v2.5-pro` 改为 `mimo-v2.6-pro`。若存在 `[providers.mimo.model_limits."mimo-v2.5"]` / `[providers.mimo.model_limits."mimo-v2.5-pro"]`，也需将表名中的模型 ID 改为对应新 ID，或移除该覆盖项；保留密钥、URL、思考设置和有效限制值。未激活的 profile 同样需要更新，启动错误会指出需修改的配置项。Deepy 不会自动改写配置或会话历史。参见[官方模型列表](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model)。
 
 各 provider 独立保存 key、URL、model 和 thinking。`/model provider <id>` 恢复该 provider 的配置，setup 中密码留空保留原 key。默认环境变量为 `DEEPSEEK_API_KEY`、`MIMO_API_KEY`、`KIMI_API_KEY`（备用 `MOONSHOT_API_KEY`）、`CLI_PROXY_API_KEY`；环境密钥优先但不会写回文件。不再支持通用 `DEEPY_API_KEY` 覆盖。
 
@@ -312,11 +313,11 @@ deepy config theme light
 
 主对话、subagent、输入建议和压缩统一使用 Responses。内置 WebSearch 独立调用 DeepSeek Messages 的原生搜索工具，所有聊天 provider 都需要单独的 DeepSeek key 才能使用它。保留 Tavily 等 MCP 的优先策略，WebFetch 仍由本地 HTTP 抓取。搜索 usage 单独显示并计入 session API 总量。
 
-上述模型除 MiMo 2.5 Pro 外均支持图片。两套 UI 支持粘贴多图和仅图片提交；PNG/JPEG/WebP/GIF 单图最多 10 MiB、每轮最多 8 图，完整编码请求最多 32 MiB。切到纯文本模型时不会丢弃已有图片，会提示移除草稿附件、切回图片模型或开始纯文本会话。本次不支持原生音频、视频、PDF 输入或媒体生成。
+上述模型（含 MiMo 2.6 Flash 和 Pro）均支持图片。两套 UI 支持粘贴多图和仅图片提交；PNG/JPEG/WebP/GIF 单图最多 10 MiB、每轮最多 8 图，完整编码请求最多 32 MiB。切到纯文本模型时不会丢弃已有图片，会提示移除草稿附件、切回图片模型或开始纯文本会话。本次不支持原生音频、视频、PDF 输入或媒体生成。
 
 批量 `Read` 最多返回八张图片；超限时返回工具错误，agent 可以缩小批次后重试。
 
-输入建议固定使用当前 provider 的 `deepseek-flash`/none、`mimo-v2.5`/disabled、`kimi-k3`/low 或 `gpt-5.6-luna`/none，独立统计 usage。
+输入建议固定使用当前 provider 的 `deepseek-flash`/none、`mimo-v2.6-flash`/disabled、`kimi-k3`/low 或 `gpt-5.6-luna`/none，独立统计 usage。
 
 ## 开发
 

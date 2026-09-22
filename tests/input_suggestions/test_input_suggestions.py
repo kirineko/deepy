@@ -162,7 +162,8 @@ def test_input_suggestion_uses_fixed_localhost_luna_non_thinking():
 
 
 @pytest.mark.asyncio
-async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monkeypatch):
+@pytest.mark.parametrize("provider,model,expected", [("deepseek", "deepseek-flash", "deepseek-flash"), ("mimo", "mimo-v2.6-flash", "mimo-v2.6-flash"), ("mimo", "mimo-v2.6-pro", "mimo-v2.6-flash")])
+async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monkeypatch, provider, model, expected):
     calls: list[dict[str, object]] = []
 
     class FakeCompletions:
@@ -182,7 +183,7 @@ async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monk
             pass
 
     monkeypatch.setattr("deepy.input_suggestions.AsyncOpenAI", FakeAsyncOpenAI)
-    settings = Settings(model=ModelConfig(api_key="sk-test", base_url="https://api.example/v1"))
+    settings = Settings(model=ModelConfig(provider=provider, name=model, api_key="sk-test", base_url="https://api.example/v1"))
     items = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi"},
@@ -197,7 +198,7 @@ async def test_generate_input_suggestion_uses_fixed_model_and_records_usage(monk
     assert suggestion.usage.prompt_tokens == 9
     assert suggestion.usage.completion_tokens == 2
     assert calls[0] == {"client": {"base_url": "https://api.example/v1", "api_key": "sk-test"}}
-    assert calls[1]["model"] == "deepseek-flash"
+    assert calls[1]["model"] == expected
     assert calls[1]["reasoning"] == {"effort": "none"}
     assert calls[1]["store"] is False
     assert "reasoning_effort" not in calls[1]

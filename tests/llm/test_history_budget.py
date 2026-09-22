@@ -147,14 +147,14 @@ def test_boundary_error_carries_recoverable_history():
 
 
 @pytest.mark.asyncio
-async def test_image_reduction_requires_opt_in_and_uses_only_last_source(tmp_path):
+async def test_image_reduction_requires_opt_in_and_uses_only_last_source(tmp_path, text_only_mimo_pro):
     from deepy.llm.history_migration import summary_input
     session = DeepySession.create(tmp_path, deepy_home=tmp_path / "home")
     image = {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="}
     items = [{"role": "user", "content": [image]}]
     await session.add_items(items)
     settings = Settings.from_mapping({"active_provider": "mimo", "providers": {
-        "mimo": {"model": "mimo-v2.5-pro"}, "deepseek": {"api_key": "test"}}})
+        "mimo": {"model": "mimo-v2.6-pro"}, "deepseek": {"api_key": "test"}}})
     calls, announcements = [], []
     async def summarize(group, candidate, **kwargs):
         calls.append(candidate.model.name)

@@ -43,7 +43,7 @@ def _model_usage_text() -> str:
         "Usage: /model | /model list | "
         "/model set deepseek-flash [none|high|max] | "
         "/model set kimi kimi-k3 low|high|max | "
-        "/model set mimo mimo-v2.5-pro enabled|disabled | "
+        "/model set mimo mimo-v2.6-pro enabled|disabled | "
         "/model set cli_proxy gpt-5.6-terra none|low|medium|high|xhigh | "
         "/model provider deepseek|mimo|kimi|cli_proxy | "
         "/model thinking <mode>"

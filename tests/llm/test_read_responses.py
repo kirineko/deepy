@@ -15,12 +15,12 @@ from deepy.tools.agents import build_function_tools
 from deepy.tools.builtin import ToolRuntime
 
 
-@pytest.mark.parametrize("info", PROVIDER_CATALOG, ids=lambda p: p.id)
+@pytest.mark.parametrize("info,model", [(p, m.name) for p in PROVIDER_CATALOG for m in p.models])
 @pytest.mark.asyncio
-async def test_read_images_in_second_request(tmp_path, info):
+async def test_read_images_in_second_request(tmp_path, info, model):
     (tmp_path / "a.png").write_bytes(b"image-a")
     (tmp_path / "b.png").write_bytes(b"image-b")
-    settings = Settings.from_mapping({"active_provider": info.id})
+    settings = Settings.from_mapping({"active_provider": info.id, "providers": {info.id: {"model": model}}})
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     calls = []
 
@@ -55,7 +55,7 @@ async def test_read_images_in_second_request(tmp_path, info):
                 "id": f"resp_{len(calls)}",
                 "object": "response",
                 "created_at": 1,
-                "model": info.default_model,
+                "model": model,
                 "status": "completed",
                 "output": output,
             },
@@ -67,13 +67,15 @@ async def test_read_images_in_second_request(tmp_path, info):
         agent = Agent(
             name="test",
             model=DeepyResponsesModel(
-                provider=info.id, model=info.default_model, openai_client=client
+                provider=info.id, model=model, openai_client=client
             ),
             model_settings=build_model_settings(settings),
-            tools=build_function_tools(runtime, include_tools={"Read"}),
+            tools=build_function_tools(runtime, include_tools={"Read"}, mimo_schema_compatibility=info.id == "mimo"),
         )
         result = await Runner.run(agent, "Read both images")
     assert result.final_output == "seen"
+    assert all(call["model"] == model for call in calls)
+    assert next(item for item in calls[1]["input"] if item.get("type") == "function_call_output")["call_id"] == "call_1"
     output = next(
         item["output"] for item in calls[1]["input"] if item.get("type") == "function_call_output"
     )
@@ -85,11 +87,11 @@ async def test_read_images_in_second_request(tmp_path, info):
     assert all("base64" not in p["text"] for p in output if p["type"] == "input_text")
 
 
-def test_read_rejects_text_only_model_and_oversize(tmp_path):
+def test_read_rejects_text_only_model_and_oversize(tmp_path, text_only_mimo_pro):
     image = tmp_path / "a.png"
     image.write_bytes(b"image")
     settings = Settings.from_mapping(
-        {"active_provider": "mimo", "providers": {"mimo": {"model": "mimo-v2.5-pro"}}}
+        {"active_provider": "mimo", "providers": {"mimo": {"model": "mimo-v2.6-pro"}}}
     )
     result = json.loads(ToolRuntime(cwd=tmp_path, settings=settings).read({"path": "a.png"}))
     assert not result["ok"] and "不支持图片" in result["error"]

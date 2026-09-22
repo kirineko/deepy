@@ -234,14 +234,15 @@ async def test_tui_user_and_assistant_markers_render_inline_with_content(make_tu
 
 
 @pytest.mark.asyncio
-async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
+@pytest.mark.parametrize("model", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
+async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path, model):
     captured: list[tuple[str, list[object]]] = []
 
     async def fake_run_once(prompt: str, **kwargs) -> RunSummary:
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name=model))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -271,8 +272,8 @@ async def test_tui_pastes_supported_image_and_submits_attachment(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_tui_rejects_image_paste_for_unsupported_model_without_clearing_text(tmp_path):
-    app = DeepyTuiApp(settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro")), project_root=tmp_path, run_once=_idle_run_once)
+async def test_tui_rejects_image_paste_for_unsupported_model_without_clearing_text(tmp_path, text_only_mimo_pro):
+    app = DeepyTuiApp(settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-pro")), project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
         app.image_attachments.clipboard_reader = lambda: ClipboardImage(
@@ -300,7 +301,7 @@ async def test_tui_deleting_image_label_removes_attachment(tmp_path):
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -332,7 +333,7 @@ async def test_tui_keyboard_deletes_selected_attachment_without_prompt_text(tmp_
         captured.append((prompt, list(kwargs.get("image_attachments") or [])))
         return RunSummary(output="ok", session_id="s1", complete=True)
 
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=fake_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -394,7 +395,7 @@ async def test_tui_keyboard_deletes_selected_attachment_without_prompt_text(tmp_
 
 @pytest.mark.asyncio
 async def test_tui_attachment_state_stays_outside_prompt_text(tmp_path):
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash"))
     app = DeepyTuiApp(settings=settings, project_root=tmp_path, run_once=_idle_run_once)
 
     async with app.run_test(size=(100, 32)) as pilot:
@@ -704,7 +705,7 @@ async def test_tui_exit_summary_marks_third_party_cost_unsupported(tmp_path, mon
         settings=Settings(
             model=ModelConfig(
                 provider="mimo",
-                name="mimo-v2.5-pro",
+                name="mimo-v2.6-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )
@@ -1332,7 +1333,7 @@ async def test_tui_reset_flow_writes_third_party_provider_settings(tmp_path) -> 
 
         saved = load_settings(config_path)
         assert saved.model.provider == "mimo"
-        assert saved.model.name == "mimo-v2.5"
+        assert saved.model.name == "mimo-v2.6-flash"
         assert saved.model.reasoning_mode == "disabled"
         assert saved.model.reasoning_effort == "none"
         assert saved.ui.interface == "classic"
@@ -4304,7 +4305,7 @@ async def test_tui_status_command_does_not_fetch_balance_for_third_party_provide
         settings=Settings(
             model=ModelConfig(
                 provider="mimo",
-                name="mimo-v2.5-pro",
+                name="mimo-v2.6-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )
@@ -4362,14 +4363,14 @@ async def test_tui_theme_and_model_direct_commands_persist_settings(tmp_path) ->
         prompt.text = "/model set deepseek-flash high"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        prompt.text = "/model set mimo mimo-v2.5 enabled"
+        prompt.text = "/model set mimo mimo-v2.6-flash enabled"
         await pilot.press("enter")
         await pilot.pause(0.2)
 
         saved = load_settings(config_path)
         assert saved.ui.theme == "light"
         assert saved.model.provider == "mimo"
-        assert saved.model.name == "mimo-v2.5"
+        assert saved.model.name == "mimo-v2.6-flash"
         assert saved.model.reasoning_mode == "enabled"
         rendered_info = "\n".join(block.body for block in app.query(InfoBlock))
         assert "API key missing for mimo" in rendered_info
@@ -5272,11 +5273,11 @@ async def test_tui_prompt_arrow_keys_still_move_inside_multiline_input(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp_path):
+async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp_path, text_only_mimo_pro):
     from deepy.config import write_config, load_settings
 
     config = tmp_path / "config.toml"
-    write_config(config, provider="mimo", model="mimo-v2.5", api_key="test", theme="dark")
+    write_config(config, provider="mimo", model="mimo-v2.6-flash", api_key="test", theme="dark")
     async def no_model_call(*args, **kwargs):
         raise AssertionError("Incompatible draft must not start a model turn")
 
@@ -5284,9 +5285,9 @@ async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp
     async with app.run_test(size=(100, 32)) as pilot:
         prompt = app.query_one("#prompt-input", PromptTextArea)
         attachment = app.image_attachments.attach_image(b"image", "image/png")
-        prompt.text = "/model set mimo mimo-v2.5-pro enabled"
+        prompt.text = "/model set mimo mimo-v2.6-pro enabled"
         await pilot.press("enter")
-        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5-pro")
+        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.6-pro")
         await app.workers.wait_for_complete()
         assert app.image_attachments.attachments == [attachment]
         prompt.text = "describe"
@@ -5294,9 +5295,9 @@ async def test_model_switch_preserves_images_and_blocks_text_only_submission(tmp
         await pilot.pause()
         assert prompt.text == "describe"
         assert app.image_attachments.attachments == [attachment]
-        prompt.text = "/model set mimo mimo-v2.5 enabled"
+        prompt.text = "/model set mimo mimo-v2.6-flash enabled"
         await pilot.press("enter")
-        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.5")
+        await _wait_for(pilot, lambda: app.settings.model.name == "mimo-v2.6-flash")
         # Settings change before the command finishes updating/focusing the UI.
         await app.workers.wait_for_complete()
         assert app.image_attachments.attachments == [attachment]

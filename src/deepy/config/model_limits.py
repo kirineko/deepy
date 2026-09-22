@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
+from .retired_models import retired_model_guidance
+
 DEFAULT_OUTPUT_TOKENS = 32_768
 SUMMARY_OUTPUT_TOKENS = 8_192
 ESTIMATION_ALLOWANCE = 4_096
@@ -31,9 +33,10 @@ class ModelLimits:
 _BASE = (
     ModelLimits("deepseek", "deepseek-flash", "1M", None, 1_000_000, 384_000,
                 "conservative", "https://api-docs.deepseek.com/quick_start/pricing/"),
-    *(ModelLimits("mimo", model, "1M", None, 1_000_000, 128_000,
-                  "conservative", "https://mimo.mi.com/docs/zh-CN/quick-start/summary/model")
-      for model in ("mimo-v2.5", "mimo-v2.5-pro")),
+    *(ModelLimits("mimo", model, "1M", None, 1_000_000, 131_072,
+                  "conservative", "https://mimo.mi.com/docs/zh-CN/api/chat/responses",
+                  checked_date="2026-09-22")
+      for model in ("mimo-v2.6-flash", "mimo-v2.6-pro")),
     ModelLimits("kimi", "kimi-k3", "1M", None, 1_000_000, 1_048_576,
                 "conservative", "https://platform.kimi.com/docs/api/responses"),
     *(ModelLimits("cli_proxy", model, "1,050,000", 1_050_000, 1_050_000, 128_000,
@@ -74,7 +77,7 @@ def resolve_model_limits(
 ) -> ResolvedModelLimits:
     catalog = MODEL_LIMITS.get((provider, model))
     if catalog is None:
-        raise ValueError(f"Unknown model limits: {provider}/{model}.")
+        raise ValueError(retired_model_guidance(provider, model, limits=True) or f"Unknown model limits: {provider}/{model}.")
     raw = overrides or {}
     if set(raw) - {"context_window_tokens", "max_output_tokens"}:
         raise ValueError(f"Unknown model limit field for {provider}/{model}.")

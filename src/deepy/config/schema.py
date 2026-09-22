@@ -8,6 +8,8 @@ from deepy.audit import AuditConfig
 
 from .model_limits import ResolvedModelLimits
 
+from .retired_models import retired_model_guidance
+
 from .providers import (
     DEFAULT_BASE_URL,
     DEFAULT_COMPACT_PRESERVE_RECENT_MESSAGES,
@@ -60,7 +62,7 @@ class ModelConfig:
         info = provider_info_for(provider)
         name = _as_str(raw.get("model"), _as_str(raw.get("name"), info.default_model))
         if not is_valid_config_model_for_provider(name, provider):
-            raise ValueError(f"Unsupported model {name} for {provider}.")
+            raise ValueError(retired_model_guidance(provider, name) or f"Unsupported model {name} for {provider}.")
         mode = _as_str(raw.get("reasoning"), info.default_thinking_mode)
         if not is_valid_thinking_mode_for_provider(mode, provider):
             raise ValueError(f"Unsupported reasoning mode {mode} for {provider}.")

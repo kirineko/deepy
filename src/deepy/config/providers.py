@@ -91,16 +91,17 @@ DEEPSEEK_MODEL_CATALOG = (
 )
 MIMO_MODEL_CATALOG = (
     ModelInfo(
-        "mimo-v2.5",
-        "MiMo 2.5",
+        "mimo-v2.6-flash",
+        "MiMo 2.6 Flash",
         "MiMo Responses with image input.",
         supports_image_input=True,
         default_reasoning_mode="enabled",
     ),
     ModelInfo(
-        "mimo-v2.5-pro",
-        "MiMo 2.5 Pro",
-        "MiMo Pro text reasoning.",
+        "mimo-v2.6-pro",
+        "MiMo 2.6 Pro",
+        "MiMo Pro Responses with image input.",
+        supports_image_input=True,
         default_reasoning_mode="enabled",
     ),
 )
@@ -142,7 +143,7 @@ PROVIDER_CATALOG = (
         DEFAULT_MIMO_BASE_URL,
         MIMO_MODEL_CATALOG,
         SWITCH_ONLY_THINKING_MODES,
-        "mimo-v2.5",
+        "mimo-v2.6-flash",
         "enabled",
         api_key_url="https://platform.xiaomimimo.com/console/api-keys",
     ),

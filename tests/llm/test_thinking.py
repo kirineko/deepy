@@ -31,7 +31,7 @@ def test_responses_reasoning(provider, mode, effort):
     "provider,model,effort",
     [
         ("deepseek", "deepseek-flash", "none"),
-        ("mimo", "mimo-v2.5", "none"),
+        ("mimo", "mimo-v2.6-flash", "none"),
         ("kimi", "kimi-k3", "low"),
         ("cli_proxy", "gpt-5.6-luna", "none"),
     ],

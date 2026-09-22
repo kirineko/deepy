@@ -1667,7 +1667,7 @@ def test_status_slash_command_does_not_fetch_balance_for_third_party_provider(tm
         settings=Settings(
             model=ModelConfig(
                 provider="mimo",
-                name="mimo-v2.5-pro",
+                name="mimo-v2.6-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )
@@ -1755,7 +1755,7 @@ def test_model_slash_command_sets_xiaomi_enabled_without_high_effort(tmp_path):
     console = Console(record=True)
 
     next_session = _handle_slash_command(
-        SlashCommand("model", "set mimo mimo-v2.5 enabled"),
+        SlashCommand("model", "set mimo mimo-v2.6-flash enabled"),
         console,
         tmp_path,
         "s1",
@@ -1764,9 +1764,9 @@ def test_model_slash_command_sets_xiaomi_enabled_without_high_effort(tmp_path):
 
     text = config.read_text(encoding="utf-8")
     assert next_session == "s1"
-    assert "Saved provider: mimo · model: mimo-v2.5 · thinking: enabled" in console.export_text()
+    assert "Saved provider: mimo · model: mimo-v2.6-flash · thinking: enabled" in console.export_text()
     assert 'provider = "mimo"' in text
-    assert 'model = "mimo-v2.5"' in text
+    assert 'model = "mimo-v2.6-flash"' in text
     assert 'reasoning = "enabled"' in text
     assert 'reasoning = "high"' not in text
 
@@ -1811,11 +1811,11 @@ def test_model_slash_command_uses_numbered_selection(tmp_path):
     assert "Providers:" in rendered
     assert "Models for mimo:" in rendered
     assert "Thinking:" in rendered
-    assert "Saved provider: mimo · model: mimo-v2.5 · thinking: enabled" in rendered
+    assert "Saved provider: mimo · model: mimo-v2.6-flash · thinking: enabled" in rendered
     assert "API key missing for mimo" in rendered
     assert "https://platform.xiaomimimo.com/console/api-keys" in rendered
     assert 'active_provider = "mimo"' in text
-    assert 'model = "mimo-v2.5"' in text
+    assert 'model = "mimo-v2.6-flash"' in text
     assert 'reasoning = "enabled"' in text
 
 
@@ -2476,7 +2476,7 @@ def test_reset_slash_command_prints_xiaomi_api_key_guidance(tmp_path, monkeypatc
     text = config.read_text(encoding="utf-8")
     assert 'provider = "mimo"' in text
     assert 'api_key = "sk-mi-reset"' in text
-    assert 'model = "mimo-v2.5"' in text
+    assert 'model = "mimo-v2.6-flash"' in text
     assert 'reasoning = "enabled"' in text
 
 
@@ -3782,7 +3782,7 @@ def test_run_interactive_submits_supported_image_only_prompt_as_attachment(tmp_p
     monkeypatch.setattr(terminal, "prompt_for_input", fake_prompt_for_input)
 
     result = terminal.run_interactive(
-        Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
+        Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash")),
         project_root=tmp_path,
         console=console,
         run_once=fake_run_once,
@@ -4566,7 +4566,7 @@ def test_run_interactive_exit_summary_marks_third_party_cost_unsupported(tmp_pat
         Settings(
             model=ModelConfig(
                 provider="mimo",
-                name="mimo-v2.5-pro",
+                name="mimo-v2.6-pro",
                 base_url="https://api.xiaomimimo.com/v1",
                 api_key="sk-test",
             )

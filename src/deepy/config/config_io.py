@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tomllib
 import tempfile
+
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
@@ -10,6 +11,8 @@ from typing import Any, Mapping
 import tomli_w
 
 from deepy.audit import AuditMode, is_valid_audit_mode
+
+from .retired_models import retired_model_guidance
 
 from .providers import (
     DEFAULT_PROVIDER,
@@ -205,7 +208,7 @@ def write_config(
     provider_info = provider_info_for(provider)
     if not is_valid_config_model_for_provider(model, provider):
         raise ValueError(
-            "Model must be one of: "
+            retired_model_guidance(provider, model) or "Model must be one of: "
             + ", ".join(model_info.name for model_info in provider_info.models)
         )
     mode = thinking_mode or provider_info.default_thinking_mode

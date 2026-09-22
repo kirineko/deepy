@@ -6,11 +6,13 @@ Deepy 按所选 provider/model 解析窗口和输出预算。不写 `context.win
 
 ## 2026-09-15 查证的限制
 
+MiMo 限制于 2026-09-22 更新，其他条目保留 2026-09-15 的证据。MiMo 输出上限来自接口文档明确值，未进行极限容量实测。
+
 | Provider/model | 官方窗口 | 运行窗口 | 采用的输出上限 | 证据 |
 | --- | --- | --- | --- | --- |
 | DeepSeek / deepseek-flash | 1M | 1,000,000 | 384,000（384K 保守值） | [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/) |
-| MiMo / mimo-v2.5 | 1M | 1,000,000 | 128,000（128K 保守值） | [MiMo](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model) |
-| MiMo / mimo-v2.5-pro | 1M | 1,000,000 | 128,000（128K 保守值） | [MiMo](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model) |
+| MiMo / mimo-v2.6-flash | 1M | 1,000,000 | 131,072（文档明确值） | [MiMo](https://mimo.mi.com/docs/zh-CN/api/chat/responses) |
+| MiMo / mimo-v2.6-pro | 1M | 1,000,000 | 131,072（文档明确值） | [MiMo](https://mimo.mi.com/docs/zh-CN/api/chat/responses) |
 | Kimi / kimi-k3 | 1M | 1,000,000 | 输出参数上限 1,048,576 | [模型](https://platform.kimi.com/docs/models)、[Responses](https://platform.kimi.com/docs/api/responses) |
 | CLI Proxy / gpt-6-astra | 1,050,000 | 1,050,000 | 128,000 | [OpenAI](https://developers.openai.com/api/docs/models/gpt-6-astra) |
 | CLI Proxy / gpt-5.6-sol | 1,050,000 | 1,050,000 | 128,000 | [OpenAI](https://developers.openai.com/api/docs/models/gpt-5.6-sol) |

@@ -25,7 +25,7 @@ def test_catalog_and_profile_defaults(info):
     assert settings.model.reasoning_mode == info.default_thinking_mode
     assert info.api == "responses"
     for model in info.models:
-        assert model_supports_image_input(info.id, model.name) == (model.name != "mimo-v2.5-pro")
+        assert model_supports_image_input(info.id, model.name)
 
 
 def test_switching_and_editing_preserves_every_profile(tmp_path):
@@ -53,7 +53,7 @@ def test_switching_and_editing_preserves_every_profile(tmp_path):
         assert current.mcp.enabled is False
     assert os.stat(path).st_mode & 0o777 == 0o600
     before = tomllib.loads(path.read_text())["providers"]
-    write_config(path, provider="mimo", model="mimo-v2.5", api_key="", theme="light")
+    write_config(path, provider="mimo", model="mimo-v2.6-flash", api_key="", theme="light")
     after = tomllib.loads(path.read_text())["providers"]
     assert after["mimo"]["api_key"] == "saved-mimo"
     assert after["deepseek"] == before["deepseek"]

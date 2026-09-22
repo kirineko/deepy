@@ -363,7 +363,7 @@ async def test_run_prompt_once_sends_supported_image_prompt_as_multipart(monkeyp
     await run_prompt_once(
         "inspect",
         project_root=tmp_path,
-        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
+        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash")),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
         image_attachments=[attachment],
     )
@@ -932,7 +932,7 @@ async def test_run_prompt_once_interrupt_rolls_back_persisted_image_user_input(
     summary = await run_prompt_once(
         "describe",
         project_root=tmp_path,
-        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5")),
+        settings=Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-flash")),
         provider=ProviderBundle(client=object(), model="fake-model", model_settings=ModelSettings()),
         image_attachments=[attachment],
         should_interrupt=lambda: True,

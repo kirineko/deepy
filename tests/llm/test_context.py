@@ -25,8 +25,8 @@ def test_session_input_callback_does_not_trim_or_compact():
     assert prepared == history + new_input
 
 
-def test_session_input_callback_blocks_images_for_text_only_model():
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro"))
+def test_session_input_callback_blocks_images_for_text_only_model(text_only_mimo_pro):
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-pro"))
     callback = build_session_input_callback(settings)
     history = [
         {
@@ -48,8 +48,9 @@ def test_session_input_callback_blocks_images_for_text_only_model():
     assert history[0]["content"][1]["type"] == "input_image"
 
 
-def test_session_input_callback_preserves_images_for_supported_model():
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5"))
+@pytest.mark.parametrize("model", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
+def test_session_input_callback_preserves_images_for_supported_model(model):
+    settings = Settings(model=ModelConfig(provider="mimo", name=model))
     callback = build_session_input_callback(settings)
     history = [
         {
@@ -65,8 +66,8 @@ def test_session_input_callback_preserves_images_for_supported_model():
     assert callback(history, new_input) == history + new_input
 
 
-def test_session_input_callback_blocks_incompatible_resumed_image_history():
-    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.5-pro"))
+def test_session_input_callback_blocks_incompatible_resumed_image_history(text_only_mimo_pro):
+    settings = Settings(model=ModelConfig(provider="mimo", name="mimo-v2.6-pro"))
     callback = build_session_input_callback(settings)
     history = [
         {

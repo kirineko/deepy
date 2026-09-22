@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+from deepy.config.retired_models import retired_model_guidance
+
 from deepy.config import (
     PROVIDER_CATALOG,
     UI_SETUP_OPTIONS,
@@ -339,7 +341,7 @@ class AppCommandsMixin(AppStateProto):
                 await self._append_block(ErrorBlock(f"Invalid provider: {provider}\n{_model_usage_text()}"))
                 return
             if model is not None and not is_supported_model_for_provider(model, active_provider):
-                await self._append_block(ErrorBlock(f"Invalid model: {model}\n{_model_usage_text()}"))
+                await self._append_block(ErrorBlock(retired_model_guidance(active_provider, model) or f"Invalid model: {model}\n{_model_usage_text()}"))
                 return
             if reasoning is not None and not is_valid_thinking_mode_for_provider(reasoning, active_provider):
                 await self._append_block(ErrorBlock(f"Invalid thinking mode: {reasoning}\n{_model_usage_text()}"))

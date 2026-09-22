@@ -44,9 +44,9 @@ def test_switching_preserves_draft_and_count_limit():
     assert len(controller.attachments) == 8
 
 
-def test_request_blocks_unsupported_history_and_isolates_reasoning():
+def test_request_blocks_unsupported_history_and_isolates_reasoning(text_only_mimo_pro):
     client = AsyncOpenAI(api_key="test")
-    model = DeepyResponsesModel(provider="mimo", model="mimo-v2.5-pro", openai_client=client)
+    model = DeepyResponsesModel(provider="mimo", model="mimo-v2.6-pro", openai_client=client)
 
     def prepare(items):
         return model._build_response_create_kwargs(

@@ -119,7 +119,7 @@ Deepy SHALL use a fixed provider-local Responses model for suggestions without e
 
 #### Scenario: Suggestion model call is created
 - **WHEN** a suggestion request is created
-- **THEN** Deepy SHALL use DeepSeek deepseek-flash with none, MiMo mimo-v2.5 with disabled, Kimi kimi-k3 with low, or CLI Proxy gpt-5.6-luna with none according to the active provider
+- **THEN** Deepy SHALL use DeepSeek deepseek-flash with none, MiMo mimo-v2.6-flash with disabled, Kimi kimi-k3 with low, or CLI Proxy gpt-5.6-luna with none according to the active provider
 - **AND** it SHALL use that provider credentials, request usage and disable storage
 
 #### Scenario: Active model is changed

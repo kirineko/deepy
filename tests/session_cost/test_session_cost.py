@@ -51,7 +51,7 @@ def test_supports_session_cost_is_deepseek_provider_only():
         Settings(
             model=ModelConfig(
                 provider="openrouter",
-                name="xiaomi/mimo-v2.5-pro",
+                name="xiaomi/mimo-v2.6-pro",
                 base_url="https://openrouter.ai/api/v1",
             )
         )

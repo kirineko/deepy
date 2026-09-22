@@ -22,6 +22,7 @@
         <a href="#preview">效果预览</a>
         <a href="#ecosystem">生态</a>
         <a href="#docs">文档</a>
+        <a href="https://github.com/kirineko/deepy/blob/main/CHANGELOG.zh-CN.md">更新日志</a>
         <a href="https://deepy.kirineko.tech/">安装</a>
         <a href="https://github.com/kirineko/deepy">GitHub</a>
         <a href="https://github.com/kirineko/deepy/blob/main/README.md">English</a>
@@ -32,11 +33,16 @@
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
           <h1 id="hero-title">Deepy</h1>
-          <p class="hero-lede">面向真实项目工作的终端原生编程 Agent · v0.2.33</p>
+          <p class="hero-lede">面向真实项目工作的终端原生编程 Agent · v0.2.34</p>
           <p class="hero-body">
             Deepy 在 shell 内整合 OpenAI Agents SDK 工具编排、项目 Rules、Agent Skills、
             MCP、subagents、sessions 和可审查 UI，用来理解代码、修改文件、运行命令、
             检索网页，并恢复长任务。支持 DeepSeek、MiMo、Kimi 和 CLI Proxy，切换模型时保留会话历史。
+          </p>
+          <p class="hero-body">
+            0.2.34：MiMo 升级至 V2.6 Flash / Pro，两款均支持图片输入，默认使用 Flash。
+            原 2.5 用户需更新模型名和对应的上下文限制配置；升级时保留配置文件和会话历史。
+            <a href="https://github.com/kirineko/deepy/blob/main/CHANGELOG.zh-CN.md">查看更新与迁移说明</a>。
           </p>
           <div class="hero-actions" aria-label="主要操作">
             <a class="button primary" href="#quick-start">开始</a>
@@ -61,7 +67,7 @@
         <div class="reason-grid">
           <article>
             <h3>DeepSeek-first agent loop</h3>
-            <p>支持 DeepSeek Flash、MiMo 2.5 / 2.5 Pro、Kimi K3 和 CLI Proxy。主对话统一使用 Responses API，各 provider 密钥独立保存。</p>
+            <p>支持 DeepSeek Flash、MiMo 2.6 Flash / 2.6 Pro、Kimi K3 和 CLI Proxy。主对话统一使用 Responses API，各 provider 密钥独立保存。</p>
           </article>
           <article>
             <h3>透明终端执行</h3>
@@ -314,7 +320,7 @@ deepy run "summarize this project"</code></pre>
     </main>
 
     <footer>
-      <span>Deepy 0.2.33</span>
+      <span>Deepy 0.2.34</span>
       <a href="https://github.com/kirineko/deepy">github.com/kirineko/deepy</a>
     </footer>
   </body>

@@ -8,11 +8,13 @@ Loading or displaying settings never writes inferred limits to your config.
 
 ## Limits checked on 2026-09-15
 
+MiMo limits were refreshed on 2026-09-22; other entries retain their 2026-09-15 evidence. The exact MiMo output ceiling is documented, not a maximum-size live test.
+
 | Provider/model | Documented window | Runtime window | Output ceiling used | Evidence |
 | --- | --- | --- | --- | --- |
 | DeepSeek / deepseek-flash | 1M | 1,000,000 | 384,000 (conservative 384K) | [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/) |
-| MiMo / mimo-v2.5 | 1M | 1,000,000 | 128,000 (conservative 128K) | [MiMo](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model) |
-| MiMo / mimo-v2.5-pro | 1M | 1,000,000 | 128,000 (conservative 128K) | [MiMo](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model) |
+| MiMo / mimo-v2.6-flash | 1M | 1,000,000 | 131,072 (documented) | [MiMo](https://mimo.mi.com/docs/zh-CN/api/chat/responses) |
+| MiMo / mimo-v2.6-pro | 1M | 1,000,000 | 131,072 (documented) | [MiMo](https://mimo.mi.com/docs/zh-CN/api/chat/responses) |
 | Kimi / kimi-k3 | 1M | 1,000,000 | 1,048,576 parameter ceiling | [Models](https://platform.kimi.com/docs/models), [Responses](https://platform.kimi.com/docs/api/responses) |
 | CLI Proxy / gpt-6-astra | 1,050,000 | 1,050,000 | 128,000 | [OpenAI](https://developers.openai.com/api/docs/models/gpt-6-astra) |
 | CLI Proxy / gpt-5.6-sol | 1,050,000 | 1,050,000 | 128,000 | [OpenAI](https://developers.openai.com/api/docs/models/gpt-5.6-sol) |

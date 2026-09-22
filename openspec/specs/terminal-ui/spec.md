@@ -270,7 +270,7 @@ Deepy SHALL support direct commands consistent with profile-aware model selectio
 - **THEN** Deepy SHALL group supported models by provider and show supported reasoning and image capabilities
 
 #### Scenario: User sets DeepSeek model directly
-- **WHEN** a user runs `/model set deepseek-flash` or `/model set mimo mimo-v2.5 enabled` or an equivalent supported provider/model command
+- **WHEN** a user runs `/model set deepseek-flash` or `/model set mimo mimo-v2.6-flash enabled` or an equivalent supported provider/model command
 - **THEN** Deepy SHALL save the target profile selection and preserve its reasoning unless explicitly changed
 
 #### Scenario: User sets provider directly
@@ -286,12 +286,18 @@ Deepy SHALL support direct commands consistent with profile-aware model selectio
 - **THEN** Deepy SHALL show concise usage guidance and preserve saved and runtime settings
 
 #### Scenario: User sets provider and MiMo model directly
-- **WHEN** a user runs /model set mimo mimo-v2.5 enabled or /model set mimo mimo-v2.5-pro disabled
+- **WHEN** a user runs /model set mimo mimo-v2.6-flash enabled or /model set mimo mimo-v2.6-pro disabled
 - **THEN** Deepy SHALL update the MiMo profile and active selection without changing other profiles
 
 #### Scenario: User sets switch-only thinking directly
 - **WHEN** a user runs /model thinking enabled or /model thinking disabled for MiMo
 - **THEN** Deepy SHALL update the active profile reasoning while retaining its model
+
+#### Scenario: MiMo catalog is presented in either UI
+- **WHEN** classic or modern UI presents MiMo model choices, completions or current model help
+- **THEN** it SHALL offer only `mimo-v2.6-flash` and `mimo-v2.6-pro` as MiMo models and show image support for both where capabilities are displayed
+- **AND** current command examples SHALL use the new model IDs
+- **AND** removed IDs SHALL appear only where needed for rejection or migration guidance, or as historical session identity
 
 ### Requirement: Model Selection Discoverability
 Deepy SHALL make provider and model selection discoverable in the interactive

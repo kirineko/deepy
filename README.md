@@ -26,13 +26,12 @@ Agent Skills, MCP, subagents, sessions, and visible UI to read code, edit files,
 run commands, search the web, and resume long tasks. It is DeepSeek-first while
 also supporting OpenAI-compatible providers.
 
-## Release 0.2.33
+## Release 0.2.34
 
-DeepSeek Flash, MiMo 2.5 / 2.5 Pro, Kimi K3 and CLI Proxy use the Responses API
-for main conversations, with independently saved provider credentials. Built-in
-WebSearch uses DeepSeek native search (requires a DeepSeek key); existing MCP
-search remains supported. Model switches preserve original history and attachments,
-with target-specific budgets and compact K/M context status. See the
+MiMo now uses **V2.6 Flash / Pro**, with image input supported by both models.
+Flash is the default and the fixed suggestion model. Removed V2.5 selections
+produce explicit configuration migration guidance; saved files and session
+history are never silently rewritten. See the [changelog](CHANGELOG.md) and
 [context and history guide](docs/model-context.md).
 
 ## Why Use It
@@ -341,9 +340,11 @@ deepy config theme light
 | Provider | Model IDs | Thinking |
 |---|---|---|
 | DeepSeek | `deepseek-flash` (V4.1 Flash) | `none`, `high`, `max` |
-| MiMo | `mimo-v2.5`, `mimo-v2.5-pro` | `disabled`, `enabled` |
+| MiMo | `mimo-v2.6-flash`, `mimo-v2.6-pro` | `disabled`, `enabled` |
 | Kimi | `kimi-k3` | `low`, `high`, `max` |
 | CLI Proxy | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` |
+
+MiMo defaults to `mimo-v2.6-flash`. Deepy no longer accepts `mimo-v2.5` or `mimo-v2.5-pro`; Xiaomi schedules their retirement for **2026-10-21 10:00 (Asia/Shanghai)**. In your TOML file, explicitly change `model` under `[providers.mimo]` from `mimo-v2.5` to `mimo-v2.6-flash`, or from `mimo-v2.5-pro` to `mimo-v2.6-pro`. Rename any corresponding `[providers.mimo.model_limits."mimo-v2.5"]` / `[providers.mimo.model_limits."mimo-v2.5-pro"]` table to the new ID, or remove that override. Preserve your key, URL, reasoning and valid limit values. This also applies to inactive profiles; startup errors identify the setting to edit. Deepy does not automatically rewrite configuration or session history. See the [official model list](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model).
 
 Each provider keeps its own key, URL, model and thinking settings. `/model provider <id>` restores its saved profile; leaving the setup password blank preserves the saved key. Default environment variables are `DEEPSEEK_API_KEY`, `MIMO_API_KEY`, `KIMI_API_KEY` (with `MOONSHOT_API_KEY` fallback), and `CLI_PROXY_API_KEY`. Environment keys take precedence without being written back. The generic `DEEPY_API_KEY` override is no longer supported.
 
@@ -351,11 +352,11 @@ Old shared `[model]` configuration requires setup again. Keep a copy for manual 
 
 Conversation, subagents, suggestions and compaction use Responses. Built-in WebSearch independently calls DeepSeek Messages native search, requiring a separate DeepSeek key for every conversation provider. Configured Tavily/search MCP preference remains effective; WebFetch still retrieves URLs locally over HTTP. Search usage is displayed separately and included in session API consumption.
 
-All catalog models except MiMo 2.5 Pro accept images. Both UIs support multiple pasted images and image-only prompts: PNG/JPEG/WebP/GIF, 10 MiB per image, eight images per turn, and 32 MiB for the complete encoded request. Switching to a text-only model preserves images and asks you to remove draft attachments, switch back, or start a text-only session. Native audio, video, PDF input and media generation are not supported in this update.
+All catalog models, including MiMo 2.6 Flash and Pro, accept images. Both UIs support multiple pasted images and image-only prompts: PNG/JPEG/WebP/GIF, 10 MiB per image, eight images per turn, and 32 MiB for the complete encoded request. Switching to a text-only model preserves images and asks you to remove draft attachments, switch back, or start a text-only session. Native audio, video, PDF input and media generation are not supported in this update.
 
 Batch `Read` accepts at most eight images; larger image batches return a tool error so the agent can retry with fewer files.
 
-Suggestions use the current provider's fixed `deepseek-flash`/none, `mimo-v2.5`/disabled, `kimi-k3`/low, or `gpt-5.6-luna`/none, with separate usage accounting.
+Suggestions use the current provider's fixed `deepseek-flash`/none, `mimo-v2.6-flash`/disabled, `kimi-k3`/low, or `gpt-5.6-luna`/none, with separate usage accounting.
 
 ## Development
 

@@ -14,7 +14,7 @@ def test_catalog_limits_are_explicit_and_conservative(key):
     assert resolved.window_tokens == (1_050_000 if key[0] == "cli_proxy" else 1_000_000)
     assert resolved.output_tokens == 32_768
     assert resolved.reserve_tokens == 50_000
-    assert resolved.catalog.checked_date == "2026-09-15"
+    assert resolved.catalog.checked_date == ("2026-09-22" if key[0] == "mimo" else "2026-09-15")
     assert resolved.catalog.url.startswith("https://")
     assert resolved.catalog.exact_window_tokens == (1_050_000 if key[0] == "cli_proxy" else None)
     assert resolved.source == ("proxy-unverified" if key[0] == "cli_proxy" else "conservative")

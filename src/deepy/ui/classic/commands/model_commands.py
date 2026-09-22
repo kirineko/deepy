@@ -8,6 +8,8 @@ picker entry points, with no dependency on ``terminal.py`` internals beyond the
 
 from __future__ import annotations
 
+from deepy.config.retired_models import retired_model_guidance
+
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -87,7 +89,7 @@ def _handle_model_command(
         model = parts[1]
         provider = "deepseek"
         if not is_supported_model_for_provider(model, provider):
-            console.print(f"[{palette.error}]Invalid model:[/] {model}")
+            console.print(retired_model_guidance(provider, model) or f"Invalid model: {model}", style=palette.error)
             _print_model_usage(console, palette)
             return current_session_id
         reasoning_mode = parts[2] if len(parts) == 3 else None
@@ -113,7 +115,7 @@ def _handle_model_command(
             _print_model_usage(console, palette)
             return current_session_id
         if not is_supported_model_for_provider(model, provider):
-            console.print(f"[{palette.error}]Invalid model:[/] {model}")
+            console.print(retired_model_guidance(provider, model) or f"Invalid model: {model}", style=palette.error)
             _print_model_usage(console, palette)
             return current_session_id
         if not is_valid_thinking_mode_for_provider(reasoning_mode, provider):

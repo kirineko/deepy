@@ -15,22 +15,25 @@ from deepy.tools import ToolRuntime
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("parent_model", ["mimo-v2.5", "mimo-v2.5-pro"])
+@pytest.mark.parametrize("parent_model", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
 @pytest.mark.parametrize("batch", [False, True])
-async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_model, batch):
+@pytest.mark.parametrize("text_only", [False, True])
+async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_model, batch, text_only, request):
+    if text_only:
+        request.getfixturevalue("text_only_mimo_pro")
     (tmp_path / "image.png").write_bytes(b"image")
     (tmp_path / "notes.txt").write_text("notes", encoding="utf-8")
     settings = Settings.from_mapping(
         {"active_provider": "mimo", "providers": {"mimo": {"model": parent_model, "model_limits": {
-            "mimo-v2.5": {"context_window_tokens": 60000, "max_output_tokens": 4096},
-            "mimo-v2.5-pro": {"context_window_tokens": 100000, "max_output_tokens": 8192}}}}}
+            "mimo-v2.6-flash": {"context_window_tokens": 60000, "max_output_tokens": 4096},
+            "mimo-v2.6-pro": {"context_window_tokens": 100000, "max_output_tokens": 8192}}}}}
     )
     runtime = ToolRuntime(cwd=tmp_path, settings=settings)
     definitions = tuple(
         SubagentDefinition(
             name=name, description="test", instructions="test", tools=("Read",), model=model
         )
-        for name, model in (("inherit", None), ("vision", "mimo-v2.5"), ("text", "mimo-v2.5-pro"))
+        for name, model in (("inherit", None), ("vision", "mimo-v2.6-flash"), ("pro", "mimo-v2.6-pro"))
     )
     monkeypatch.setattr(
         "deepy.llm.agent.discover_subagents", lambda root: SubagentDiscoveryResult(definitions)
@@ -57,7 +60,7 @@ async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_
             ),
         )
         for child in children[1:]:
-            expected = 4096 if child.model.model == "mimo-v2.5" else 8192
+            expected = 4096 if child.model.model == "mimo-v2.6-flash" else 8192
             assert child.model_settings.max_tokens == expected
             assert child.model.limits.output_tokens == expected
             assert child.model.limits.window_tokens == (60000 if expected == 4096 else 100000)
@@ -77,7 +80,8 @@ async def test_subagent_read_uses_effective_model(tmp_path, monkeypatch, parent_
         )
     for output, supports_images in zip(
         outputs,
-        [parent_model == "mimo-v2.5", parent_model == "mimo-v2.5", True, False],
+        [not text_only or parent_model == "mimo-v2.6-flash",
+         not text_only or parent_model == "mimo-v2.6-flash", True, not text_only],
         strict=True,
     ):
         result = json.loads(output)

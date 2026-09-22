@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from agents import ModelSettings
 
 from deepy.config import ModelConfig, Settings
@@ -34,20 +36,21 @@ def test_build_deepy_agent_passes_mcp_servers_and_search_guidance(tmp_path):
 
 
 def test_mimo_tool_schema_compatibility_detection():
-    assert uses_mimo_tool_schema_compatibility("mimo", "mimo-v2.5")
-    assert uses_mimo_tool_schema_compatibility("mimo", "mimo-v2.5-pro")
-    assert not uses_mimo_tool_schema_compatibility("openrouter", "xiaomi/mimo-v2.5")
-    assert not uses_mimo_tool_schema_compatibility("openrouter", "xiaomi/mimo-v2.5-pro")
+    assert uses_mimo_tool_schema_compatibility("mimo", "mimo-v2.6-flash")
+    assert uses_mimo_tool_schema_compatibility("mimo", "mimo-v2.6-pro")
+    assert not uses_mimo_tool_schema_compatibility("openrouter", "xiaomi/mimo-v2.6-flash")
+    assert not uses_mimo_tool_schema_compatibility("openrouter", "xiaomi/mimo-v2.6-pro")
     assert not uses_mimo_tool_schema_compatibility("openrouter", "google/gemini-3.5-flash")
     assert not uses_mimo_tool_schema_compatibility("deepseek", "deepseek-flash")
 
 
-def test_build_deepy_agent_uses_mimo_compatible_tool_schema_for_xiaomi(tmp_path):
+@pytest.mark.parametrize("model", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
+def test_build_deepy_agent_uses_mimo_compatible_tool_schema_for_xiaomi(tmp_path, model):
     runtime = ToolRuntime(cwd=tmp_path, settings=Settings())
     settings = Settings(
         model=ModelConfig(
             provider="mimo",
-            name="mimo-v2.5",
+            name=model,
             base_url="https://api.xiaomimimo.com/v1",
             api_key="sk-test",
         )
@@ -122,7 +125,7 @@ def test_subagent_override_stays_in_active_provider(tmp_path, monkeypatch):
     from deepy.subagents import SubagentDefinition, SubagentDiscoveryResult
 
     definitions = tuple(SubagentDefinition(name=name, description="test", instructions="test", tools=("Read",), model=model)
-                        for name, model in [("inherit", None), ("valid", "mimo-v2.5-pro"), ("foreign", "kimi-k3"), ("unknown", "missing")])
+                        for name, model in [("inherit", None), ("valid", "mimo-v2.6-pro"), ("foreign", "kimi-k3"), ("unknown", "missing")])
     monkeypatch.setattr("deepy.llm.agent.discover_subagents", lambda root: SubagentDiscoveryResult(definitions))
     children = []
     original = Agent.as_tool
@@ -134,12 +137,12 @@ def test_subagent_override_stays_in_active_provider(tmp_path, monkeypatch):
     monkeypatch.setattr(Agent, "as_tool", capture)
     settings = Settings.from_mapping({"active_provider": "mimo"})
     client = AsyncOpenAI(api_key="test")
-    model = DeepyResponsesModel(provider="mimo", model="mimo-v2.5", openai_client=client)
+    model = DeepyResponsesModel(provider="mimo", model="mimo-v2.6-flash", openai_client=client)
     events = []
     build_deepy_agent(settings, ToolRuntime(cwd=tmp_path, settings=settings), project_root=tmp_path,
                       provider=ProviderBundle(client=client, model=model, model_settings=ModelSettings()), emit_event=events.append)
     assert len(children) == 2
     assert children[0].model is model
-    assert children[1].model.model == "mimo-v2.5-pro"
+    assert children[1].model.model == "mimo-v2.6-pro"
     assert children[1].model.provider == "mimo"
     assert len(events) == 2 and all("skipped" in event.text for event in events)

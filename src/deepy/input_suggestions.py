@@ -145,7 +145,7 @@ def input_suggestion_model_name(settings: Settings | None = None) -> str:
     provider = settings.model.provider if settings else "deepseek"
     return {
         "deepseek": INPUT_SUGGESTION_MODEL,
-        "mimo": "mimo-v2.5",
+        "mimo": "mimo-v2.6-flash",
         "kimi": "kimi-k3",
         "cli_proxy": CLI_PROXY_INPUT_SUGGESTION_MODEL,
     }[provider]
