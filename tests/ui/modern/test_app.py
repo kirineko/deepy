@@ -2462,11 +2462,14 @@ async def test_tui_initial_setup_guides_missing_config(tmp_path) -> None:
     )
 
     async with app.run_test(size=(100, 32)) as pilot:
-        await pilot.pause(0.2)
+        # Startup setup runs in a worker; CI may need more than a fixed delay.
+        await _wait_for(pilot, lambda: bool(app.query(InlineChoiceBlock)))
 
         assert app.query(InlineChoiceBlock).first()
         assert app.query(InlineChoiceBlock).last().title_text == "Reset: select provider"
         assert any("Deepy needs a provider API key" in block.body for block in app.query(InfoBlock))
+        await pilot.press("escape")
+        await app.workers.wait_for_complete()
         app.exit()
 
 
